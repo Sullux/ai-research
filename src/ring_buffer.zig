@@ -19,14 +19,7 @@ pub const DynamicRingBuffer = struct {
     active: []bool,
     total_ingested: usize,
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        num_layers: usize,
-        max_kv_dim: usize,
-        num_anchors: usize,
-        window_size: usize,
-        num_recall: usize,
-    ) !DynamicRingBuffer {
+    pub fn init(allocator: std.mem.Allocator, num_layers: usize, max_kv_dim: usize, num_anchors: usize, window_size: usize, num_recall: usize) !DynamicRingBuffer {
         const total_slots = num_anchors + window_size + num_recall;
         const total_elements = num_layers * total_slots * max_kv_dim;
 
@@ -75,20 +68,12 @@ pub const DynamicRingBuffer = struct {
         return self.num_anchors + self.window_size;
     }
 
-    /// Clock-indexed slot for Tier 1/Tier 2 writes only (recall slots are
-    /// addressed by rank via writeRecallKV).
     pub fn getSlotIndex(self: *const DynamicRingBuffer, clock: usize) usize {
         if (clock < self.num_anchors) return clock;
         return self.num_anchors + ((clock - self.num_anchors) % self.window_size);
     }
 
-    pub fn writeKV(
-        self: *DynamicRingBuffer,
-        layer: usize,
-        clock: usize,
-        k_src: []const f32,
-        v_src: []const f32,
-    ) void {
+    pub fn writeKV(self: *DynamicRingBuffer, layer: usize, clock: usize, k_src: []const f32, v_src: []const f32) void {
         const slot = self.getSlotIndex(clock);
         const slot_idx = layer * self.total_slots + slot;
         const kv_offset = slot_idx * self.max_kv_dim;
@@ -97,14 +82,9 @@ pub const DynamicRingBuffer = struct {
         @memcpy(self.v[kv_offset .. kv_offset + v_src.len], v_src);
         self.clocks[slot_idx] = clock;
         self.active[slot_idx] = true;
-
-        if (layer == 0 and clock >= self.total_ingested) {
-            self.total_ingested = clock + 1;
-        }
+        if (layer == 0 and clock >= self.total_ingested) self.total_ingested = clock + 1;
     }
 
-    /// Deactivate every Tier-3 recall slot across all layers. Called once per
-    /// cycle before the associative recall slots are repopulated.
     pub fn clearRecall(self: *DynamicRingBuffer) void {
         const start = self.recallStart();
         for (0..self.num_layers) |l| {
@@ -113,14 +93,7 @@ pub const DynamicRingBuffer = struct {
         }
     }
 
-    pub fn writeRecallKV(
-        self: *DynamicRingBuffer,
-        layer: usize,
-        rank: usize,
-        k_src: []const f32,
-        v_src: []const f32,
-        clock: usize,
-    ) void {
+    pub fn writeRecallKV(self: *DynamicRingBuffer, layer: usize, rank: usize, k_src: []const f32, v_src: []const f32, clock: usize) void {
         const slot = self.recallStart() + rank;
         const slot_idx = layer * self.total_slots + slot;
         const kv_offset = slot_idx * self.max_kv_dim;
@@ -131,12 +104,7 @@ pub const DynamicRingBuffer = struct {
         self.active[slot_idx] = true;
     }
 
-    pub fn getActiveSlots(
-        self: *const DynamicRingBuffer,
-        layer: usize,
-        curr_clock: usize,
-        out_slots: []usize,
-    ) usize {
+    pub fn getActiveSlots(self: *const DynamicRingBuffer, layer: usize, curr_clock: usize, out_slots: []usize) usize {
         const layer_offset = layer * self.total_slots;
         var count: usize = 0;
 
@@ -173,12 +141,7 @@ pub const DynamicRingBuffer = struct {
         return count;
     }
 
-    pub fn getSlotKV(
-        self: *const DynamicRingBuffer,
-        layer: usize,
-        slot: usize,
-        kv_dim: usize,
-    ) struct { k: []const f32, v: []const f32, clock: usize } {
+    pub fn getSlotKV(self: *const DynamicRingBuffer, layer: usize, slot: usize, kv_dim: usize) struct { k: []const f32, v: []const f32, clock: usize } {
         const slot_idx = layer * self.total_slots + slot;
         const offset = slot_idx * self.max_kv_dim;
         return .{
@@ -194,20 +157,15 @@ test "ring buffer tiers and window eviction" {
     defer ring.deinit();
 
     try std.testing.expectEqual(@as(usize, 16), ring.total_slots);
-
     var dummy_k: [64]f32 = undefined;
     var dummy_v: [64]f32 = undefined;
     @memset(&dummy_k, 1.0);
     @memset(&dummy_v, 2.0);
 
-    for (0..20) |c| {
-        ring.writeKV(0, c, &dummy_k, &dummy_v);
-    }
+    for (0..20) |c| ring.writeKV(0, c, &dummy_k, &dummy_v);
 
     var slots_buf: [32]usize = undefined;
     const count = ring.getActiveSlots(0, 19, &slots_buf);
-
-    // 4 anchors + 8 window slots; recall zone untouched.
     try std.testing.expectEqual(@as(usize, 12), count);
     try std.testing.expectEqual(@as(usize, 0), slots_buf[0]);
     try std.testing.expectEqual(@as(usize, 3), slots_buf[3]);

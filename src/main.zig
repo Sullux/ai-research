@@ -44,18 +44,12 @@ pub fn main() !void {
     var arg_idx: usize = 1;
     while (arg_idx < args.len) : (arg_idx += 1) {
         const arg = args[arg_idx];
-        if ((std.mem.eql(u8, arg, "--model") or std.mem.eql(u8, arg, "-m")) and arg_idx + 1 < args.len) {
-            model_dir = args[arg_idx + 1]; arg_idx += 1;
-        } else if ((std.mem.eql(u8, arg, "--max-tokens") or std.mem.eql(u8, arg, "-n")) and arg_idx + 1 < args.len) {
-            max_tokens = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 128; arg_idx += 1;
-        } else if (std.mem.eql(u8, arg, "--anchors") and arg_idx + 1 < args.len) {
-            num_anchors = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 32; arg_idx += 1;
-        } else if (std.mem.eql(u8, arg, "--window") and arg_idx + 1 < args.len) {
-            window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512; arg_idx += 1;
-        } else if (std.mem.eql(u8, arg, "--recall") and arg_idx + 1 < args.len) {
-            num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96; arg_idx += 1;
-        } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) {
-            storage_path = args[arg_idx + 1]; arg_idx += 1;
+        if ((std.mem.eql(u8, arg, "--model") or std.mem.eql(u8, arg, "-m")) and arg_idx + 1 < args.len) { model_dir = args[arg_idx + 1]; arg_idx += 1;
+        } else if ((std.mem.eql(u8, arg, "--max-tokens") or std.mem.eql(u8, arg, "-n")) and arg_idx + 1 < args.len) { max_tokens = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 128; arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "--anchors") and arg_idx + 1 < args.len) { num_anchors = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 32; arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "--window") and arg_idx + 1 < args.len) { window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512; arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "--recall") and arg_idx + 1 < args.len) { num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96; arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) { storage_path = args[arg_idx + 1]; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true;
         } else if (std.mem.eql(u8, arg, "--gpu")) { gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--no-memory")) { memory_enabled = false;
@@ -82,9 +76,10 @@ pub fn main() !void {
 
     var gpu_ctx: ?gpu.context.GpuContext = if (gpu_enabled) gpu.context.GpuContext.init(allocator) catch null else null;
     defer if (gpu_ctx) |*gc| gc.deinit();
-    var gpu_scratch: ?gpu.model_dispatch.GpuScratch = if (gpu_ctx) |*gc| gpu.model_dispatch.GpuScratch.init(gc, config) catch null else null;
-    defer if (gpu_scratch) |*gs| gs.deinit();
-    if (gpu_ctx) |gc| try stdout.print("GPU: {s} (UMA)\n", .{gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)]});
+    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config) catch null else null;
+    defer if (gpu_model_ctx) |*gmc| gmc.deinit();
+    const gpu_ptr: ?*gpu.model_gpu.GpuModelContext = if (gpu_model_ctx) |*gmc| gmc else null;
+    if (gpu_ctx) |gc| try stdout.print("GPU: {s} (UMA Compute)\n", .{gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)]});
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
     var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, num_anchors, window_size, num_recall);
@@ -115,7 +110,7 @@ pub fn main() !void {
 
     if (prompt_buf.items.len > 0) {
         var clock: usize = 0;
-        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, &clock, true);
+        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, gpu_ptr, &clock, true);
         try stdout.print("\n", .{});
         return;
     }
@@ -133,7 +128,7 @@ pub fn main() !void {
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, "exit") or std.mem.eql(u8, trimmed, "quit")) break;
 
-        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, &global_clock, false);
+        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, gpu_ptr, &global_clock, false);
         try stdout.print("\n\n", .{});
     }
 }
@@ -156,6 +151,7 @@ fn runInference(
     scratch: *model.ForwardScratch, prompt: []const u8, max_tokens: usize,
     thread_pool: *std.Thread.Pool, stdout: anytype, allocator: std.mem.Allocator,
     memory_opt: ?*memory.DiffArchive, quiescence_opt: ?*quiescence.QuiescenceTracker,
+    gpu_opt: ?*gpu.model_gpu.GpuModelContext,
     clock_ptr: *usize, reset_ring: bool,
 ) !void {
     const prompt_tokens = try tok.encode(allocator, prompt, true);
@@ -163,18 +159,26 @@ fn runInference(
     if (reset_ring) ring.reset();
 
     for (prompt_tokens) |t| {
-        m.forwardToken(ring, scratch, t, clock_ptr.*, thread_pool, memory_opt, quiescence_opt);
+        m.forwardToken(ring, scratch, t, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt);
         clock_ptr.* += 1;
     }
     var current_token = kernels.sampleArgmax(scratch.logits);
 
+    const gen_start = std.time.milliTimestamp();
+    var gen_count: usize = 0;
     for (0..max_tokens) |_| {
         const token_str = tok.decode(current_token);
         try printToken(stdout, token_str);
+        gen_count += 1;
         if (current_token == tok.eos_token_id) break;
-        m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt);
+        m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt);
         current_token = kernels.sampleArgmax(scratch.logits);
         clock_ptr.* += 1;
+    }
+    const elapsed_ms = std.time.milliTimestamp() - gen_start;
+    if (gen_count > 0 and elapsed_ms > 0) {
+        const tps = (@as(f64, @floatFromInt(gen_count)) / @as(f64, @floatFromInt(elapsed_ms))) * 1000.0;
+        try stdout.print("\n[{d} tokens, {d:.1} tok/s]", .{ gen_count, tps });
     }
 }
 

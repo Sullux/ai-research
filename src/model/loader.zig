@@ -116,9 +116,10 @@ pub const Model = struct {
         thread_pool: ?*std.Thread.Pool,
         memory_opt: ?*memory.DiffArchive,
         quiescence_opt: ?*quiescence.QuiescenceTracker,
+        gpu_opt: ?*@import("../gpu.zig").model_gpu.GpuModelContext,
     ) void {
         const fwd = @import("forward.zig");
-        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool, memory_opt, quiescence_opt);
+        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool, memory_opt, quiescence_opt, gpu_opt);
     }
 };
 

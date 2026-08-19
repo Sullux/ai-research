@@ -8,6 +8,7 @@ pub const pipeline = @import("gpu/pipeline.zig");
 pub const shaders = @import("gpu/shaders.zig");
 pub const gpu_kernels = @import("gpu/kernels.zig");
 pub const model_dispatch = @import("gpu/model_dispatch.zig");
+pub const model_gpu = @import("gpu/model_gpu.zig");
 
 test "vulkan context initialization and AMD device selection" {
     var ctx = context.GpuContext.init(std.testing.allocator) catch |err| {
@@ -159,4 +160,35 @@ test "vulkan fused swiglu compute execution on AMD GPU" {
         const expected = silu * up[i];
         try std.testing.expectApproxEqAbs(expected, out[i], 1e-4);
     }
+}
+
+test "benchmark 12B layer GEMV on GPU" {
+    var ctx = context.GpuContext.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanLibraryNotFound or err == error.NoVulkanDevices) return;
+        return err;
+    };
+    defer ctx.deinit();
+
+    const m: usize = 15360;
+    const k: usize = 3840;
+    var buf_w = try buffer.GpuBuffer.init(&ctx, m * (k / 2) * @sizeOf(u32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_w.deinit();
+    var buf_x = try buffer.GpuBuffer.init(&ctx, k * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_x.deinit();
+    var buf_y = try buffer.GpuBuffer.init(&ctx, m * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_y.deinit();
+
+    var pipe = try pipeline.ComputePipeline.init(&ctx, &shaders.GEMV_BF16_SPIRV, 3, 8);
+    defer pipe.deinit();
+
+    const bufs = [_]*const buffer.GpuBuffer{ &buf_w, &buf_x, &buf_y };
+    try pipe.bindBuffers(&bufs);
+
+    const pc = [_]u32{ @intCast(m), @intCast(k) };
+    const workgroups: u32 = @intCast((m + 63) / 64);
+
+    var timer = try std.time.Timer.start();
+    try pipe.dispatch(std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+    const elapsed_ns = timer.read();
+    std.debug.print("\n>>> 15360x3840 GEMV GPU execution: {d:.2} ms <<<\n", .{@as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0});
 }

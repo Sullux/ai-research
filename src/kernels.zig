@@ -2,6 +2,25 @@ const std = @import("std");
 pub const tensor = @import("tensor.zig");
 const bf16 = tensor.bf16;
 
+/// Fast 8-wide SIMD dot product between two f32 activation vectors
+pub inline fn dotF32(a: []const f32, b: []const f32) f32 {
+    const V = 8;
+    const VecF32 = @Vector(V, f32);
+    var acc: VecF32 = @splat(0.0);
+    var i: usize = 0;
+    const len = @min(a.len, b.len);
+    while (i + V <= len) : (i += V) {
+        const av: VecF32 = a[i..][0..V].*;
+        const bv: VecF32 = b[i..][0..V].*;
+        acc += av * bv;
+    }
+    var sum = @reduce(.Add, acc);
+    while (i < len) : (i += 1) {
+        sum += a[i] * b[i];
+    }
+    return sum;
+}
+
 /// Fast 8-wide SIMD dot product between bf16 matrix row and f32 activation vector
 pub inline fn dotBf16(w_row: []const bf16, x: []const f32) f32 {
     const V = 8;

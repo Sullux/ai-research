@@ -7,11 +7,13 @@ pub const types = @import("types.zig");
 pub const loader = @import("loader.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
 pub const quiescence = @import("../quiescence.zig");
+pub const gpu = @import("../gpu.zig");
 
 const Model = loader.Model;
 const LayerWeights = types.LayerWeights;
 const ForwardScratch = types.ForwardScratch;
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
+const GpuModelContext = gpu.model_gpu.GpuModelContext;
 
 pub fn forwardToken(
     self: *const Model,
@@ -22,13 +24,13 @@ pub fn forwardToken(
     tp: ?*std.Thread.Pool,
     memory_opt: ?*memory.DiffArchive,
     quiescence_opt: ?*quiescence.QuiescenceTracker,
+    gpu_opt: ?*GpuModelContext,
 ) void {
     const H = self.config.hidden_size;
     const ple_dim = self.config.hidden_size_per_layer_input;
     const embed_scale = @sqrt(@as(f32, @floatFromInt(H)));
 
     @memcpy(scratch.prev_x, scratch.x);
-
     const emb_offset = @as(usize, token_id) * H;
     for (scratch.x, self.embed_tokens[emb_offset .. emb_offset + H]) |*out, e| out.* = e.toF32() * embed_scale;
 
@@ -38,14 +40,16 @@ pub fn forwardToken(
         if (quiescence_opt) |q| {
             if (!q.shouldExecute(layer_idx, clock, scratch.x, scratch.prev_x)) continue;
         }
-        forwardAttention(self, l, ring, scratch, layer_idx, clock, H, tp);
-        forwardMLP(self, l, scratch, H, tp);
+        forwardAttention(self, l, ring, scratch, layer_idx, clock, H, tp, gpu_opt);
+        forwardMLP(self, l, scratch, layer_idx, H, tp, gpu_opt);
         if (ple_dim > 0) forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
         if (l.layer_scalar) |s| for (scratch.x) |*x_val| { x_val.* *= s; };
     }
 
     kernels.rmsNorm(scratch.normed_x, scratch.x, self.final_norm, self.config.rms_norm_eps);
-    if (tp) |pool| {
+    if (gpu_opt) |g| {
+        _ = gpu.model_dispatch.gpuLogits(g, scratch.normed_x, scratch.logits, self.config.vocab_size, H);
+    } else if (tp) |pool| {
         kernels.gemvParallel(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H, pool);
     } else {
         kernels.gemv(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H);
@@ -54,7 +58,6 @@ pub fn forwardToken(
     const cap: f32 = 30.0;
     const inv_cap: f32 = 1.0 / cap;
     for (scratch.logits) |*logit| logit.* = cap * std.math.tanh(logit.* * inv_cap);
-
     if (memory_opt) |mem| memory_inject.integrateMemory(self, mem, ring, scratch, clock, H, tp);
 }
 
@@ -75,17 +78,23 @@ fn preparePLE(self: *const Model, scratch: *ForwardScratch, token_id: u32, H: us
                 kernels.rmsNorm(layer_ctx, layer_ctx, plpn, self.config.rms_norm_eps);
             }
         }
-
         const tok_ple_offset = @as(usize, token_id) * total_ple_dim;
         const tok_ple_row = ple_table[tok_ple_offset .. tok_ple_offset + total_ple_dim];
         for (scratch.ple_context, tok_ple_row) |*ctx, tok_p| ctx.* = (ctx.* + tok_p.toF32() * ple_scale) * inv_sqrt_2;
     }
 }
 
-fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
+fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool, gpu_opt: ?*GpuModelContext) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
 
-    if (tp) |pool| kernels.gemvParallel(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H, pool) else kernels.gemv(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H);
+    if (gpu_opt) |g| {
+        _ = gpu.model_dispatch.gpuGemv(g, &g.layers[layer_idx].q_proj, scratch.normed_x, scratch.q[0..l.q_dim], l.q_dim, H);
+    } else if (tp) |pool| {
+        kernels.gemvParallel(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H, pool);
+    } else {
+        kernels.gemv(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H);
+    }
+
     for (0..self.config.num_attention_heads) |h| {
         const head_q = scratch.q[h * l.head_dim .. (h + 1) * l.head_dim];
         kernels.rmsNorm(head_q, head_q, l.q_norm, self.config.rms_norm_eps);
@@ -99,7 +108,10 @@ fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffe
     const kv_layer = if (is_shared) (if (l.layer_type == .full_attention) @as(usize, 14) else @as(usize, 13)) else layer_idx;
 
     if (!is_shared) {
-        if (tp) |pool| {
+        if (gpu_opt) |g| {
+            _ = gpu.model_dispatch.gpuGemv(g, &g.layers[layer_idx].k_proj, scratch.normed_x, scratch.k[0..l.kv_dim], l.kv_dim, H);
+            if (!l.k_eq_v and l.v_proj.len > 0) _ = gpu.model_dispatch.gpuGemv(g, &g.layers[layer_idx].v_proj, scratch.normed_x, scratch.v[0..l.kv_dim], l.kv_dim, H);
+        } else if (tp) |pool| {
             kernels.gemvParallel(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H, pool);
             if (!l.k_eq_v and l.v_proj.len > 0) kernels.gemvParallel(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H, pool);
         } else {
@@ -131,9 +143,7 @@ fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffe
             const slot = scratch.active_slots[i];
             const slot_kv = ring.getSlotKV(kv_layer, slot, l.kv_dim);
             const k_head = slot_kv.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
-            var dot: f32 = 0.0;
-            for (q_head, k_head) |q_val, k_val| dot += q_val * k_val;
-            head_scores[i] = dot;
+            head_scores[i] = kernels.dotF32(q_head, k_head);
         }
 
         kernels.softmax(head_scores);
@@ -149,14 +159,24 @@ fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffe
         }
     }
 
-    if (tp) |pool| kernels.gemvParallel(scratch.mlp_out, scratch.attn_out[0..l.q_dim], l.o_proj, H, l.q_dim, pool) else kernels.gemv(scratch.mlp_out, scratch.attn_out[0..l.q_dim], l.o_proj, H, l.q_dim);
+    if (gpu_opt) |g| {
+        _ = gpu.model_dispatch.gpuGemv(g, &g.layers[layer_idx].o_proj, scratch.attn_out[0..l.q_dim], scratch.mlp_out, H, l.q_dim);
+    } else if (tp) |pool| {
+        kernels.gemvParallel(scratch.mlp_out, scratch.attn_out[0..l.q_dim], l.o_proj, H, l.q_dim, pool);
+    } else {
+        kernels.gemv(scratch.mlp_out, scratch.attn_out[0..l.q_dim], l.o_proj, H, l.q_dim);
+    }
     if (l.post_attention_layernorm) |pal| kernels.rmsNorm(scratch.mlp_out, scratch.mlp_out, pal, self.config.rms_norm_eps);
     for (scratch.x, scratch.mlp_out) |*x_val, attn_v| x_val.* += attn_v;
 }
 
-fn forwardMLP(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, H: usize, tp: ?*std.Thread.Pool) void {
+fn forwardMLP(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, layer_idx: usize, H: usize, tp: ?*std.Thread.Pool, gpu_opt: ?*GpuModelContext) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.pre_feedforward_layernorm, self.config.rms_norm_eps);
-    kernels.gatedMlp(scratch.mlp_out, scratch.normed_x, l.gate_proj, l.up_proj, l.down_proj, H, l.intermediate_dim, scratch.mlp_gate_up, tp);
+    if (gpu_opt) |g| {
+        _ = gpu.model_dispatch.gpuGatedMlp(g, layer_idx, scratch.normed_x, scratch.mlp_out, H, l.intermediate_dim);
+    } else {
+        kernels.gatedMlp(scratch.mlp_out, scratch.normed_x, l.gate_proj, l.up_proj, l.down_proj, H, l.intermediate_dim, scratch.mlp_gate_up, tp);
+    }
     if (l.post_feedforward_layernorm) |pfl| kernels.rmsNorm(scratch.mlp_out, scratch.mlp_out, pfl, self.config.rms_norm_eps);
     for (scratch.x, scratch.mlp_out) |*x_val, ffn_v| x_val.* += ffn_v;
 }
