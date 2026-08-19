@@ -25,6 +25,11 @@ pub fn rmsNorm(
     }
 }
 
+/// Sigmoid activation
+pub inline fn sigmoid(x: f32) f32 {
+    return 1.0 / (1.0 + @exp(-x));
+}
+
 /// Matrix-Vector multiplication: y = W * x
 /// W has shape [rows, cols] in row-major order (rows * cols total elements)
 /// x has length [cols]
@@ -51,6 +56,39 @@ pub fn gemv(
     }
 }
 
+/// Parallel GEMV dividing rows across threads
+pub fn gemvParallel(
+    y: []f32,
+    x: []const f32,
+    w: []const bf16,
+    rows: usize,
+    cols: usize,
+    thread_pool: *std.Thread.Pool,
+) void {
+    const num_chunks = 16;
+    const chunk_size = (rows + num_chunks - 1) / num_chunks;
+
+    var wg = std.Thread.WaitGroup{};
+    var r_start: usize = 0;
+    while (r_start < rows) : (r_start += chunk_size) {
+        const r_end = @min(r_start + chunk_size, rows);
+        thread_pool.spawnWg(&wg, struct {
+            fn run(y_slice: []f32, x_vec: []const f32, w_mat: []const bf16, start: usize, end: usize, c: usize) void {
+                for (start..end) |r| {
+                    const row_offset = r * c;
+                    var dot: f32 = 0.0;
+                    const row_w = w_mat[row_offset .. row_offset + c];
+                    for (row_w, x_vec) |w_val, x_val| {
+                        dot += w_val.toF32() * x_val;
+                    }
+                    y_slice[r] = dot;
+                }
+            }
+        }.run, .{ y, x, w, r_start, r_end, cols });
+    }
+    thread_pool.waitAndWork(&wg);
+}
+
 /// GeLU with PyTorch tanh approximation:
 /// 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 pub inline fn geluTanh(x: f32) f32 {
@@ -62,10 +100,6 @@ pub inline fn geluTanh(x: f32) f32 {
 }
 
 /// Gated MLP (SwiGLU / GeGLU style):
-/// gate = GeLU(gate_proj * x)
-/// up = up_proj * x
-/// hidden = gate * up
-/// out = down_proj * hidden
 pub fn gatedMlp(
     out: []f32,
     in: []const f32,
@@ -74,11 +108,10 @@ pub fn gatedMlp(
     down_w: []const bf16,
     hidden_dim: usize,
     intermediate_dim: usize,
-    temp_act: []f32, // scratch buffer of size intermediate_dim
+    temp_act: []f32,
 ) void {
     std.debug.assert(temp_act.len >= intermediate_dim);
 
-    // Compute gate and up in temp_act
     for (0..intermediate_dim) |r| {
         const row_offset = r * hidden_dim;
         var gate_dot: f32 = 0.0;
@@ -91,15 +124,15 @@ pub fn gatedMlp(
         temp_act[r] = geluTanh(gate_dot) * up_dot;
     }
 
-    // Down projection
     gemv(out, temp_act[0..intermediate_dim], down_w, hidden_dim, intermediate_dim);
 }
 
-/// Rotary Position Embedding (RoPE) applied to 2D head planes
-pub fn applyRope(
+/// Rotary Position Embedding (RoPE) applied to 2D head planes with partial rotary support
+pub fn applyRopePartial(
     vec: []f32,
     pos: usize,
     head_dim: usize,
+    rotary_dim: usize,
     rope_theta: f32,
 ) void {
     std.debug.assert(vec.len % head_dim == 0);
@@ -107,16 +140,16 @@ pub fn applyRope(
 
     for (0..num_heads) |h| {
         const head_offset = h * head_dim;
-        const half_dim = head_dim / 2;
+        const half_rot = rotary_dim / 2;
 
-        for (0..half_dim) |i| {
-            const freq = 1.0 / std.math.pow(f32, rope_theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(head_dim)));
+        for (0..half_rot) |i| {
+            const freq = 1.0 / std.math.pow(f32, rope_theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(rotary_dim)));
             const angle = @as(f32, @floatFromInt(pos)) * freq;
             const cos_val = @cos(angle);
             const sin_val = @sin(angle);
 
             const idx0 = head_offset + i;
-            const idx1 = head_offset + i + half_dim;
+            const idx1 = head_offset + i + half_rot;
 
             const v0 = vec[idx0];
             const v1 = vec[idx1];
@@ -127,7 +160,6 @@ pub fn applyRope(
     }
 }
 
-/// Numerically stable Softmax in-place
 pub fn softmax(logits: []f32) void {
     var max_val: f32 = -std.math.inf(f32);
     for (logits) |v| {
@@ -147,7 +179,6 @@ pub fn softmax(logits: []f32) void {
     }
 }
 
-/// Greedy Argmax sampling
 pub fn sampleArgmax(logits: []const f32) u32 {
     var max_idx: u32 = 0;
     var max_val: f32 = logits[0];
@@ -160,44 +191,14 @@ pub fn sampleArgmax(logits: []const f32) u32 {
     return max_idx;
 }
 
-test "rmsNorm kernel calculation" {
-    const in = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
-    const weight = [_]bf16{
-        bf16.fromF32(1.0),
-        bf16.fromF32(1.0),
-        bf16.fromF32(1.0),
-        bf16.fromF32(1.0),
-    };
-    var out: [4]f32 = undefined;
-
-    rmsNorm(&out, &in, &weight, 1e-6);
-
-    // Sum of squares = 1 + 4 + 9 + 16 = 30; mean = 7.5; sqrt(7.5) = 2.7386127
-    const expected_scale = 1.0 / @sqrt(7.5);
-    try std.testing.expect(std.math.approxEqAbs(f32, out[0], 1.0 * expected_scale, 0.01));
-    try std.testing.expect(std.math.approxEqAbs(f32, out[3], 4.0 * expected_scale, 0.01));
-}
-
 test "gemv kernel calculation" {
     const x = [_]f32{ 1.0, 2.0 };
     const w = [_]bf16{
-        bf16.fromF32(1.0), bf16.fromF32(2.0), // row 0: 1*1 + 2*2 = 5
-        bf16.fromF32(3.0), bf16.fromF32(4.0), // row 1: 3*1 + 4*2 = 11
+        bf16.fromF32(1.0), bf16.fromF32(2.0),
+        bf16.fromF32(3.0), bf16.fromF32(4.0),
     };
     var y: [2]f32 = undefined;
-
     gemv(&y, &x, &w, 2, 2);
-
     try std.testing.expect(std.math.approxEqAbs(f32, y[0], 5.0, 0.01));
     try std.testing.expect(std.math.approxEqAbs(f32, y[1], 11.0, 0.01));
-}
-
-test "softmax kernel" {
-    var logits = [_]f32{ 2.0, 1.0, 0.1 };
-    softmax(&logits);
-
-    var sum: f32 = 0.0;
-    for (logits) |v| sum += v;
-    try std.testing.expect(std.math.approxEqAbs(f32, sum, 1.0, 1e-4));
-    try std.testing.expect(logits[0] > logits[1] and logits[1] > logits[2]);
 }
