@@ -103,6 +103,7 @@ pub const ForwardScratch = struct {
     attn_out: []f32,
     mlp_gate_up: []f32,
     mlp_out: []f32,
+    ple_context: []f32,
     ple_buf_1: []f32,
     ple_buf_2: []f32,
     logits: []f32,
@@ -111,6 +112,7 @@ pub const ForwardScratch = struct {
         const max_head_dim = @max(config.head_dim, config.global_head_dim);
         const max_q_dim = config.num_attention_heads * max_head_dim;
         const max_kv_dim = config.num_key_value_heads * max_head_dim;
+        const total_ple_dim = config.num_hidden_layers * config.hidden_size_per_layer_input;
 
         return ForwardScratch{
             .x = try allocator.alloc(f32, config.hidden_size),
@@ -122,6 +124,7 @@ pub const ForwardScratch = struct {
             .attn_out = try allocator.alloc(f32, @max(max_q_dim, config.hidden_size)),
             .mlp_gate_up = try allocator.alloc(f32, config.intermediate_size),
             .mlp_out = try allocator.alloc(f32, config.hidden_size),
+            .ple_context = try allocator.alloc(f32, total_ple_dim),
             .ple_buf_1 = try allocator.alloc(f32, config.hidden_size_per_layer_input),
             .ple_buf_2 = try allocator.alloc(f32, config.hidden_size),
             .logits = try allocator.alloc(f32, config.vocab_size),
@@ -138,6 +141,7 @@ pub const ForwardScratch = struct {
         allocator.free(self.attn_out);
         allocator.free(self.mlp_gate_up);
         allocator.free(self.mlp_out);
+        allocator.free(self.ple_context);
         allocator.free(self.ple_buf_1);
         allocator.free(self.ple_buf_2);
         allocator.free(self.logits);

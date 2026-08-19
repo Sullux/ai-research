@@ -21,14 +21,21 @@ pub fn forwardToken(self: *const Model, cache: *KVCache, scratch: *ForwardScratc
         out.* = e.toF32() * embed_scale;
     }
 
-    // 2. Transformer layers
+    // 2. Precompute Per-Layer Embeddings (PLE) if present
+    preparePLE(self, scratch, token_id, H, ple_dim, tp);
+
+    // 3. Decoder layers
     for (self.layers, 0..) |l, layer_idx| {
-        fusePLE(self, l, scratch, token_id, layer_idx, ple_dim, H);
         forwardAttention(self, l, cache, scratch, layer_idx, pos, H, tp);
         forwardMLP(self, l, scratch, H, tp);
+        forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
+
+        if (l.layer_scalar) |s| {
+            for (scratch.x) |*x_val| x_val.* *= s;
+        }
     }
 
-    // 3. Final RMSNorm & output projection
+    // 4. Final RMSNorm & Output Logits Projection
     kernels.rmsNorm(scratch.normed_x, scratch.x, self.final_norm, self.config.rms_norm_eps);
     if (tp) |pool| {
         kernels.gemvParallel(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H, pool);
@@ -43,28 +50,36 @@ pub fn forwardToken(self: *const Model, cache: *KVCache, scratch: *ForwardScratc
     }
 }
 
-fn fusePLE(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, token_id: u32, layer_idx: usize, ple_dim: usize, H: usize) void {
+fn preparePLE(self: *const Model, scratch: *ForwardScratch, token_id: u32, H: usize, ple_dim: usize, tp: ?*std.Thread.Pool) void {
     const ple_table = self.embed_tokens_per_layer orelse return;
-    if (l.per_layer_input_gate == null or l.per_layer_projection == null or l.post_per_layer_input_norm == null) return;
+    const total_ple_dim = self.layers.len * ple_dim;
+    const ple_scale = @sqrt(@as(f32, @floatFromInt(ple_dim)));
+    const inv_sqrt_2: f32 = 0.70710678118;
 
-    const ple_offset = (@as(usize, token_id) * self.layers.len + layer_idx) * ple_dim;
-    const ple_row = ple_table[ple_offset .. ple_offset + ple_dim];
+    if (self.per_layer_model_projection) |plmp| {
+        if (tp) |pool| {
+            kernels.gemvParallel(scratch.ple_context, scratch.x, plmp, total_ple_dim, H, pool);
+        } else {
+            kernels.gemv(scratch.ple_context, scratch.x, plmp, total_ple_dim, H);
+        }
 
-    for (scratch.ple_buf_1, ple_row) |*out, p| out.* = p.toF32();
-    if (self.per_layer_projection_norm) |plpn| {
-        kernels.rmsNorm(scratch.ple_buf_1, scratch.ple_buf_1, plpn, self.config.rms_norm_eps);
+        const proj_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(H)));
+        for (scratch.ple_context) |*v| v.* *= proj_scale;
+
+        if (self.per_layer_projection_norm) |plpn| {
+            for (0..self.layers.len) |l| {
+                const layer_ctx = scratch.ple_context[l * ple_dim .. (l + 1) * ple_dim];
+                kernels.rmsNorm(layer_ctx, layer_ctx, plpn, self.config.rms_norm_eps);
+            }
+        }
+
+        const tok_ple_offset = @as(usize, token_id) * total_ple_dim;
+        const tok_ple_row = ple_table[tok_ple_offset .. tok_ple_offset + total_ple_dim];
+
+        for (scratch.ple_context, tok_ple_row) |*ctx, tok_p| {
+            ctx.* = (ctx.* + tok_p.toF32() * ple_scale) * inv_sqrt_2;
+        }
     }
-
-    kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
-    kernels.gemv(scratch.attn_out[0..ple_dim], scratch.normed_x, l.per_layer_input_gate.?, ple_dim, H);
-
-    for (scratch.ple_buf_1, scratch.attn_out[0..ple_dim]) |*p, g| p.* *= kernels.sigmoid(g);
-
-    kernels.gemv(scratch.ple_buf_2, scratch.ple_buf_1, l.per_layer_projection.?, H, ple_dim);
-    kernels.rmsNorm(scratch.ple_buf_2, scratch.ple_buf_2, l.post_per_layer_input_norm.?, self.config.rms_norm_eps);
-
-    const scalar = l.layer_scalar orelse 1.0;
-    for (scratch.x, scratch.ple_buf_2) |*x_val, p_val| x_val.* += p_val * scalar;
 }
 
 fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratch: *ForwardScratch, layer_idx: usize, pos: usize, H: usize, tp: ?*std.Thread.Pool) void {
@@ -72,27 +87,39 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
 
     if (tp) |pool| {
         kernels.gemvParallel(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H, pool);
-        kernels.gemvParallel(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H, pool);
-        kernels.gemvParallel(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H, pool);
     } else {
         kernels.gemv(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H);
-        kernels.gemv(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H);
-        kernels.gemv(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H);
     }
 
     for (0..self.config.num_attention_heads) |h| {
         const head_q = scratch.q[h * l.head_dim .. (h + 1) * l.head_dim];
         kernels.rmsNorm(head_q, head_q, l.q_norm, self.config.rms_norm_eps);
     }
-    kernels.rmsNorm(scratch.k[0..l.kv_dim], scratch.k[0..l.kv_dim], l.k_norm, self.config.rms_norm_eps);
 
     const theta = if (l.layer_type == .full_attention) self.config.rope_theta_full else self.config.rope_theta;
     kernels.applyRopePartial(scratch.q[0..l.q_dim], pos, l.head_dim, l.rotary_dim, theta);
-    kernels.applyRopePartial(scratch.k[0..l.kv_dim], pos, l.head_dim, l.rotary_dim, theta);
 
-    const kv = cache.getKV(layer_idx, pos, l.kv_dim);
-    @memcpy(kv.k, scratch.k[0..l.kv_dim]);
-    @memcpy(kv.v, scratch.v[0..l.kv_dim]);
+    // KV Cache Source: Layers 0..14 compute their own KV. Layers 15..34 reuse layer 13 (sliding) or layer 14 (full).
+    const is_shared = (layer_idx >= 15);
+    const kv_layer = if (is_shared) (if (l.layer_type == .full_attention) @as(usize, 14) else @as(usize, 13)) else layer_idx;
+
+    if (!is_shared) {
+        if (tp) |pool| {
+            kernels.gemvParallel(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H, pool);
+            kernels.gemvParallel(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H, pool);
+        } else {
+            kernels.gemv(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H);
+            kernels.gemv(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H);
+        }
+
+        kernels.rmsNorm(scratch.k[0..l.kv_dim], scratch.k[0..l.kv_dim], l.k_norm, self.config.rms_norm_eps);
+        kernels.unitRmsNorm(scratch.v[0..l.kv_dim], scratch.v[0..l.kv_dim], self.config.rms_norm_eps);
+        kernels.applyRopePartial(scratch.k[0..l.kv_dim], pos, l.head_dim, l.rotary_dim, theta);
+
+        const kv = cache.getKV(kv_layer, pos, l.kv_dim);
+        @memcpy(kv.k, scratch.k[0..l.kv_dim]);
+        @memcpy(kv.v, scratch.v[0..l.kv_dim]);
+    }
 
     const history_len = pos + 1;
     const start_p = if (l.layer_type == .sliding_attention and history_len > self.config.sliding_window) history_len - self.config.sliding_window else 0;
@@ -103,7 +130,7 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
         const head_scores = scratch.attn_scores[0..active_p_count];
 
         for (start_p..history_len, 0..) |p, i| {
-            const k_hist = cache.getKV(layer_idx, p, l.kv_dim).k;
+            const k_hist = cache.getKV(kv_layer, p, l.kv_dim).k;
             var dot: f32 = 0.0;
             for (q_head, k_hist) |q_val, k_val| dot += q_val * k_val;
             head_scores[i] = dot;
@@ -115,7 +142,7 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
 
         for (start_p..history_len, 0..) |p, i| {
             const weight = head_scores[i];
-            const v_hist = cache.getKV(layer_idx, p, l.kv_dim).v;
+            const v_hist = cache.getKV(kv_layer, p, l.kv_dim).v;
             for (out_head, v_hist) |*o, v_val| o.* += weight * v_val;
         }
     }
@@ -128,14 +155,31 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
 
     if (l.post_attention_layernorm) |pal| kernels.rmsNorm(scratch.mlp_out, scratch.mlp_out, pal, self.config.rms_norm_eps);
 
-    const scalar = l.layer_scalar orelse 1.0;
-    for (scratch.x, scratch.mlp_out) |*x_val, attn_v| x_val.* += attn_v * scalar;
+    for (scratch.x, scratch.mlp_out) |*x_val, attn_v| x_val.* += attn_v;
 }
 
 fn forwardMLP(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, H: usize, tp: ?*std.Thread.Pool) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.pre_feedforward_layernorm, self.config.rms_norm_eps);
     kernels.gatedMlp(scratch.mlp_out, scratch.normed_x, l.gate_proj, l.up_proj, l.down_proj, H, l.intermediate_dim, scratch.mlp_gate_up, tp);
     if (l.post_feedforward_layernorm) |pfl| kernels.rmsNorm(scratch.mlp_out, scratch.mlp_out, pfl, self.config.rms_norm_eps);
-    const scalar = l.layer_scalar orelse 1.0;
-    for (scratch.x, scratch.mlp_out) |*x_val, ffn_v| x_val.* += ffn_v * scalar;
+    for (scratch.x, scratch.mlp_out) |*x_val, ffn_v| x_val.* += ffn_v;
+}
+
+fn forwardPLE(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, layer_idx: usize, ple_dim: usize, H: usize) void {
+    if (self.embed_tokens_per_layer == null) return;
+    if (l.per_layer_input_gate == null or l.per_layer_projection == null or l.post_per_layer_input_norm == null) return;
+
+    // 1. Gate on un-normed scratch.x with GeLU
+    kernels.gemv(scratch.ple_buf_1, scratch.x, l.per_layer_input_gate.?, ple_dim, H);
+
+    const layer_ple_ctx = scratch.ple_context[layer_idx * ple_dim .. (layer_idx + 1) * ple_dim];
+    for (scratch.ple_buf_1, layer_ple_ctx) |*g, ctx_val| {
+        g.* = kernels.geluTanh(g.*) * ctx_val;
+    }
+
+    // 2. Project back to hidden_size & post RMSNorm
+    kernels.gemv(scratch.ple_buf_2, scratch.ple_buf_1, l.per_layer_projection.?, H, ple_dim);
+    kernels.rmsNorm(scratch.ple_buf_2, scratch.ple_buf_2, l.post_per_layer_input_norm.?, self.config.rms_norm_eps);
+
+    for (scratch.x, scratch.ple_buf_2) |*x_val, p_val| x_val.* += p_val;
 }

@@ -12,7 +12,6 @@ pub const Tokenizer = struct {
     pub fn loadFromJson(allocator: std.mem.Allocator, path: []const u8) !Tokenizer {
         const file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
-
         const file_size = (try file.stat()).size;
         const raw_json = try allocator.alloc(u8, file_size);
         errdefer allocator.free(raw_json);
@@ -27,7 +26,6 @@ pub const Tokenizer = struct {
 
         var token_to_id = std.StringHashMap(u32).init(allocator);
         try token_to_id.ensureTotalCapacity(@intCast(vocab_obj.object.count()));
-
         const id_to_token = try allocator.alloc([]const u8, vocab_obj.object.count());
         @memset(id_to_token, "");
 
@@ -35,9 +33,7 @@ pub const Tokenizer = struct {
         while (iter.next()) |entry| {
             const token_str = entry.key_ptr.*;
             const id: u32 = @intCast(entry.value_ptr.*.integer);
-            if (id < id_to_token.len) {
-                id_to_token[id] = token_str;
-            }
+            if (id < id_to_token.len) id_to_token[id] = token_str;
             token_to_id.putAssumeCapacity(token_str, id);
         }
 
@@ -62,111 +58,101 @@ pub const Tokenizer = struct {
         return self.id_to_token[token_id];
     }
 
-    /// Encode input text into a list of token IDs
     pub fn encode(self: *const Tokenizer, allocator: std.mem.Allocator, text: []const u8, add_bos: bool) ![]u32 {
         var token_ids = std.ArrayList(u32).init(allocator);
         errdefer token_ids.deinit();
+        if (add_bos) try token_ids.append(self.bos_token_id);
+        if (text.len == 0) return token_ids.toOwnedSlice();
 
-        if (add_bos) {
-            try token_ids.append(self.bos_token_id);
-        }
-
-        if (text.len == 0) {
-            return token_ids.toOwnedSlice();
-        }
-
-        // 1. Process escape sequences and space replacement
-        var norm = std.ArrayList(u8).init(allocator);
-        defer norm.deinit();
+        const specials = [_][]const u8{ "<|turn>", "<turn|>", "<|channel>", "<channel|>", "<bos>", "<eos>" };
+        var unescaped = std.ArrayList(u8).init(allocator);
+        defer unescaped.deinit();
 
         var i: usize = 0;
-        // Prepend space marker only if not starting with special tag '<' or whitespace
-        if (text.len > 0 and text[0] != ' ' and text[0] != '<' and text[0] != '\n') {
-            try norm.appendSlice("\xe2\x96\x81");
-        }
-
         while (i < text.len) {
             if (text[i] == '\\' and i + 1 < text.len) {
                 switch (text[i + 1]) {
-                    'n' => {
-                        try norm.append('\n');
-                        i += 2;
-                        continue;
-                    },
-                    't' => {
-                        try norm.append('\t');
-                        i += 2;
-                        continue;
-                    },
-                    'r' => {
-                        try norm.append('\r');
-                        i += 2;
-                        continue;
-                    },
-                    '\\' => {
-                        try norm.append('\\');
-                        i += 2;
-                        continue;
-                    },
+                    'n' => { try unescaped.append('\n'); i += 2; continue; },
+                    't' => { try unescaped.append('\t'); i += 2; continue; },
+                    'r' => { try unescaped.append('\r'); i += 2; continue; },
+                    '\\' => { try unescaped.append('\\'); i += 2; continue; },
                     else => {},
                 }
             }
-
-            if (text[i] == ' ') {
-                try norm.appendSlice("\xe2\x96\x81");
-            } else {
-                try norm.append(text[i]);
-            }
+            try unescaped.append(text[i]);
             i += 1;
         }
 
-        const norm_bytes = norm.items;
+        const raw = unescaped.items;
         var cursor: usize = 0;
 
-        // 2. Greedy longest-matching prefix against vocabulary
-        while (cursor < norm_bytes.len) {
-            var max_match_len: usize = 0;
-            var matched_id: ?u32 = null;
+        while (cursor < raw.len) {
+            var found_special = false;
+            for (specials) |sp| {
+                if (std.mem.startsWith(u8, raw[cursor..], sp)) {
+                    if (self.token_to_id.get(sp)) |id| {
+                        try token_ids.append(id);
+                        cursor += sp.len;
+                        found_special = true;
+                        break;
+                    }
+                }
+            }
+            if (found_special) continue;
 
-            const max_search = @min(norm_bytes.len, cursor + 64);
-            var end = max_search;
-            while (end > cursor) : (end -= 1) {
-                const candidate = norm_bytes[cursor..end];
-                if (self.token_to_id.get(candidate)) |id| {
-                    max_match_len = end - cursor;
-                    matched_id = id;
-                    break;
+            var chunk_end = raw.len;
+            for (specials) |sp| {
+                if (std.mem.indexOfPos(u8, raw, cursor, sp)) |pos| {
+                    if (pos < chunk_end) chunk_end = pos;
                 }
             }
 
-            if (matched_id) |id| {
-                try token_ids.append(id);
-                cursor += max_match_len;
-            } else {
-                var hex_buf: [6]u8 = undefined;
-                const hex_str = std.fmt.bufPrint(&hex_buf, "<0x{X:0>2}>", .{norm_bytes[cursor]}) catch "<0x00>";
-                if (self.token_to_id.get(hex_str)) |id| {
-                    try token_ids.append(id);
+            const chunk = raw[cursor..chunk_end];
+            cursor = chunk_end;
+
+            var norm = std.ArrayList(u8).init(allocator);
+            defer norm.deinit();
+            if (chunk.len > 0 and chunk[0] != ' ' and chunk[0] != '\n') try norm.appendSlice("\xe2\x96\x81");
+            for (chunk) |byte| {
+                if (byte == ' ') try norm.appendSlice("\xe2\x96\x81") else try norm.append(byte);
+            }
+
+            const norm_bytes = norm.items;
+            var sub_cursor: usize = 0;
+            while (sub_cursor < norm_bytes.len) {
+                var max_match_len: usize = 0;
+                var matched_id: ?u32 = null;
+                const max_search = @min(norm_bytes.len, sub_cursor + 64);
+                var end = max_search;
+                while (end > sub_cursor) : (end -= 1) {
+                    if (self.token_to_id.get(norm_bytes[sub_cursor..end])) |id| {
+                        max_match_len = end - sub_cursor;
+                        matched_id = id;
+                        break;
+                    }
                 }
-                cursor += 1;
+
+                if (matched_id) |id| {
+                    try token_ids.append(id);
+                    sub_cursor += max_match_len;
+                } else {
+                    var hex_buf: [6]u8 = undefined;
+                    const hex_str = std.fmt.bufPrint(&hex_buf, "<0x{X:0>2}>", .{norm_bytes[sub_cursor]}) catch "<0x00>";
+                    if (self.token_to_id.get(hex_str)) |id| try token_ids.append(id);
+                    sub_cursor += 1;
+                }
             }
         }
-
         return token_ids.toOwnedSlice();
     }
 };
 
 test "tokenizer encode and decode" {
     const testing = std.testing;
-    const tokenizer_path = "../gemma-4-E2B/tokenizer.json";
-
-    var tok = Tokenizer.loadFromJson(testing.allocator, tokenizer_path) catch return;
+    var tok = Tokenizer.loadFromJson(testing.allocator, "../gemma-4-E2B/tokenizer.json") catch return;
     defer tok.deinit();
-
-    const text = "The capital of France";
-    const tokens = try tok.encode(testing.allocator, text, true);
+    const tokens = try tok.encode(testing.allocator, "The capital of France", true);
     defer testing.allocator.free(tokens);
-
     try testing.expect(tokens.len >= 4);
-    try testing.expectEqual(tokens[0], 2); // BOS
+    try testing.expectEqual(tokens[0], 2);
 }

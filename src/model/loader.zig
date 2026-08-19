@@ -12,6 +12,7 @@ pub const Model = struct {
     config: ModelConfig,
     embed_tokens: []const bf16,
     embed_tokens_per_layer: ?[]const bf16 = null,
+    per_layer_model_projection: ?[]const bf16 = null,
     per_layer_projection_norm: ?[]const bf16 = null,
     layers: []LayerWeights,
     final_norm: []const bf16,
@@ -21,6 +22,7 @@ pub const Model = struct {
         const norm_tv = st.get("model.language_model.norm.weight") orelse return error.MissingFinalNorm;
 
         const ple_tv = st.get("model.language_model.embed_tokens_per_layer.weight");
+        const plmp_tv = st.get("model.language_model.per_layer_model_projection.weight");
         const plpn_tv = st.get("model.language_model.per_layer_projection_norm.weight");
 
         var layers = try allocator.alloc(LayerWeights, config.num_hidden_layers);
@@ -35,11 +37,11 @@ pub const Model = struct {
 
             const in_norm = try getSlice(st, &buf, "model.language_model.layers.{d}.input_layernorm.weight", .{l});
             const q = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.q_proj.weight", .{l});
-            const k = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.k_proj.weight", .{l});
-            const v = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.v_proj.weight", .{l});
+            const k = getOptionalSlice(st, &buf, "model.language_model.layers.{d}.self_attn.k_proj.weight", .{l}) orelse &[_]bf16{};
+            const v = getOptionalSlice(st, &buf, "model.language_model.layers.{d}.self_attn.v_proj.weight", .{l}) orelse &[_]bf16{};
             const o = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.o_proj.weight", .{l});
             const qn = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.q_norm.weight", .{l});
-            const kn = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.k_norm.weight", .{l});
+            const kn = getOptionalSlice(st, &buf, "model.language_model.layers.{d}.self_attn.k_norm.weight", .{l}) orelse &[_]bf16{};
             const pre_ffn = try getSlice(st, &buf, "model.language_model.layers.{d}.pre_feedforward_layernorm.weight", .{l});
             const gate = try getSlice(st, &buf, "model.language_model.layers.{d}.mlp.gate_proj.weight", .{l});
             const up = try getSlice(st, &buf, "model.language_model.layers.{d}.mlp.up_proj.weight", .{l});
@@ -86,6 +88,7 @@ pub const Model = struct {
             .config = config,
             .embed_tokens = embed_tv.asSlice(bf16),
             .embed_tokens_per_layer = if (ple_tv) |p| p.asSlice(bf16) else null,
+            .per_layer_model_projection = if (plmp_tv) |p| p.asSlice(bf16) else null,
             .per_layer_projection_norm = if (plpn_tv) |p| p.asSlice(bf16) else null,
             .layers = layers,
             .final_norm = norm_tv.asSlice(bf16),

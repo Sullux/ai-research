@@ -2,13 +2,22 @@ const std = @import("std");
 pub const tensor = @import("tensor.zig");
 const bf16 = tensor.bf16;
 
-/// Out-of-place or in-place RMSNorm: out = (x / sqrt(mean(x^2) + eps)) * weight
+/// Out-of-place or in-place RMSNorm with learnable weight
 pub fn rmsNorm(out: []f32, in: []const f32, weight: []const bf16, eps: f32) void {
     std.debug.assert(in.len == out.len and in.len == weight.len);
     var sum_sq: f32 = 0.0;
     for (in) |v| sum_sq += v * v;
     const rsqrt_val = 1.0 / @sqrt((sum_sq / @as(f32, @floatFromInt(in.len))) + eps);
     for (out, in, weight) |*o, i, w| o.* = i * rsqrt_val * w.toF32();
+}
+
+/// Unit RMSNorm without learnable weight (used for v_norm in Gemma 4)
+pub fn unitRmsNorm(out: []f32, in: []const f32, eps: f32) void {
+    std.debug.assert(in.len == out.len);
+    var sum_sq: f32 = 0.0;
+    for (in) |v| sum_sq += v * v;
+    const rsqrt_val = 1.0 / @sqrt((sum_sq / @as(f32, @floatFromInt(in.len))) + eps);
+    for (out, in) |*o, i| o.* = i * rsqrt_val;
 }
 
 pub inline fn sigmoid(x: f32) f32 {
@@ -98,7 +107,7 @@ pub fn applyRopePartial(vec: []f32, pos: usize, head_dim: usize, rotary_dim: usi
     for (0..num_heads) |h| {
         const offset = h * head_dim;
         for (0..half_rot) |i| {
-            const freq = 1.0 / std.math.pow(f32, theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(rotary_dim)));
+            const freq = 1.0 / std.math.pow(f32, theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(head_dim)));
             const angle = @as(f32, @floatFromInt(pos)) * freq;
             const cos_v = @cos(angle);
             const sin_v = @sin(angle);
