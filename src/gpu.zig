@@ -7,6 +7,7 @@ pub const buffer = @import("gpu/buffer.zig");
 pub const pipeline = @import("gpu/pipeline.zig");
 pub const shaders = @import("gpu/shaders.zig");
 pub const gpu_kernels = @import("gpu/kernels.zig");
+pub const model_dispatch = @import("gpu/model_dispatch.zig");
 
 test "vulkan context initialization and AMD device selection" {
     var ctx = context.GpuContext.init(std.testing.allocator) catch |err| {

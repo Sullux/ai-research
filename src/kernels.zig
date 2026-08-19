@@ -2,6 +2,27 @@ const std = @import("std");
 pub const tensor = @import("tensor.zig");
 const bf16 = tensor.bf16;
 
+/// Fast 8-wide SIMD dot product between bf16 matrix row and f32 activation vector
+pub inline fn dotBf16(w_row: []const bf16, x: []const f32) f32 {
+    const V = 8;
+    const VecF32 = @Vector(V, f32);
+    var acc: VecF32 = @splat(0.0);
+    var i: usize = 0;
+    const len = @min(w_row.len, x.len);
+    while (i + V <= len) : (i += V) {
+        var wf: [V]f32 = undefined;
+        inline for (0..V) |k| wf[k] = w_row[i + k].toF32();
+        const wv: VecF32 = wf;
+        const xv: VecF32 = x[i..][0..V].*;
+        acc += wv * xv;
+    }
+    var sum = @reduce(.Add, acc);
+    while (i < len) : (i += 1) {
+        sum += w_row[i].toF32() * x[i];
+    }
+    return sum;
+}
+
 /// Out-of-place or in-place RMSNorm with learnable weight
 pub fn rmsNorm(out: []f32, in: []const f32, weight: []const bf16, eps: f32) void {
     std.debug.assert(in.len == out.len and in.len == weight.len);
@@ -28,16 +49,14 @@ pub inline fn sigmoid(x: f32) f32 {
 pub fn gemv(y: []f32, x: []const f32, w: []const bf16, rows: usize, cols: usize) void {
     std.debug.assert(y.len == rows and x.len == cols and w.len >= rows * cols);
     for (0..rows) |r| {
-        const row_w = w[r * cols .. (r + 1) * cols];
-        var dot: f32 = 0.0;
-        for (row_w, x) |w_val, x_val| dot += w_val.toF32() * x_val;
-        y[r] = dot;
+        y[r] = dotBf16(w[r * cols .. (r + 1) * cols], x);
     }
 }
 
 /// Parallel GEMV dividing rows across thread pool workers
 pub fn gemvParallel(y: []f32, x: []const f32, w: []const bf16, rows: usize, cols: usize, tp: *std.Thread.Pool) void {
-    const chunk_size = (rows + 15) / 16;
+    const num_jobs: usize = 16;
+    const chunk_size = (rows + num_jobs - 1) / num_jobs;
     var wg = std.Thread.WaitGroup{};
     var r_start: usize = 0;
     while (r_start < rows) : (r_start += chunk_size) {
@@ -45,10 +64,7 @@ pub fn gemvParallel(y: []f32, x: []const f32, w: []const bf16, rows: usize, cols
         tp.spawnWg(&wg, struct {
             fn run(y_s: []f32, x_v: []const f32, w_m: []const bf16, s: usize, e: usize, c: usize) void {
                 for (s..e) |r| {
-                    const row_w = w_m[r * c .. (r + 1) * c];
-                    var dot: f32 = 0.0;
-                    for (row_w, x_v) |w_val, x_val| dot += w_val.toF32() * x_val;
-                    y_s[r] = dot;
+                    y_s[r] = dotBf16(w_m[r * c .. (r + 1) * c], x_v);
                 }
             }
         }.run, .{ y, x, w, r_start, r_end, cols });
@@ -65,7 +81,8 @@ pub inline fn geluTanh(x: f32) f32 {
 pub fn gatedMlp(out: []f32, in: []const f32, gw: []const bf16, uw: []const bf16, dw: []const bf16, h: usize, inter: usize, act: []f32, tp: ?*std.Thread.Pool) void {
     std.debug.assert(act.len >= inter);
     if (tp) |pool| {
-        const chunk_size = (inter + 15) / 16;
+        const num_jobs: usize = 16;
+        const chunk_size = (inter + num_jobs - 1) / num_jobs;
         var wg = std.Thread.WaitGroup{};
         var r_start: usize = 0;
         while (r_start < inter) : (r_start += chunk_size) {
@@ -73,12 +90,8 @@ pub fn gatedMlp(out: []f32, in: []const f32, gw: []const bf16, uw: []const bf16,
             pool.spawnWg(&wg, struct {
                 fn run(a: []f32, in_v: []const f32, g_w: []const bf16, u_w: []const bf16, s: usize, e: usize, c: usize) void {
                     for (s..e) |r| {
-                        var g_dot: f32 = 0.0;
-                        var u_dot: f32 = 0.0;
-                        for (0..c) |col| {
-                            g_dot += g_w[r * c + col].toF32() * in_v[col];
-                            u_dot += u_w[r * c + col].toF32() * in_v[col];
-                        }
+                        const g_dot = dotBf16(g_w[r * c .. (r + 1) * c], in_v);
+                        const u_dot = dotBf16(u_w[r * c .. (r + 1) * c], in_v);
                         a[r] = geluTanh(g_dot) * u_dot;
                     }
                 }
@@ -88,12 +101,8 @@ pub fn gatedMlp(out: []f32, in: []const f32, gw: []const bf16, uw: []const bf16,
         gemvParallel(out, act[0..inter], dw, h, inter, pool);
     } else {
         for (0..inter) |r| {
-            var g_dot: f32 = 0.0;
-            var u_dot: f32 = 0.0;
-            for (0..h) |c| {
-                g_dot += gw[r * h + c].toF32() * in[c];
-                u_dot += uw[r * h + c].toF32() * in[c];
-            }
+            const g_dot = dotBf16(gw[r * h .. (r + 1) * h], in);
+            const u_dot = dotBf16(uw[r * h .. (r + 1) * h], in);
             act[r] = geluTanh(g_dot) * u_dot;
         }
         gemv(out, act[0..inter], dw, h, inter);

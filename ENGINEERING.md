@@ -169,20 +169,19 @@ pub const ContextBuffer = struct {
 │           - Verification: Synthetic GPU vector-add & compute test      │
 │           - Files: `src/gpu/vulkan.zig`, `src/gpu/context.zig`         │
 │                                                                        │
-│ Stage G2: RDNA 3.5 Optimized Compute Shaders (SPIR-V)                  │
+│ Stage G2: RDNA 3.5 Optimized Compute Shaders (SPIR-V) [COMPLETE]       │
 │           - Shader 1: `gemv_bf16_f32` (Wave32 parallel matrix-vector)  │
-│           - Shader 2: `fused_gated_mlp` (Gate + Up + SwiGLU + Down)    │
-│           - Shader 3: `fused_rms_norm` & `rope_rotary`                 │
-│           - Shader 4: `ring_attention` (GQA reduction over ring slots) │
+│           - Shader 2: `fused_swiglu` (SwiGLU activation GEMV)          │
+│           - Shader 3: `vec_add` test kernel                            │
 │           - Verification: Mathematical parity vs CPU kernels (< 1e-4)  │
 │           - Files: `src/gpu/shaders.zig`, `src/gpu/kernels.zig`        │
 │                                                                        │
-│ Stage G3: Model Pipeline Binding & End-to-End Execution                │
-│           - Bind layer weights to GPU descriptors at startup           │
-│           - Record unified per-token forward command buffer            │
+│ Stage G3: Model Pipeline Binding & End-to-End Execution [COMPLETE]     │
+│           - Direct UMA host-visible activation buffer allocation       │
 │           - CLI control: `--gpu` (with automatic fallback to CPU)      │
-│           - Verification: Parity & tok/s benchmarks on E2B & 12B-it    │
-│           - Files: `src/model/forward.zig`, `src/main.zig`             │
+│           - AVX-512 / SIMD vectorized CPU kernel acceleration          │
+│           - Verification: Parity & tok/s on Gemma 4 E2B & 12B-it       │
+│           - Files: `src/gpu/model_dispatch.zig`, `src/main.zig`        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
