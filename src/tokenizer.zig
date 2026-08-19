@@ -75,20 +75,49 @@ pub const Tokenizer = struct {
             return token_ids.toOwnedSlice();
         }
 
-        // 1. Replace spaces with   (U+2581: \xe2\x96\x81) and add leading space prefix if needed
+        // 1. Process escape sequences and space replacement
         var norm = std.ArrayList(u8).init(allocator);
         defer norm.deinit();
 
-        if (text[0] != ' ') {
+        var i: usize = 0;
+        // Prepend space marker only if not starting with special tag '<' or whitespace
+        if (text.len > 0 and text[0] != ' ' and text[0] != '<' and text[0] != '\n') {
             try norm.appendSlice("\xe2\x96\x81");
         }
 
-        for (text) |byte| {
-            if (byte == ' ') {
+        while (i < text.len) {
+            if (text[i] == '\\' and i + 1 < text.len) {
+                switch (text[i + 1]) {
+                    'n' => {
+                        try norm.append('\n');
+                        i += 2;
+                        continue;
+                    },
+                    't' => {
+                        try norm.append('\t');
+                        i += 2;
+                        continue;
+                    },
+                    'r' => {
+                        try norm.append('\r');
+                        i += 2;
+                        continue;
+                    },
+                    '\\' => {
+                        try norm.append('\\');
+                        i += 2;
+                        continue;
+                    },
+                    else => {},
+                }
+            }
+
+            if (text[i] == ' ') {
                 try norm.appendSlice("\xe2\x96\x81");
             } else {
-                try norm.append(byte);
+                try norm.append(text[i]);
             }
+            i += 1;
         }
 
         const norm_bytes = norm.items;
@@ -114,7 +143,6 @@ pub const Tokenizer = struct {
                 try token_ids.append(id);
                 cursor += max_match_len;
             } else {
-                // Byte fallback: try <0xNN>
                 var hex_buf: [6]u8 = undefined;
                 const hex_str = std.fmt.bufPrint(&hex_buf, "<0x{X:0>2}>", .{norm_bytes[cursor]}) catch "<0x00>";
                 if (self.token_to_id.get(hex_str)) |id| {

@@ -101,6 +101,29 @@ fn runInference(
         m.forwardToken(cache, scratch, t, pos, thread_pool);
     }
 
+    // Inspect top 5 logits after prefill
+    var top_ids: [5]u32 = undefined;
+    var top_vals: [5]f32 = [_]f32{-1e9} ** 5;
+    for (scratch.logits, 0..) |v, i| {
+        for (0..5) |k| {
+            if (v > top_vals[k]) {
+                var shift: usize = 4;
+                while (shift > k) : (shift -= 1) {
+                    top_vals[shift] = top_vals[shift - 1];
+                    top_ids[shift] = top_ids[shift - 1];
+                }
+                top_vals[k] = v;
+                top_ids[k] = @intCast(i);
+                break;
+            }
+        }
+    }
+    try stdout.print("[Top predictions: ", .{});
+    for (top_ids, top_vals) |id, val| {
+        try stdout.print("'{s}' ({d:.2}) ", .{ tok.decode(id), val });
+    }
+    try stdout.print("]\n", .{});
+
     var current_token = kernels.sampleArgmax(scratch.logits);
     var pos = prompt_tokens.len;
     const max_new_tokens: usize = 32;
