@@ -148,7 +148,47 @@ pub const ContextBuffer = struct {
 
 ---
 
-## 4. Testing & Verification Criteria
+## 4. Hardware-Tailored GPU Acceleration Plan (AMD RDNA 3.5 / Radeon 8060S)
+
+### A. Target Hardware & Architecture
+* **Target Device:** AMD Ryzen AI Max+ 395 with Radeon 8060S (`gfx1150` / RDNA 3.5 architecture).
+* **Memory Architecture:** AMD Unified Memory Architecture (UMA) with 96 GB–128 GB shared physical RAM.
+* **Driver Target:** Mesa RADV (`/lib/x86_64-linux-gnu/libvulkan_radeon.so`, `libvulkan.so.1`, Vulkan 1.3).
+* **Zero-Copy UMA Strategy:** Allocate memory with `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`. Model weights and dynamic ring buffers are directly accessible by both CPU and GPU without PCIe staging buffers or host-to-device copy overhead.
+
+### B. Implementation Stages
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ AMD GPU COMPUTE IMPLEMENTATION STAGES                                  │
+│                                                                        │
+│ Stage G1: Vulkan Compute Scaffold & Device Discovery                   │
+│           - Direct Vulkan 1.3 ABI bindings in pure Zig                 │
+│           - Select AMD Radeon 8060S (`gfx1150`) compute queue          │
+│           - Allocate UMA host-visible / device-local shared buffers    │
+│           - Verification: Synthetic GPU vector-add & dot-product test  │
+│           - Files: `src/gpu/vulkan.zig`, `src/gpu/context.zig`         │
+│                                                                        │
+│ Stage G2: RDNA 3.5 Optimized Compute Shaders (SPIR-V)                  │
+│           - Shader 1: `gemv_bf16_f32` (Wave32 parallel matrix-vector)  │
+│           - Shader 2: `fused_gated_mlp` (Gate + Up + SwiGLU + Down)    │
+│           - Shader 3: `fused_rms_norm` & `rope_rotary`                 │
+│           - Shader 4: `ring_attention` (GQA reduction over ring slots) │
+│           - Verification: Mathematical parity vs CPU kernels (< 1e-4)  │
+│           - Files: `src/gpu/shaders.zig`, `src/gpu/kernels.zig`        │
+│                                                                        │
+│ Stage G3: Model Pipeline Binding & End-to-End Execution                │
+│           - Bind layer weights to GPU descriptors at startup           │
+│           - Record unified per-token forward command buffer            │
+│           - CLI control: `--gpu` (with automatic fallback to CPU)      │
+│           - Verification: Parity & tok/s benchmarks on E2B & 12B-it    │
+│           - Files: `src/model/forward.zig`, `src/main.zig`             │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Testing & Verification Criteria
 
 | Stage | Verification Milestone | Success Criteria |
 | :--- | :--- | :--- |
