@@ -162,11 +162,11 @@ pub const ContextBuffer = struct {
 ┌────────────────────────────────────────────────────────────────────────┐
 │ AMD GPU COMPUTE IMPLEMENTATION STAGES                                  │
 │                                                                        │
-│ Stage G1: Vulkan Compute Scaffold & Device Discovery                   │
-│           - Direct Vulkan 1.3 ABI bindings in pure Zig                 │
+│ Stage G1: Vulkan Compute Scaffold & Device Discovery [COMPLETE]        │
+│           - Direct Vulkan 1.3 ABI bindings in pure Zig (`vk_api.zig`)  │
 │           - Select AMD Radeon 8060S (`gfx1150`) compute queue          │
 │           - Allocate UMA host-visible / device-local shared buffers    │
-│           - Verification: Synthetic GPU vector-add & dot-product test  │
+│           - Verification: Synthetic GPU vector-add & compute test      │
 │           - Files: `src/gpu/vulkan.zig`, `src/gpu/context.zig`         │
 │                                                                        │
 │ Stage G2: RDNA 3.5 Optimized Compute Shaders (SPIR-V)                  │

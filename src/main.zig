@@ -9,6 +9,8 @@ pub const diff = @import("diff.zig");
 pub const memory = @import("memory.zig");
 pub const storage = @import("storage.zig");
 pub const quiescence = @import("quiescence.zig");
+pub const vq = @import("vq.zig");
+pub const gpu = @import("gpu.zig");
 
 const MEMORY_CAPACITY: usize = 8192;
 
@@ -67,12 +69,10 @@ pub fn main() !void {
     try stdout.print("Loading model from: {s}...\n", .{model_dir});
 
     var config_path_buf: [512]u8 = undefined;
-    const config_path = try std.fmt.bufPrint(&config_path_buf, "{s}/config.json", .{model_dir});
-    const config = try model.ModelConfig.loadFromJson(allocator, config_path);
+    const config = try model.ModelConfig.loadFromJson(allocator, try std.fmt.bufPrint(&config_path_buf, "{s}/config.json", .{model_dir}));
 
     var tok_path_buf: [512]u8 = undefined;
-    const tok_path = try std.fmt.bufPrint(&tok_path_buf, "{s}/tokenizer.json", .{model_dir});
-    var tok = try tokenizer.Tokenizer.loadFromJson(allocator, tok_path);
+    var tok = try tokenizer.Tokenizer.loadFromJson(allocator, try std.fmt.bufPrint(&tok_path_buf, "{s}/tokenizer.json", .{model_dir}));
     defer tok.deinit();
 
     var st = try safetensors.SafeTensors.openDir(allocator, model_dir);
@@ -87,7 +87,6 @@ pub fn main() !void {
     var archive: ?memory.DiffArchive = null;
     var store: ?storage.PersistentDiffStore = null;
     defer if (store) |*s| s.close();
-
     if (memory_enabled) {
         var arch = try memory.DiffArchive.init(allocator, config.hidden_size, MEMORY_CAPACITY, .{});
         if (storage_path) |sp| {
@@ -196,4 +195,5 @@ test {
     _ = @import("storage.zig");
     _ = @import("quiescence.zig");
     _ = @import("vq.zig");
+    _ = @import("gpu.zig");
 }
