@@ -2,10 +2,12 @@ const std = @import("std");
 pub const safetensors = @import("../safetensors.zig");
 pub const tensor = @import("../tensor.zig");
 pub const types = @import("types.zig");
+pub const ring_buffer = @import("../ring_buffer.zig");
 
 const bf16 = tensor.bf16;
 const ModelConfig = types.ModelConfig;
 const LayerWeights = types.LayerWeights;
+const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
 pub const Model = struct {
     allocator: std.mem.Allocator,
@@ -105,14 +107,14 @@ pub const Model = struct {
 
     pub fn forwardToken(
         self: *const Model,
-        cache: *types.KVCache,
+        ring: *DynamicRingBuffer,
         scratch: *types.ForwardScratch,
         token_id: u32,
-        pos: usize,
+        clock: usize,
         thread_pool: ?*std.Thread.Pool,
     ) void {
         const fwd = @import("forward.zig");
-        fwd.forwardToken(self, cache, scratch, token_id, pos, thread_pool);
+        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool);
     }
 };
 

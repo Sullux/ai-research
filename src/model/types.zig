@@ -1,7 +1,9 @@
 const std = @import("std");
 pub const tensor = @import("../tensor.zig");
-const bf16 = tensor.bf16;
+pub const ring_buffer = @import("../ring_buffer.zig");
 
+const bf16 = tensor.bf16;
+pub const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 pub const LayerType = enum { sliding_attention, full_attention };
 
 pub const LayerWeights = struct {
@@ -106,36 +108,10 @@ pub const ModelConfig = struct {
     }
 };
 
-pub const KVCache = struct {
-    allocator: std.mem.Allocator,
-    k: []f32,
-    v: []f32,
-    max_seq_len: usize,
-    num_layers: usize,
-    max_kv_dim: usize,
-
-    pub fn init(allocator: std.mem.Allocator, num_layers: usize, max_seq_len: usize, max_kv_dim: usize) !KVCache {
-        const total = num_layers * max_seq_len * max_kv_dim;
-        const k_buf = try allocator.alloc(f32, total);
-        const v_buf = try allocator.alloc(f32, total);
-        @memset(k_buf, 0);
-        @memset(v_buf, 0);
-        return KVCache{ .allocator = allocator, .k = k_buf, .v = v_buf, .max_seq_len = max_seq_len, .num_layers = num_layers, .max_kv_dim = max_kv_dim };
-    }
-
-    pub fn deinit(self: *KVCache) void {
-        self.allocator.free(self.k);
-        self.allocator.free(self.v);
-    }
-
-    pub fn getKV(self: *KVCache, layer: usize, pos: usize, kv_dim: usize) struct { k: []f32, v: []f32 } {
-        const offset = (layer * self.max_seq_len + pos) * self.max_kv_dim;
-        return .{ .k = self.k[offset .. offset + kv_dim], .v = self.v[offset .. offset + kv_dim] };
-    }
-};
-
 pub const ForwardScratch = struct {
     x: []f32,
+    prev_x: []f32,
+    delta_x: []f32,
     normed_x: []f32,
     q: []f32,
     k: []f32,
@@ -148,20 +124,24 @@ pub const ForwardScratch = struct {
     ple_buf_1: []f32,
     ple_buf_2: []f32,
     logits: []f32,
+    active_slots: []usize,
 
     pub fn init(allocator: std.mem.Allocator, config: ModelConfig) !ForwardScratch {
         const max_head = @max(config.head_dim, config.global_head_dim);
         const max_q = config.num_attention_heads * max_head;
         const max_kv = @max(config.num_key_value_heads, config.num_global_key_value_heads) * max_head;
         const total_ple = config.num_hidden_layers * config.hidden_size_per_layer_input;
+        const max_slots = config.max_seq_len;
 
         return ForwardScratch{
             .x = try allocator.alloc(f32, config.hidden_size),
+            .prev_x = try allocator.alloc(f32, config.hidden_size),
+            .delta_x = try allocator.alloc(f32, config.hidden_size),
             .normed_x = try allocator.alloc(f32, config.hidden_size),
             .q = try allocator.alloc(f32, max_q),
             .k = try allocator.alloc(f32, max_kv),
             .v = try allocator.alloc(f32, max_kv),
-            .attn_scores = try allocator.alloc(f32, config.max_seq_len),
+            .attn_scores = try allocator.alloc(f32, max_slots),
             .attn_out = try allocator.alloc(f32, @max(max_q, config.hidden_size)),
             .mlp_gate_up = try allocator.alloc(f32, config.intermediate_size * 2),
             .mlp_out = try allocator.alloc(f32, config.hidden_size),
@@ -169,11 +149,14 @@ pub const ForwardScratch = struct {
             .ple_buf_1 = try allocator.alloc(f32, @max(config.hidden_size_per_layer_input, 1)),
             .ple_buf_2 = try allocator.alloc(f32, config.hidden_size),
             .logits = try allocator.alloc(f32, config.vocab_size),
+            .active_slots = try allocator.alloc(usize, max_slots),
         };
     }
 
     pub fn deinit(self: *ForwardScratch, allocator: std.mem.Allocator) void {
         allocator.free(self.x);
+        allocator.free(self.prev_x);
+        allocator.free(self.delta_x);
         allocator.free(self.normed_x);
         allocator.free(self.q);
         allocator.free(self.k);
@@ -186,5 +169,6 @@ pub const ForwardScratch = struct {
         allocator.free(self.ple_buf_1);
         allocator.free(self.ple_buf_2);
         allocator.free(self.logits);
+        allocator.free(self.active_slots);
     }
 };

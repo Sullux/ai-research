@@ -4,6 +4,8 @@ pub const tensor = @import("tensor.zig");
 pub const kernels = @import("kernels.zig");
 pub const tokenizer = @import("tokenizer.zig");
 pub const model = @import("model.zig");
+pub const ring_buffer = @import("ring_buffer.zig");
+pub const diff = @import("diff.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -22,6 +24,8 @@ pub fn main() !void {
 
     var model_dir: []const u8 = "../gemma-4-E2B";
     var max_tokens: usize = 128;
+    var num_anchors: usize = 32;
+    var window_size: usize = 512;
     var prompt_buf = std.ArrayList(u8).init(allocator);
     defer prompt_buf.deinit();
 
@@ -37,6 +41,18 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--max-tokens") or std.mem.eql(u8, arg, "-n")) {
             if (arg_idx + 1 < args.len) {
                 max_tokens = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 128;
+                arg_idx += 2;
+                continue;
+            }
+        } else if (std.mem.eql(u8, arg, "--anchors")) {
+            if (arg_idx + 1 < args.len) {
+                num_anchors = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 32;
+                arg_idx += 2;
+                continue;
+            }
+        } else if (std.mem.eql(u8, arg, "--window")) {
+            if (arg_idx + 1 < args.len) {
+                window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512;
                 arg_idx += 2;
                 continue;
             }
@@ -64,20 +80,21 @@ pub fn main() !void {
     var m = try model.Model.loadFromSafeTensors(allocator, &st, config);
     defer m.deinit();
 
-    const max_kv_dim = @max(config.head_dim, config.global_head_dim) * config.num_key_value_heads;
-    var cache = try model.KVCache.init(allocator, config.num_hidden_layers, config.max_seq_len, max_kv_dim);
-    defer cache.deinit();
+    const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
+    var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, num_anchors, window_size);
+    defer ring.deinit();
 
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
 
     if (prompt_buf.items.len > 0) {
-        try runInference(&m, &tok, &cache, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator);
+        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator);
         try stdout.print("\n", .{});
         return;
     }
 
-    try stdout.print("\n=== Gemma 4 Interactive REPL ({s}) ===\n", .{model_dir});
+    try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\n", .{model_dir});
+    try stdout.print("Anchors: {d}, Window: {d}, Total Slots: {d}\n", .{ num_anchors, window_size, ring.total_slots });
     try stdout.print("Type your prompt and press Enter. Type 'exit' or Ctrl+C to quit.\n\n", .{});
 
     var line_buf: [4096]u8 = undefined;
@@ -89,7 +106,7 @@ pub fn main() !void {
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, "exit") or std.mem.eql(u8, trimmed, "quit")) break;
 
-        try runInference(&m, &tok, &cache, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator);
+        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator);
         try stdout.print("\n\n", .{});
     }
 }
@@ -110,7 +127,7 @@ fn printToken(stdout: anytype, token_str: []const u8) !void {
 fn runInference(
     m: *const model.Model,
     tok: *const tokenizer.Tokenizer,
-    cache: *model.KVCache,
+    ring: *ring_buffer.DynamicRingBuffer,
     scratch: *model.ForwardScratch,
     prompt: []const u8,
     max_tokens: usize,
@@ -121,15 +138,14 @@ fn runInference(
     const prompt_tokens = try tok.encode(allocator, prompt, true);
     defer allocator.free(prompt_tokens);
 
-    @memset(cache.k, 0);
-    @memset(cache.v, 0);
+    ring.reset();
 
-    for (prompt_tokens, 0..) |t, pos| {
-        m.forwardToken(cache, scratch, t, pos, thread_pool);
+    for (prompt_tokens, 0..) |t, clock| {
+        m.forwardToken(ring, scratch, t, clock, thread_pool);
     }
 
     var current_token = kernels.sampleArgmax(scratch.logits);
-    var pos = prompt_tokens.len;
+    var clock = prompt_tokens.len;
 
     for (0..max_tokens) |_| {
         const token_str = tok.decode(current_token);
@@ -137,9 +153,9 @@ fn runInference(
 
         if (current_token == tok.eos_token_id) break;
 
-        m.forwardToken(cache, scratch, current_token, pos, thread_pool);
+        m.forwardToken(ring, scratch, current_token, clock, thread_pool);
         current_token = kernels.sampleArgmax(scratch.logits);
-        pos += 1;
+        clock += 1;
     }
 }
 
@@ -148,4 +164,6 @@ test {
     _ = @import("tensor.zig");
     _ = @import("kernels.zig");
     _ = @import("tokenizer.zig");
+    _ = @import("ring_buffer.zig");
+    _ = @import("diff.zig");
 }

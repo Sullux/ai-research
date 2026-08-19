@@ -3,16 +3,19 @@ pub const tensor = @import("../tensor.zig");
 pub const kernels = @import("../kernels.zig");
 pub const types = @import("types.zig");
 pub const loader = @import("loader.zig");
+pub const ring_buffer = @import("../ring_buffer.zig");
 
 const Model = loader.Model;
 const LayerWeights = types.LayerWeights;
-const KVCache = types.KVCache;
 const ForwardScratch = types.ForwardScratch;
+const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
-pub fn forwardToken(self: *const Model, cache: *KVCache, scratch: *ForwardScratch, token_id: u32, pos: usize, tp: ?*std.Thread.Pool) void {
+pub fn forwardToken(self: *const Model, ring: *DynamicRingBuffer, scratch: *ForwardScratch, token_id: u32, clock: usize, tp: ?*std.Thread.Pool) void {
     const H = self.config.hidden_size;
     const ple_dim = self.config.hidden_size_per_layer_input;
     const embed_scale = @sqrt(@as(f32, @floatFromInt(H)));
+
+    @memcpy(scratch.prev_x, scratch.x);
 
     const emb_offset = @as(usize, token_id) * H;
     for (scratch.x, self.embed_tokens[emb_offset .. emb_offset + H]) |*out, e| out.* = e.toF32() * embed_scale;
@@ -20,7 +23,7 @@ pub fn forwardToken(self: *const Model, cache: *KVCache, scratch: *ForwardScratc
     if (ple_dim > 0) preparePLE(self, scratch, token_id, H, ple_dim, tp);
 
     for (self.layers, 0..) |l, layer_idx| {
-        forwardAttention(self, l, cache, scratch, layer_idx, pos, H, tp);
+        forwardAttention(self, l, ring, scratch, layer_idx, clock, H, tp);
         forwardMLP(self, l, scratch, H, tp);
         if (ple_dim > 0) forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
         if (l.layer_scalar) |s| for (scratch.x) |*x_val| { x_val.* *= s; };
@@ -62,7 +65,7 @@ fn preparePLE(self: *const Model, scratch: *ForwardScratch, token_id: u32, H: us
     }
 }
 
-fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratch: *ForwardScratch, layer_idx: usize, pos: usize, H: usize, tp: ?*std.Thread.Pool) void {
+fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
 
     if (tp) |pool| kernels.gemvParallel(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H, pool) else kernels.gemv(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H);
@@ -72,7 +75,7 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
     }
 
     const theta = if (l.layer_type == .full_attention) self.config.rope_theta_full else self.config.rope_theta;
-    kernels.applyRopePartial(scratch.q[0..l.q_dim], pos, l.head_dim, l.rotary_dim, theta);
+    kernels.applyRopePartial(scratch.q[0..l.q_dim], clock, l.head_dim, l.rotary_dim, theta);
 
     const first_kv_shared_idx = self.config.num_hidden_layers - self.config.num_kv_shared_layers;
     const is_shared = (self.config.num_kv_shared_layers > 0 and layer_idx >= first_kv_shared_idx);
@@ -95,24 +98,22 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
             kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
         }
 
-        kernels.applyRopePartial(scratch.k[0..l.kv_dim], pos, l.head_dim, l.rotary_dim, theta);
-        const kv = cache.getKV(kv_layer, pos, l.kv_dim);
-        @memcpy(kv.k, scratch.k[0..l.kv_dim]);
-        @memcpy(kv.v, scratch.v[0..l.kv_dim]);
+        kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
+        ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);
     }
 
-    const history_len = pos + 1;
-    const start_p = if (l.layer_type == .sliding_attention and history_len > self.config.sliding_window) history_len - self.config.sliding_window else 0;
-    const active_p_count = history_len - start_p;
+    const active_count = ring.getActiveSlots(kv_layer, clock, scratch.active_slots);
     const gqa_group_size = self.config.num_attention_heads / l.num_kv_heads;
 
     for (0..self.config.num_attention_heads) |h| {
         const kv_h = h / gqa_group_size;
         const q_head = scratch.q[h * l.head_dim .. (h + 1) * l.head_dim];
-        const head_scores = scratch.attn_scores[0..active_p_count];
+        const head_scores = scratch.attn_scores[0..active_count];
 
-        for (start_p..history_len, 0..) |p, i| {
-            const k_head = cache.getKV(kv_layer, p, l.kv_dim).k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
+        for (0..active_count) |i| {
+            const slot = scratch.active_slots[i];
+            const slot_kv = ring.getSlotKV(kv_layer, slot, l.kv_dim);
+            const k_head = slot_kv.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             var dot: f32 = 0.0;
             for (q_head, k_head) |q_val, k_val| dot += q_val * k_val;
             head_scores[i] = dot;
@@ -122,9 +123,11 @@ fn forwardAttention(self: *const Model, l: LayerWeights, cache: *KVCache, scratc
         const out_head = scratch.attn_out[h * l.head_dim .. (h + 1) * l.head_dim];
         @memset(out_head, 0);
 
-        for (start_p..history_len, 0..) |p, i| {
+        for (0..active_count) |i| {
+            const slot = scratch.active_slots[i];
+            const slot_kv = ring.getSlotKV(kv_layer, slot, l.kv_dim);
+            const v_head = slot_kv.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             const weight = head_scores[i];
-            const v_head = cache.getKV(kv_layer, p, l.kv_dim).v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             for (out_head, v_head) |*o, v_val| o.* += weight * v_val;
         }
     }
