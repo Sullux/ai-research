@@ -29,11 +29,13 @@ pub const Model = struct {
 
         var buf: [128]u8 = undefined;
         for (0..config.num_hidden_layers) |l| {
-            const is_full = ((l + 1) % 5 == 0);
+            const is_full = (config.layer_types[l] == .full_attention);
             const head_dim = if (is_full) config.global_head_dim else config.head_dim;
             const rotary_dim = if (is_full) head_dim / 4 else head_dim;
+            const num_kv_heads = if (is_full) config.num_global_key_value_heads else config.num_key_value_heads;
             const q_dim = config.num_attention_heads * head_dim;
-            const kv_dim = config.num_key_value_heads * head_dim;
+            const kv_dim = num_kv_heads * head_dim;
+            const k_eq_v = (is_full and config.attention_k_eq_v);
 
             const in_norm = try getSlice(st, &buf, "model.language_model.layers.{d}.input_layernorm.weight", .{l});
             const q = try getSlice(st, &buf, "model.language_model.layers.{d}.self_attn.q_proj.weight", .{l});
@@ -62,6 +64,8 @@ pub const Model = struct {
                 .rotary_dim = rotary_dim,
                 .q_dim = q_dim,
                 .kv_dim = kv_dim,
+                .num_kv_heads = num_kv_heads,
+                .k_eq_v = k_eq_v,
                 .intermediate_dim = intermediate_dim,
                 .input_layernorm = in_norm,
                 .q_proj = q,

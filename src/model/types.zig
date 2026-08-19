@@ -2,10 +2,7 @@ const std = @import("std");
 pub const tensor = @import("../tensor.zig");
 const bf16 = tensor.bf16;
 
-pub const LayerType = enum {
-    sliding_attention,
-    full_attention,
-};
+pub const LayerType = enum { sliding_attention, full_attention };
 
 pub const LayerWeights = struct {
     layer_type: LayerType,
@@ -13,6 +10,8 @@ pub const LayerWeights = struct {
     rotary_dim: usize,
     q_dim: usize,
     kv_dim: usize,
+    num_kv_heads: usize,
+    k_eq_v: bool,
     intermediate_dim: usize,
 
     input_layernorm: []const bf16,
@@ -23,7 +22,6 @@ pub const LayerWeights = struct {
     q_norm: []const bf16,
     k_norm: []const bf16,
     post_attention_layernorm: ?[]const bf16 = null,
-
     pre_feedforward_layernorm: []const bf16,
     gate_proj: []const bf16,
     up_proj: []const bf16,
@@ -31,7 +29,6 @@ pub const LayerWeights = struct {
     post_feedforward_layernorm: ?[]const bf16 = null,
     layer_scalar: ?f32 = null,
 
-    // Optional Per-Layer Embedding weights (for E2B/E4B)
     per_layer_input_gate: ?[]const bf16 = null,
     per_layer_projection: ?[]const bf16 = null,
     post_per_layer_input_norm: ?[]const bf16 = null,
@@ -45,19 +42,21 @@ pub const ModelConfig = struct {
     num_hidden_layers: usize = 35,
     num_attention_heads: usize = 8,
     num_key_value_heads: usize = 1,
+    num_global_key_value_heads: usize = 1,
     head_dim: usize = 256,
     global_head_dim: usize = 256,
     num_kv_shared_layers: usize = 0,
+    attention_k_eq_v: bool = false,
     rms_norm_eps: f32 = 1e-6,
     rope_theta: f32 = 10000.0,
     rope_theta_full: f32 = 1000000.0,
     sliding_window: usize = 512,
     max_seq_len: usize = 4096,
+    layer_types: [64]LayerType = [_]LayerType{.sliding_attention} ** 64,
 
     pub fn loadFromJson(allocator: std.mem.Allocator, path: []const u8) !ModelConfig {
         const file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
-
         const file_size = (try file.stat()).size;
         const raw_json = try allocator.alloc(u8, file_size);
         defer allocator.free(raw_json);
@@ -67,32 +66,42 @@ pub const ModelConfig = struct {
         defer parsed.deinit();
 
         var root = parsed.value;
-        if (root.object.get("text_config")) |tc| {
-            if (tc == .object) root = tc;
-        }
+        if (root.object.get("text_config")) |tc| if (tc == .object) { root = tc; };
 
         var cfg = ModelConfig{};
-        if (root.object.get("vocab_size")) |v| cfg.vocab_size = @intCast(v.integer);
-        if (root.object.get("hidden_size")) |v| cfg.hidden_size = @intCast(v.integer);
-        if (root.object.get("intermediate_size")) |v| cfg.intermediate_size = @intCast(v.integer);
-        if (root.object.get("hidden_size_per_layer_input")) |v| {
-            cfg.hidden_size_per_layer_input = if (v == .integer) @intCast(v.integer) else 0;
+        if (root.object.get("vocab_size")) |v| if (v == .integer) { cfg.vocab_size = @intCast(v.integer); };
+        if (root.object.get("hidden_size")) |v| if (v == .integer) { cfg.hidden_size = @intCast(v.integer); };
+        if (root.object.get("intermediate_size")) |v| if (v == .integer) { cfg.intermediate_size = @intCast(v.integer); };
+        if (root.object.get("hidden_size_per_layer_input")) |v| if (v == .integer) { cfg.hidden_size_per_layer_input = @intCast(v.integer); };
+        if (root.object.get("num_hidden_layers")) |v| if (v == .integer) { cfg.num_hidden_layers = @intCast(v.integer); };
+        if (root.object.get("num_attention_heads")) |v| if (v == .integer) { cfg.num_attention_heads = @intCast(v.integer); };
+        if (root.object.get("num_key_value_heads")) |v| if (v == .integer) { cfg.num_key_value_heads = @intCast(v.integer); };
+        if (root.object.get("num_global_key_value_heads")) |v| {
+            if (v == .integer) cfg.num_global_key_value_heads = @intCast(v.integer) else cfg.num_global_key_value_heads = cfg.num_key_value_heads;
+        } else {
+            cfg.num_global_key_value_heads = cfg.num_key_value_heads;
         }
-        if (root.object.get("num_hidden_layers")) |v| cfg.num_hidden_layers = @intCast(v.integer);
-        if (root.object.get("num_attention_heads")) |v| cfg.num_attention_heads = @intCast(v.integer);
-        if (root.object.get("num_key_value_heads")) |v| cfg.num_key_value_heads = @intCast(v.integer);
-        if (root.object.get("head_dim")) |v| cfg.head_dim = @intCast(v.integer);
+        if (root.object.get("head_dim")) |v| if (v == .integer) { cfg.head_dim = @intCast(v.integer); };
         if (root.object.get("global_head_dim")) |v| {
-            cfg.global_head_dim = @intCast(v.integer);
+            if (v == .integer) cfg.global_head_dim = @intCast(v.integer) else cfg.global_head_dim = cfg.head_dim;
         } else {
             cfg.global_head_dim = cfg.head_dim;
         }
-        if (root.object.get("num_kv_shared_layers")) |v| cfg.num_kv_shared_layers = @intCast(v.integer);
-        if (root.object.get("sliding_window")) |v| cfg.sliding_window = @intCast(v.integer);
-        if (root.object.get("rms_norm_eps")) |v| {
-            cfg.rms_norm_eps = if (v == .float) @floatCast(v.float) else 1e-6;
-        }
+        if (root.object.get("num_kv_shared_layers")) |v| if (v == .integer) { cfg.num_kv_shared_layers = @intCast(v.integer); };
+        if (root.object.get("attention_k_eq_v")) |v| if (v == .bool) { cfg.attention_k_eq_v = v.bool; };
+        if (root.object.get("sliding_window")) |v| if (v == .integer) { cfg.sliding_window = @intCast(v.integer); };
+        if (root.object.get("rms_norm_eps")) |v| cfg.rms_norm_eps = if (v == .float) @floatCast(v.float) else 1e-6;
 
+        if (root.object.get("layer_types")) |lt| {
+            if (lt == .array) {
+                for (lt.array.items, 0..) |item, i| {
+                    if (i >= 64) break;
+                    cfg.layer_types[i] = if (item == .string and std.mem.eql(u8, item.string, "full_attention")) .full_attention else .sliding_attention;
+                }
+            }
+        } else {
+            for (0..cfg.num_hidden_layers) |l| cfg.layer_types[l] = if ((l + 1) % 5 == 0) .full_attention else .sliding_attention;
+        }
         return cfg;
     }
 };
@@ -106,20 +115,12 @@ pub const KVCache = struct {
     max_kv_dim: usize,
 
     pub fn init(allocator: std.mem.Allocator, num_layers: usize, max_seq_len: usize, max_kv_dim: usize) !KVCache {
-        const total_elements = num_layers * max_seq_len * max_kv_dim;
-        const k_buf = try allocator.alloc(f32, total_elements);
-        const v_buf = try allocator.alloc(f32, total_elements);
+        const total = num_layers * max_seq_len * max_kv_dim;
+        const k_buf = try allocator.alloc(f32, total);
+        const v_buf = try allocator.alloc(f32, total);
         @memset(k_buf, 0);
         @memset(v_buf, 0);
-
-        return KVCache{
-            .allocator = allocator,
-            .k = k_buf,
-            .v = v_buf,
-            .max_seq_len = max_seq_len,
-            .num_layers = num_layers,
-            .max_kv_dim = max_kv_dim,
-        };
+        return KVCache{ .allocator = allocator, .k = k_buf, .v = v_buf, .max_seq_len = max_seq_len, .num_layers = num_layers, .max_kv_dim = max_kv_dim };
     }
 
     pub fn deinit(self: *KVCache) void {
@@ -129,10 +130,7 @@ pub const KVCache = struct {
 
     pub fn getKV(self: *KVCache, layer: usize, pos: usize, kv_dim: usize) struct { k: []f32, v: []f32 } {
         const offset = (layer * self.max_seq_len + pos) * self.max_kv_dim;
-        return .{
-            .k = self.k[offset .. offset + kv_dim],
-            .v = self.v[offset .. offset + kv_dim],
-        };
+        return .{ .k = self.k[offset .. offset + kv_dim], .v = self.v[offset .. offset + kv_dim] };
     }
 };
 
@@ -152,22 +150,22 @@ pub const ForwardScratch = struct {
     logits: []f32,
 
     pub fn init(allocator: std.mem.Allocator, config: ModelConfig) !ForwardScratch {
-        const max_head_dim = @max(config.head_dim, config.global_head_dim);
-        const max_q_dim = config.num_attention_heads * max_head_dim;
-        const max_kv_dim = config.num_key_value_heads * max_head_dim;
-        const total_ple_dim = config.num_hidden_layers * config.hidden_size_per_layer_input;
+        const max_head = @max(config.head_dim, config.global_head_dim);
+        const max_q = config.num_attention_heads * max_head;
+        const max_kv = @max(config.num_key_value_heads, config.num_global_key_value_heads) * max_head;
+        const total_ple = config.num_hidden_layers * config.hidden_size_per_layer_input;
 
         return ForwardScratch{
             .x = try allocator.alloc(f32, config.hidden_size),
             .normed_x = try allocator.alloc(f32, config.hidden_size),
-            .q = try allocator.alloc(f32, max_q_dim),
-            .k = try allocator.alloc(f32, max_kv_dim),
-            .v = try allocator.alloc(f32, max_kv_dim),
+            .q = try allocator.alloc(f32, max_q),
+            .k = try allocator.alloc(f32, max_kv),
+            .v = try allocator.alloc(f32, max_kv),
             .attn_scores = try allocator.alloc(f32, config.max_seq_len),
-            .attn_out = try allocator.alloc(f32, @max(max_q_dim, config.hidden_size)),
+            .attn_out = try allocator.alloc(f32, @max(max_q, config.hidden_size)),
             .mlp_gate_up = try allocator.alloc(f32, config.intermediate_size * 2),
             .mlp_out = try allocator.alloc(f32, config.hidden_size),
-            .ple_context = try allocator.alloc(f32, @max(total_ple_dim, 1)),
+            .ple_context = try allocator.alloc(f32, @max(total_ple, 1)),
             .ple_buf_1 = try allocator.alloc(f32, @max(config.hidden_size_per_layer_input, 1)),
             .ple_buf_2 = try allocator.alloc(f32, config.hidden_size),
             .logits = try allocator.alloc(f32, config.vocab_size),
