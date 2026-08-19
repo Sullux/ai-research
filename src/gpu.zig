@@ -6,6 +6,7 @@ pub const context = @import("gpu/context.zig");
 pub const buffer = @import("gpu/buffer.zig");
 pub const pipeline = @import("gpu/pipeline.zig");
 pub const shaders = @import("gpu/shaders.zig");
+pub const gpu_kernels = @import("gpu/kernels.zig");
 
 test "vulkan context initialization and AMD device selection" {
     var ctx = context.GpuContext.init(std.testing.allocator) catch |err| {
@@ -65,5 +66,96 @@ test "vulkan compute pipeline execution on AMD GPU" {
     for (0..n) |i| {
         const expected = @as(f32, @floatFromInt(i)) * 1.5 + 10.0;
         try std.testing.expectApproxEqAbs(expected, c_slice[i], 1e-4);
+    }
+}
+
+test "vulkan gemv_bf16 compute execution on AMD GPU" {
+    var ctx = context.GpuContext.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanLibraryNotFound or err == error.NoVulkanDevices) return;
+        return err;
+    };
+    defer ctx.deinit();
+
+    const m_rows: usize = 64;
+    const k_cols: usize = 128; // even count for packed bf16 pairs
+
+    // W: m_rows * (k_cols / 2) packed u32
+    var buf_w = try buffer.GpuBuffer.init(&ctx, m_rows * (k_cols / 2) * @sizeOf(u32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_w.deinit();
+    var buf_x = try buffer.GpuBuffer.init(&ctx, k_cols * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_x.deinit();
+    var buf_y = try buffer.GpuBuffer.init(&ctx, m_rows * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_y.deinit();
+
+    const w_slice = buf_w.asSlice(u32);
+    const x_slice = buf_x.asSlice(f32);
+    const y_slice = buf_y.asSlice(f32);
+
+    for (x_slice, 0..) |*x, i| {
+        x.* = @as(f32, @floatFromInt(i % 5)) * 0.25;
+    }
+    @memset(y_slice, 0);
+
+    // Fill W with 1.0 (bf16 representation of 1.0 is 0x3F80)
+    // Packed pair of 1.0 is (0x3F80 << 16) | 0x3F80 = 0x3F803F80
+    @memset(w_slice, 0x3F803F80);
+
+    var pipe = try pipeline.ComputePipeline.init(&ctx, &shaders.GEMV_BF16_SPIRV, 3, 8);
+    defer pipe.deinit();
+
+    const bufs = [_]*const buffer.GpuBuffer{ &buf_w, &buf_x, &buf_y };
+    try pipe.bindBuffers(&bufs);
+
+    const pc = [_]u32{ @intCast(m_rows), @intCast(k_cols) };
+    try pipe.dispatch(std.mem.sliceAsBytes(&pc), 1, 1, 1);
+
+    var expected_sum: f32 = 0.0;
+    for (x_slice) |x| expected_sum += 1.0 * x;
+
+    for (y_slice) |y| {
+        try std.testing.expectApproxEqAbs(expected_sum, y, 1e-3);
+    }
+}
+
+test "vulkan fused swiglu compute execution on AMD GPU" {
+    var ctx = context.GpuContext.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanLibraryNotFound or err == error.NoVulkanDevices) return;
+        return err;
+    };
+    defer ctx.deinit();
+
+    const dim: usize = 128;
+    var buf_gate = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_gate.deinit();
+    var buf_up = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_up.deinit();
+    var buf_out = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_out.deinit();
+
+    const gate = buf_gate.asSlice(f32);
+    const up = buf_up.asSlice(f32);
+    const out = buf_out.asSlice(f32);
+
+    for (0..dim) |i| {
+        gate[i] = @as(f32, @floatFromInt(i)) * 0.1 - 2.0;
+        up[i] = 1.5;
+        out[i] = 0.0;
+    }
+
+    var pipe = try pipeline.ComputePipeline.init(&ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4);
+    defer pipe.deinit();
+
+    const bufs = [_]*const buffer.GpuBuffer{ &buf_gate, &buf_up, &buf_out };
+    try pipe.bindBuffers(&bufs);
+
+    const pc = [_]u32{@intCast(dim)};
+    try pipe.dispatch(std.mem.sliceAsBytes(&pc), 2, 1, 1);
+
+    for (0..dim) |i| {
+        const g = gate[i];
+        const sig = 1.0 / (1.0 + @exp(-g));
+        const silu = g * sig;
+        const expected = silu * up[i];
+        try std.testing.expectApproxEqAbs(expected, out[i], 1e-4);
     }
 }
