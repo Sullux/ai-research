@@ -6,13 +6,23 @@ pub const memory_inject = @import("memory_inject.zig");
 pub const types = @import("types.zig");
 pub const loader = @import("loader.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
+pub const quiescence = @import("../quiescence.zig");
 
 const Model = loader.Model;
 const LayerWeights = types.LayerWeights;
 const ForwardScratch = types.ForwardScratch;
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
-pub fn forwardToken(self: *const Model, ring: *DynamicRingBuffer, scratch: *ForwardScratch, token_id: u32, clock: usize, tp: ?*std.Thread.Pool, memory_opt: ?*memory.DiffArchive) void {
+pub fn forwardToken(
+    self: *const Model,
+    ring: *DynamicRingBuffer,
+    scratch: *ForwardScratch,
+    token_id: u32,
+    clock: usize,
+    tp: ?*std.Thread.Pool,
+    memory_opt: ?*memory.DiffArchive,
+    quiescence_opt: ?*quiescence.QuiescenceTracker,
+) void {
     const H = self.config.hidden_size;
     const ple_dim = self.config.hidden_size_per_layer_input;
     const embed_scale = @sqrt(@as(f32, @floatFromInt(H)));
@@ -25,6 +35,9 @@ pub fn forwardToken(self: *const Model, ring: *DynamicRingBuffer, scratch: *Forw
     if (ple_dim > 0) preparePLE(self, scratch, token_id, H, ple_dim, tp);
 
     for (self.layers, 0..) |l, layer_idx| {
+        if (quiescence_opt) |q| {
+            if (!q.shouldExecute(layer_idx, clock, scratch.x, scratch.prev_x)) continue;
+        }
         forwardAttention(self, l, ring, scratch, layer_idx, clock, H, tp);
         forwardMLP(self, l, scratch, H, tp);
         if (ple_dim > 0) forwardPLE(self, l, scratch, layer_idx, ple_dim, H);

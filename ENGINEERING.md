@@ -121,14 +121,17 @@ pub const ContextBuffer = struct {
 │            - Dual-score recall: α·cos + β·e^(-λΔt) + γ·‖Δ‖             │
 │            - CLI controls: `--recall [slots]`, `--no-memory`           │
 │                                                                        │
-│ Stage 2.2: Persistent NVMe Ring Buffer & Binary Diff Bank              │
-│            - Memory-mapped 32-byte header `MemoryDiff` binary layout   │
-│            - Asynchronous diff commit & disk archive scanning          │
+│ Stage 2.2: Persistent NVMe Ring Buffer & Binary Diff Bank [COMPLETE]  │
+│            - Memory-mapped 32-byte header `DiffHeader` binary layout   │
+│            - Fast mmap disk store & DiffArchive bi-directional sync    │
+│            - CLI control: `--storage [file_path]`                      │
 │            - Source: `src/storage.zig`                                 │
 │                                                                        │
-│ Stage 2.3: Hierarchical Multi-Scale Temporal Quiescence                │
-│            - Lower layers (0..N/2) execute every cycle                 │
-│            - Upper layers evaluate Δ_state; skip GEMM on Δ < τ         │
+│ Stage 2.3: Hierarchical Multi-Scale Temporal Quiescence [COMPLETE]     │
+│            - Lower layers (0..N/2) execute densely every step          │
+│            - Upper layers evaluate state velocity (Δ/‖x‖); skip on Δ<τ │
+│            - Forced cadence refresh interval to prevent drift          │
+│            - CLI control: `--quiescence`                               │
 │            - Source: `src/quiescence.zig`                              │
 │                                                                        │
 │ Stage 2.4: VQ Centroid Memory Compression                              │

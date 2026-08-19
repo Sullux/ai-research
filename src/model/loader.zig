@@ -4,6 +4,7 @@ pub const tensor = @import("../tensor.zig");
 pub const types = @import("types.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
 pub const memory = @import("../memory.zig");
+pub const quiescence = @import("../quiescence.zig");
 
 const bf16 = tensor.bf16;
 const ModelConfig = types.ModelConfig;
@@ -114,9 +115,10 @@ pub const Model = struct {
         clock: usize,
         thread_pool: ?*std.Thread.Pool,
         memory_opt: ?*memory.DiffArchive,
+        quiescence_opt: ?*quiescence.QuiescenceTracker,
     ) void {
         const fwd = @import("forward.zig");
-        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool, memory_opt);
+        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool, memory_opt, quiescence_opt);
     }
 };
 
