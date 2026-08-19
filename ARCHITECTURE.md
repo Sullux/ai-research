@@ -28,9 +28,12 @@ Each layer $l \in [0, N-1]$ manages a fixed-size contiguous buffer in fast memor
 1. **Sliding FIFO Ring Buffer:**
    * Ingests incoming streaming vectors in-place using a circular pointer (`head = (head + batch_size) % RING_SIZE`).
    * **Zero `memcpy` overhead:** Continuous temporal context flows seamlessly without copying data between "previous" and "new" partitions.
-2. **Sparse Memory Landmarks:**
-   * Holds high-salience vectors: top-entropy state diffs from prior cycles and historical VQ memory centroids rehydrated from persistent NVMe storage.
-   * **Adaptive Sizing:** When no historical recall is needed, the landmark zone shrinks (e.g., to 64 slots), granting ~4,032 slots to the sliding ring. When dense historical retrieval is triggered, the landmark zone expands (up to 512+ slots).
+2. **Sparse Memory Landmarks (3-Tier Dual-Score Layout):**
+   * Holds high-salience vectors partitioned into three dynamic tiers:
+     * **Static Anchors (e.g., 32 slots):** System prompt, active persona, and global directives (pinned).
+     * **Temporal FIFO Recency (e.g., 128 slots):** Immediate sequence of recent layer diffs ensuring local narrative flow.
+     * **Associative Resonance (e.g., 96 slots):** High-salience historical memories dynamically pulled via an in-engine GEMV cosine scan against the layer's historical diff buffer.
+   * **Adaptive Sizing:** When no historical recall is triggered, the landmark zone shrinks (e.g., to 64 slots), granting ~4,032 slots to the sliding ring. When dense historical retrieval is active, the landmark zone expands (up to 512+ slots).
 
 ---
 
@@ -87,10 +90,13 @@ $$\Delta_{\text{state}} = x_{\text{retained}}^{(t)} - x_{\text{retained}}^{(t-1)
   $$\text{Activity} = \frac{1}{1024} \sum_{i=0}^{1023} \| \Delta_{\text{state}}[i] \|_2^2$$
 * If $\text{Activity} < \tau$ (e.g., $\tau = 0.05$), the layer suppresses upstream propagation. The higher layer's input for that cycle is skipped, saving compute.
 
-### B. Vector Quantization (VQ) Memory Compression
-To store long histories without unbounded disk bloat:
-* Older state diffs are quantized using **Residual Vector Quantization (RVQ)**.
-* When rehydrating memory into the `Injected Context` partition, a k-means/centroid reduction algorithm collapses thousands of historical diff records into the **1,024 most representative centroid vectors**.
+### B. Vector Quantization (VQ) & In-Engine GEMV Associative Recall
+To store and retrieve long histories without text-based RAG overhead:
+* **Storage Compression:** Older state diffs are quantized using **Residual Vector Quantization (RVQ)** and logged to the NVMe ring buffer.
+* **Dual-Score Salience Ranking:** Before each cycle, the engine scans the in-memory historical diff buffer ($M \in \mathbb{R}^{K \times 4096}$) using a single fast matrix-vector dot product (GEMV) against the current state vector $x_{\text{current}}$:
+  $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda (t_{\text{now}} - t_i)} + \gamma \cdot \| \Delta_i \|$$
+* **Near-Zero Latency:** Scanning 10,000 historical diffs (80 MB of floats) takes <2ms on DDR5 / integrated compute, running asynchronously in the background.
+* **Centroid Consolidation:** When rehydrating large historical episodes, a fast k-means/centroid reduction algorithm collapses thousands of diff records into the top associative landmark slots.
 
 ### C. True Temporal RoPE Coordinates
 Each vector carries a metadata struct in memory:

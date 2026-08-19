@@ -66,10 +66,18 @@ Instead of assigning artificial contiguous position indices $(0, 1, 2, \dots)$ t
   $$\text{Angle} = \theta_i \cdot t_{\text{event}}$$
   The attention mechanism naturally computes relative temporal distances $\cos(\theta \cdot (t_{\text{now}} - t_{\text{event}}))$, allowing the model to accurately perceive whether an injected memory occurred 10 seconds ago, 10 minutes ago, or 10 days ago.
 
-### 5. Persistent Diffs as Long-Term Memory
-State diffs emitted by layers on each cycle are serialized and appended to an asynchronous ring buffer on fast NVMe storage.
+### 5. Persistent Diffs & 3-Tier Dual-Score Memory Injection
+State diffs emitted by layers on each cycle are serialized and appended to an asynchronous ring buffer on fast NVMe storage. Rather than relying on naive text-based RAG or rigid recency-only buffers, the memory injection engine blends **temporal proximity** with **in-engine associative resonance** across three distinct landmark tiers:
+
+1. **Static Task Anchors (e.g., 32 slots):** Pinned system identity, core persona, and top-level user directives.
+2. **Temporal FIFO Recency (e.g., 128 slots):** The immediate sequence of recent layer diffs, ensuring unbroken short-term narrative flow and continuity.
+3. **Associative Resonance (e.g., 96 slots):** High-salience historical memories retrieved via an ultra-fast in-engine GEMV cosine scan across the layer's native hidden vector archive.
+
+$$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda \Delta t} + \gamma \cdot \| \Delta_i \|$$
+
+* **Zero Tokenization / Text Overhead:** Recall operates directly in the native 4,096-D vector space in milliseconds (<2ms for 10,000 diffs).
 * **Revisited Concepts Stay Active:** Important topics that are periodically referenced appear in recent layer diffs, naturally remaining in the high-layer injected context.
-* **Historical Retrieval:** Historical diff archives can be rehydrated back into the injected context buffer using fast vector quantization (VQ) centroid clustering.
+* **Historical Retrieval:** Deep historical diff archives can be rehydrated back into the injected context buffer using fast vector quantization (VQ) centroid clustering.
 
 ---
 
