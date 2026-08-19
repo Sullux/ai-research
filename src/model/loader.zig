@@ -44,6 +44,7 @@ pub const Model = struct {
             const gate = try getSlice(st, &buf, "model.language_model.layers.{d}.mlp.gate_proj.weight", .{l});
             const up = try getSlice(st, &buf, "model.language_model.layers.{d}.mlp.up_proj.weight", .{l});
             const down = try getSlice(st, &buf, "model.language_model.layers.{d}.mlp.down_proj.weight", .{l});
+            const intermediate_dim = gate.len / config.hidden_size;
 
             const post_attn = getOptionalSlice(st, &buf, "model.language_model.layers.{d}.post_attention_layernorm.weight", .{l});
             const post_ffn = getOptionalSlice(st, &buf, "model.language_model.layers.{d}.post_feedforward_layernorm.weight", .{l});
@@ -59,6 +60,7 @@ pub const Model = struct {
                 .rotary_dim = rotary_dim,
                 .q_dim = q_dim,
                 .kv_dim = kv_dim,
+                .intermediate_dim = intermediate_dim,
                 .input_layernorm = in_norm,
                 .q_proj = q,
                 .k_proj = k,

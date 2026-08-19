@@ -61,18 +61,23 @@ fn fusePLE(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, token_
     const ple_row_offset = (@as(usize, token_id) * self.layers.len + layer_idx) * ple_dim;
     const ple_row = ple_table[ple_row_offset .. ple_row_offset + ple_dim];
 
-    // Gate from input: gate = sigmoid(gemv(per_layer_input_gate, x))
-    kernels.gemv(scratch.ple_buf_1, scratch.x, l.per_layer_input_gate.?, ple_dim, H);
-
-    for (scratch.ple_buf_1, ple_row, 0..) |*g, p, i| {
-        var p_val = p.toF32();
-        if (self.per_layer_projection_norm) |plpn| {
-            p_val *= plpn[i].toF32();
-        }
-        g.* = kernels.sigmoid(g.*) * p_val;
+    // 1. Convert ple_row to f32 and apply RMSNorm if per_layer_projection_norm exists
+    for (scratch.ple_buf_1, ple_row) |*out, p| out.* = p.toF32();
+    if (self.per_layer_projection_norm) |plpn| {
+        kernels.rmsNorm(scratch.ple_buf_1, scratch.ple_buf_1, plpn, self.config.rms_norm_eps);
     }
 
-    // Project back to hidden_size
+    // 2. Input RMSNorm on x
+    kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
+
+    // 3. Gate from normed x: gate = sigmoid(gemv(per_layer_input_gate, normed_x))
+    kernels.gemv(scratch.attn_out[0..ple_dim], scratch.normed_x, l.per_layer_input_gate.?, ple_dim, H);
+
+    for (scratch.ple_buf_1, scratch.attn_out[0..ple_dim]) |*p, g| {
+        p.* *= kernels.sigmoid(g);
+    }
+
+    // 4. Project back to hidden_size
     kernels.gemv(scratch.ple_buf_2, scratch.ple_buf_1, l.per_layer_projection.?, H, ple_dim);
     kernels.rmsNorm(scratch.ple_buf_2, scratch.ple_buf_2, l.post_per_layer_input_norm.?, self.config.rms_norm_eps);
 
@@ -179,7 +184,7 @@ fn forwardMLP(
         l.up_proj,
         l.down_proj,
         H,
-        self.config.intermediate_size,
+        l.intermediate_dim,
         scratch.mlp_gate_up,
     );
 

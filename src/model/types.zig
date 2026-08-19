@@ -13,6 +13,7 @@ pub const LayerWeights = struct {
     rotary_dim: usize,
     q_dim: usize,
     kv_dim: usize,
+    intermediate_dim: usize,
 
     input_layernorm: []const bf16,
     q_proj: []const bf16,
@@ -39,7 +40,7 @@ pub const LayerWeights = struct {
 pub const ModelConfig = struct {
     vocab_size: usize = 262144,
     hidden_size: usize = 1536,
-    intermediate_size: usize = 6144,
+    intermediate_size: usize = 12288,
     hidden_size_per_layer_input: usize = 256,
     num_hidden_layers: usize = 35,
     num_attention_heads: usize = 8,

@@ -30,7 +30,7 @@ pub fn main() !void {
     const config = model.ModelConfig{
         .vocab_size = 262144,
         .hidden_size = 1536,
-        .intermediate_size = 6144,
+        .intermediate_size = 12288,
         .hidden_size_per_layer_input = 256,
         .num_hidden_layers = 35,
         .num_attention_heads = 8,
@@ -49,25 +49,20 @@ pub fn main() !void {
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
 
-    // Check CLI arguments
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
     if (args.len > 1) {
-        // CLI one-shot mode: combine arguments into a single prompt string
         var prompt_buf = std.ArrayList(u8).init(allocator);
         defer prompt_buf.deinit();
-
         for (args[1..], 0..) |arg, i| {
             if (i > 0) try prompt_buf.append(' ');
             try prompt_buf.appendSlice(arg);
         }
-
-        try generateResponse(&m, &tok, &cache, &scratch, prompt_buf.items, &thread_pool, stdout, allocator);
+        try runInference(&m, &tok, &cache, &scratch, prompt_buf.items, &thread_pool, stdout, allocator);
         return;
     }
 
-    // Interactive REPL mode
     try stdout.print("\n=== Gemma 4 Interactive Inference REPL ===\n", .{});
     try stdout.print("Type your prompt and press Enter. Type 'exit' or Ctrl+C to quit.\n\n", .{});
 
@@ -80,12 +75,12 @@ pub fn main() !void {
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, "exit") or std.mem.eql(u8, trimmed, "quit")) break;
 
-        try generateResponse(&m, &tok, &cache, &scratch, trimmed, &thread_pool, stdout, allocator);
+        try runInference(&m, &tok, &cache, &scratch, trimmed, &thread_pool, stdout, allocator);
         try stdout.print("\n\n", .{});
     }
 }
 
-fn generateResponse(
+fn runInference(
     m: *const model.Model,
     tok: *const tokenizer.Tokenizer,
     cache: *model.KVCache,
@@ -98,12 +93,14 @@ fn generateResponse(
     const prompt_tokens = try tok.encode(allocator, prompt, true);
     defer allocator.free(prompt_tokens);
 
-    // Prefill prompt tokens
+    // Reset KV cache state
+    @memset(cache.k, 0);
+    @memset(cache.v, 0);
+
     for (prompt_tokens, 0..) |t, pos| {
         m.forwardToken(cache, scratch, t, pos, thread_pool);
     }
 
-    // Stream continuation
     var current_token = kernels.sampleArgmax(scratch.logits);
     var pos = prompt_tokens.len;
     const max_new_tokens: usize = 32;
