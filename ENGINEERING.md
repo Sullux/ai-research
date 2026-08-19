@@ -1,0 +1,133 @@
+# Engineering Strategy & Implementation Plan
+
+## Overview & Philosophy
+
+To ensure rigorous engineering discipline, Phase 1 is divided into two distinct, sequential milestones:
+
+1. **Step 1: Foundational Baseline Model Runner (Reference Engine)**
+   * Build a clean, standalone, single-binary LLM runner in pure **Zig**.
+   * Verify mathematical correctness, GPU compute dispatch, memory-mapping, and tokenizer parsing against standard baseline outputs (e.g., Hugging Face / `llama.cpp`).
+   * Zero experimental logic in this step—strictly establish a rock-solid, high-performance execution baseline.
+2. **Step 2: Streaming Architecture & Dynamic Ring Integration (Research Engine)**
+   * Evolve the verified runner to incorporate our novel **Dynamic Unified Ring Buffer**, **Sparse Landmark Registers**, **VQ Centroid Memory**, and **Continuous Streaming I/O**.
+
+---
+
+## 1. Core Engineering Decisions
+
+### A. Model Precision & Format: Unquantized 16-Bit (`bfloat16` / `float16`)
+* **Decision:** We will use unquantized, vanilla 16-bit floating-point weights (`bfloat16` / `float16`) in standard `.safetensors` or unquantized GGUF format.
+* **Rationale:** 
+  * With **96 GB of shared compute memory**, we have ample headroom to load the full unquantized weights of Gemma 4 12B (~24 GB) while maintaining ~72 GB of free RAM.
+  * Avoids quantization artifacts, dequantization overhead in shaders, and loss of numerical precision during initial development.
+  * Quantization (`Q8_0`, `Q4_K_M`, `FP8`) will be treated as an orthogonal, trivial optimization to be added after research validation.
+
+### B. Micro-Model Bootstrapping for Rapid Iteration
+* **Decision:** We will bootstrap and debug the Zig engine using a lightweight sibling model (e.g., Gemma 4 E2B / small test checkpoints) before scaling to the primary target (**Gemma 4 12B Unified**).
+* **Rationale:**
+  * Sub-second compile-run-test iteration cycles during initial tokenizer and tensor kernel debugging.
+  * Once the math, memory mapping, and Vulkan shaders pass parity tests on the small model, switching to 12B Unified requires only updating file paths and tensor configuration constants.
+
+### C. Modular State Interface (`ContextBuffer`)
+* **Decision:** Decouple the attention computation from the underlying memory backing via a modular state interface.
+* **Rationale:**
+  * In Step 1, `ContextBuffer` implements a standard linear KV cache.
+  * In Step 2, `ContextBuffer` is replaced with the `DynamicRingBuffer` without modifying the core GEMM, Attention, or SwiGLU kernels.
+
+```zig
+pub const ContextBuffer = struct {
+    // Abstract interface implemented by StandardKVCache (Step 1)
+    // and DynamicRingBuffer (Step 2)
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        appendTokens: *const fn (ctx: *anyopaque, tokens: []const TokenVector) void,
+        getKeysView: *const fn (ctx: *anyopaque, layer: usize) []const f16,
+        getValuesView: *const fn (ctx: *anyopaque, layer: usize) []const f16,
+        getRoPEClocks: *const fn (ctx: *anyopaque) []const u64,
+    };
+};
+```
+
+---
+
+## 2. Step 1: Foundational Baseline Runner Roadmap
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ STEP 1 EXECUTION STAGES                                                │
+│                                                                        │
+│ Stage 1.1: Project Scaffold & CLI Harness                              │
+│            - Initialize Zig build system (`build.zig`)                 │
+│            - Explicit memory allocators (`std.heap`)                   │
+│                                                                        │
+│ Stage 1.2: Binary Weight Loader (`src/loader.zig`)                     │
+│            - Memory-map model file (`std.posix.mmap`)                  │
+│            - Parse tensor metadata & bind static typed pointers        │
+│                                                                        │
+│ Stage 1.3: Fast BPE Tokenizer (`src/tokenizer.zig`)                    │
+│            - Subword BPE parser & vocabulary hash map                  │
+│            - Token-to-string & string-to-token encoding/decoding       │
+│                                                                        │
+│ Stage 1.4: CPU SIMD Mathematical Kernels (`src/kernels_cpu.zig`)       │
+│            - RMSNorm (with Gemma gain offset formula)                  │
+│            - RoPE 2D Plane Rotations                                   │
+│            - GEMV / GEMM Matrix Multiplication (AVX2/AVX-512)          │
+│            - GeGLU / SwiGLU Gated Multiplications                      │
+│            - Softmax / Temperature Sampler                             │
+│                                                                        │
+│ Stage 1.5: End-to-End CPU Inference & Parity Check                     │
+│            - Autoregressive generation loop                            │
+│            - Validate output logits against reference runner           │
+│                                                                        │
+│ Stage 1.6: GPU Acceleration Pipeline (`src/vulkan.zig`)                │
+│            - Vulkan compute pipeline / SPIR-V shader compilation       │
+│            - Offload heavy GEMV & Attention reductions to GPU          │
+│                                                                        │
+│ Stage 1.7: Interactive Terminal Chat Loop                              │
+│            - Full terminal chat interface with Gemma 4 12B Unified     │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Step 2: Streaming Architecture & Dynamic Ring Integration
+
+Once Step 1 is verified and producing accurate, fast baseline output:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ STEP 2 EXECUTION STAGES                                                │
+│                                                                        │
+│ Stage 2.1: Dynamic Unified Ring Buffer (`src/ring_buffer.zig`)         │
+│            - Circular pointer ingestion (`head = (head + N) % SIZE`)   │
+│            - Multi-partition indexing (Landmarks vs. Sliding FIFO)     │
+│                                                                        │
+│ Stage 2.2: True Monotonic RoPE Clocking                                │
+│            - Pass absolute token timestamps into RoPE shader kernels   │
+│                                                                        │
+│ Stage 2.3: Sparse Landmark & Diff Extraction                           │
+│            - Compute state velocity: Δ = x_new - x_old                 │
+│            - Top-k entropy & salience selection                        │
+│                                                                        │
+│ Stage 2.4: VQ Centroid Memory Compression                              │
+│            - Cluster historical diffs into landmark slots              │
+│                                                                        │
+│ Stage 2.5: Continuous Full-Duplex Streaming Interface                  │
+│            - Asynchronous input consumer + output emitter loop         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Testing & Verification Criteria
+
+| Stage | Verification Milestone | Success Criteria |
+| :--- | :--- | :--- |
+| **Loader** | Load unquantized weights into RAM | Tensor headers and byte alignments match specification 100%. |
+| **Tokenizer** | Round-trip tokenization test | `decode(encode(text)) == text` across standard test strings. |
+| **CPU Kernels** | Synthetic tensor validation | CPU matrix operations match mathematical ground truth to $1e^{-4}$. |
+| **Baseline Parity** | Gemma 4 inference comparison | Logits on prompt *"Once upon a time"* match reference implementation. |
+| **GPU Compute** | Vulkan shader integration | Token generation speed $\ge 25$ tok/s on AMD integrated UMA compute. |
+| **Streaming Step 2**| 50,000+ continuous token stream | Sustained generation with zero memory growth and intact narrative anchor. |
