@@ -1,18 +1,21 @@
-# Technical Architecture & Implementation Blueprint
+# Technical Architecture & Phased Implementation Blueprint
 
 ## 1. System & Hardware Target
 
-* **Platform:** Linux (Ubuntu x86_64, Framework Desktop).
-* **Architecture:** AMD Unified Memory Architecture (UMA) with 96 GB shared RAM allocated to integrated GPU/compute.
-* **Storage:** PCIe 4.0 NVMe SSD (up to ~7,000 MB/s sequential read/write).
-* **Primary Implementation Language:** **Zig** (leveraging zero-overhead memory control, explicit allocators, C interop, and first-class SIMD / `io_uring` support).
-* **Target Model Family (Phase 1):** Gemma 2/4 & LLaMA 3 architectures (utilizing GGUF / `.safetensors` model weights).
+* **Host Platform:** Linux (Ubuntu x86_64, Framework Desktop).
+* **Compute / Memory:** AMD Unified Memory Architecture (UMA) with 96 GB shared RAM allocated to integrated GPU/compute.
+* **Storage Subsystem:** PCIe 4.0 NVMe SSD (up to ~7,000 MB/s sequential read/write).
+* **Primary Implementation Language:** **Zig** (zero-overhead memory control, explicit allocators, direct C/Vulkan interop, SIMD intrinsics, and native `io_uring` support).
+* **Target Model Family (Phase 1):** Gemma 2/4 & LLaMA 3 (GGUF / `.safetensors` model weights).
 
 ---
 
-## 2. Low-Level Memory & Tensor Layout
+## 2. Universal Data Structures & Binary Layouts
 
-Each layer $l \in [0, N-1]$ manages a fixed-size contiguous buffer in fast memory:
+To ensure seamless forward compatibility across all three development phases, the low-level data structures and telemetry headers are defined up front.
+
+### A. The 4,096-Vector Layer Buffer
+Each layer $l \in [0, N-1]$ manages a fixed-size contiguous buffer:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -24,130 +27,153 @@ Each layer $l \in [0, N-1]$ manages a fixed-size contiguous buffer in fast memor
 └───────────────────────────────┴────────────────────────────────────────┘
 ```
 
-### Buffer Roles & Mechanics
-1. **Sliding FIFO Ring Buffer:**
-   * Ingests incoming streaming vectors in-place using a circular pointer (`head = (head + batch_size) % RING_SIZE`).
-   * **Zero `memcpy` overhead:** Continuous temporal context flows seamlessly without copying data between "previous" and "new" partitions.
-2. **Sparse Memory Landmarks (3-Tier Dual-Score Layout):**
-   * Holds high-salience vectors partitioned into three dynamic tiers:
-     * **Static Anchors (e.g., 32 slots):** System prompt, active persona, and global directives (pinned).
-     * **Temporal FIFO Recency (e.g., 128 slots):** Immediate sequence of recent layer diffs ensuring local narrative flow.
-     * **Associative Resonance (e.g., 96 slots):** High-salience historical memories dynamically pulled via an in-engine GEMV cosine scan against the layer's historical diff buffer.
-   * **Adaptive Sizing:** When no historical recall is triggered, the landmark zone shrinks (e.g., to 64 slots), granting ~4,032 slots to the sliding ring. When dense historical retrieval is active, the landmark zone expands (up to 512+ slots).
+### B. The Memory Diff & Telemetry Header
+Every serialized state delta emitted by any layer carries a 32-byte telemetry header for cost, vitality, and temporal tracking:
+
+```zig
+pub const MemoryDiff = extern struct {
+    timestamp: u64,          // Token clock creation tick (RoPE coordinate)
+    last_accessed: u64,      // Token clock last recall tick
+    access_count: u32,       // Number of times recalled into working memory
+    salience_norm: f32,      // Initial directional magnitude ||Δ||
+    prediction_error: f32,   // Surprise / entropy delta when generated
+    layer_id: u8,            // Originating layer depth (0..31)
+    reserved: [7]u8,         // Alignment padding / future reward telemetry
+    vector: [4096]f16,       // The 4096-D state delta vector
+};
+```
+
+### C. Cost & Telemetry Tracker
+```zig
+pub const LayerTelemetry = struct {
+    cycle_count: u64,
+    flops_executed: u64,
+    flops_saved_by_quiescence: u64,
+    active_landmark_slots: u16,
+    repetition_heat_counter: u32,
+};
+```
 
 ---
 
-## 3. The Execution Cycle Pipeline
+## 3. PHASE 1: Zero-Retraining Streaming Engine & Dynamic Ring Baseline
 
-For each streaming tick:
+### Objective
+Build a standalone, single-binary Zig inference engine capable of running pre-trained Gemma/LLaMA weights with fixed-size layer memory and zero-copy streaming, validating output fidelity against standard baseline runners (like `llama.cpp`).
 
 ```
-                     ┌──────────────────────────────┐
-                     │ External Ingress / Lower Out │
-                     └──────────────┬───────────────┘
-                                    │ (Streaming vectors)
-                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 1. ZERO-COPY RING INGESTION & ROPE CLOCK ASSIGNMENT                   │
-│    - Advance circular ring head pointer; write new vectors in-place    │
-│    - Pin active/retrieved landmark centroids to landmark slots         │
-│    - Assign true monotonic token timestamps to each active slot        │
-├────────────────────────────────────────────────────────────────────────┤
-│ 2. LAYER FORWARD PASS                                                  │
-│    - RMSNorm(x)                                                        │
-│    - Q, K, V Projections (W_Q, W_K, W_V)                              │
-│    - RoPE 2D Plane Rotations using true timestamps                     │
-│    - Attention Matrix & Causal Masking                                 │
-│    - Value Aggregation & Output Projection (W_O)                       │
-│    - First Residual Add (x = x + Δ_attn)                              │
-│    - RMSNorm(x)                                                        │
-│    - SwiGLU / GeGLU Expansion (W_gate, W_up) & SiLU/GELU Non-linearity │
-│    - Down-Projection (W_down)                                          │
-│    - Second Residual Add (x = x + Δ_mlp)                              │
-├────────────────────────────────────────────────────────────────────────┤
-│ 3. SPARSE LANDMARK SELECTION & DIFF EXTRACTION                         │
-│    - Compute State Velocity across window: Δ_state = x_new - x_old     │
-│    - Select sparse high-salience vectors (top-k entropy / ||Δ||)       │
-│    - Output: 4 to 32 sparse landmark vectors (instead of dense chunks) │
-│    - Noise Filter: If mean ||Δ_state|| < τ, mark layer quiescent       │
-├────────────────────────────────────────────────────────────────────────┤
-│ 4. MEMORY PERSISTENCE & UPSTREAM PROPAGATION                           │
-│    - Asynchronously append sparse landmarks to NVMe ring buffer        │
-│    - If not quiescent, pass sparse landmarks to Layer l+1              │
+│ PHASE 1 ARCHITECTURE                                                   │
+│                                                                        │
+│ Ingress Stream ──► [ Sliding FIFO Ring ] ──► [ Layer Forward Pass ]    │
+│                           ▲                           │                │
+│                           │                           ▼                │
+│                  [ Static Anchors ]           [ Autoregressive Token ] │
+│                  [ + FIFO Diffs   ]                                    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 4. Key Architectural Mechanisms
-
-### A. Vector Diffing & Noise Gating
-The state delta is computed as a directional difference across feature dimensions:
-
-$$\Delta_{\text{state}} = x_{\text{retained}}^{(t)} - x_{\text{retained}}^{(t-1)}$$
-
-* **Threshold Metric:** Normalized Cosine Distance or Mean Squared Euclidean Norm:
-  $$\text{Activity} = \frac{1}{1024} \sum_{i=0}^{1023} \| \Delta_{\text{state}}[i] \|_2^2$$
-* If $\text{Activity} < \tau$ (e.g., $\tau = 0.05$), the layer suppresses upstream propagation. The higher layer's input for that cycle is skipped, saving compute.
-
-### B. Vector Quantization (VQ) & In-Engine GEMV Associative Recall
-To store and retrieve long histories without text-based RAG overhead:
-* **Storage Compression:** Older state diffs are quantized using **Residual Vector Quantization (RVQ)** and logged to the NVMe ring buffer.
-* **Dual-Score Salience Ranking:** Before each cycle, the engine scans the in-memory historical diff buffer ($M \in \mathbb{R}^{K \times 4096}$) using a single fast matrix-vector dot product (GEMV) against the current state vector $x_{\text{current}}$:
-  $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda (t_{\text{now}} - t_i)} + \gamma \cdot \| \Delta_i \|$$
-* **Near-Zero Latency:** Scanning 10,000 historical diffs (80 MB of floats) takes <2ms on DDR5 / integrated compute, running asynchronously in the background.
-* **Centroid Consolidation:** When rehydrating large historical episodes, a fast k-means/centroid reduction algorithm collapses thousands of diff records into the top associative landmark slots.
-
-### C. True Temporal RoPE Coordinates
-Each vector carries a metadata struct in memory:
-```zig
-pub const TokenVector = struct {
-    timestamp: u64, // Monotonic token clock / millisecond tick
-    data: [4096]f16,
-};
-```
-When rotating $Q$ and $K$:
-$$\text{angle}(i) = \theta_i \cdot \text{vector.timestamp}$$
-This eliminates positional index collision between newly arrived tokens and historical memories injected from past hours or days.
-
-### D. NVMe Direct I/O Ring Buffer (`io_uring`)
-* Memory diffs are written to a fixed-size pre-allocated circular memory-mapped log file on NVMe storage.
-* Disk writes and reads execute asynchronously via Linux `io_uring` kernel submission queues, ensuring zero CPU blocking or GPU pipeline stalls.
+### Technical Scope & Components
+1. **Model Loader & Weight Mapper (`src/loader.zig`):**
+   * Memory-map GGUF / `.safetensors` files directly into unified memory using `std.posix.mmap`.
+   * Bind static pointers to weight matrices ($W_E, W_Q, W_K, W_V, W_O, W_{\text{gate}}, W_{\text{up}}, W_{\text{down}}, W_U$).
+2. **Tokenizer Engine (`src/tokenizer.zig`):**
+   * Fast Byte-Pair Encoding (BPE) parser and vocabulary lookup table.
+3. **Phase 1 Forward Pass Engine (`src/engine.zig`):**
+   * **RMSNorm:** Hardware SIMD vector normalization.
+   * **Linear Projections:** Optimized GEMV / GEMM kernels (CPU SIMD and Vulkan Compute shader fallback).
+   * **RoPE:** In-place 2D plane rotations using monotonic token clocks.
+   * **Attention & SwiGLU:** Scaled dot-product attention + SwiGLU / GeGLU non-linear MLP.
+   * **Dynamic Sliding Ring:** Circular write pointer (`head = (head + 1) % RING_SIZE`) with zero memory copies between input chunks.
+4. **Phase 1 KV Cache Management:**
+   * Pin a conservative landmark zone (e.g., 64 slots for system prompt and recent summary) while the remaining ~4,032 slots function as the sliding FIFO context.
+5. **Validation Suite:**
+   * Verify perplexity and token generation coherence against standard Gemma baseline outputs.
 
 ---
 
-## 5. Phased Development Roadmap
+## 4. PHASE 2: Hierarchical Event-Driven Layer Quiescence & Dual-Score Memory
+
+### Objective
+Implement multi-rate layer execution, vector diffing, and the 3-tier memory injection engine with in-engine GEMV associative recall.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ PHASE 1: Zero-Retraining Baseline (Approach A)                          │
-│ - Build custom single-binary Zig inference engine (Gemma / LLaMA).      │
-│ - Implement fixed 4,096-token layer buffer (Dynamic Ring + Landmarks).  │
-│ - Implement VQ Centroid Compression on KV cache for Injected Context.   │
-│ - Validate output coherence against standard baseline runners.          │
-├─────────────────────────────────────────────────────────────────────────┤
-│ PHASE 2: Hierarchical Event-Driven Layer Quiescence                     │
-│ - Implement Vector Diffing & threshold gating between layers.           │
-│ - Add lightweight Inter-Layer Translation Adapters (MLP bridges).       │
-│ - Measure compute savings from upper-layer skipping on long streams.    │
-│ - Implement True Timestamp RoPE indexing across memory injections.      │
-├─────────────────────────────────────────────────────────────────────────┤
-│ PHASE 3: True In-Place Plasticity & Online Learning (Approach B)        │
-│ - Implement persistent NVMe `io_uring` diff logging.                    │
-│ - Implement Hebbian fast-weight modulation / micro-LoRA updates         │
-│   directly into MLP weight delta matrices (W_effective = W_base + ΔW).  │
-│ - Benchmark permanent factual retention without full fine-tuning.       │
-└─────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ PHASE 2 ARCHITECTURE                                                   │
+│                                                                        │
+│ Layer 31 (Slow / Abstract)  ◄── [ High-Entropy Delta ] ─── (Sparse)    │
+│         ▲                                                    ▲         │
+│         │ (Diffs)                                            │ (Diffs) │
+│ Layer 0 (Fast / Sensory)    ◄── [ Continuous Ingress ] ────────────────┤
+│         │                                                              │
+│         ▼                                                              │
+│ [ Diff Extraction ] ──► [ In-Engine GEMV Scan ] ──► [ 3-Tier Landmarks]│
+│         │                     ▲                                        │
+│         ▼                     │                                        │
+│ [ NVMe Ring Buffer ] ─────────┘                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Technical Scope & Components
+1. **Vector Diffing & Gating Engine (`src/diff.zig`):**
+   * Compute directional state velocity: $\Delta_{\text{state}} = x_{\text{retained}}^{(t)} - x_{\text{retained}}^{(t-1)}$.
+   * Activity evaluation: If $\frac{1}{N}\sum \|\Delta_{\text{state}}\|^2 < \tau$, mark upper layer quiescent.
+   * Skip upstream compute pipelines on quiescent cycles.
+2. **Inter-Layer Translation Adapters (`src/adapter.zig`):**
+   * Lightweight projection MLPs between asynchronous layers to translate sparse event deltas into expected continuous input manifolds.
+3. **3-Tier Dual-Score Memory Injection (`src/memory.zig`):**
+   * **Tier 1 (Static Anchors):** Pinned system persona and core goals (32 slots).
+   * **Tier 2 (Temporal FIFO Recency):** Immediate sequential diffs (128 slots).
+   * **Tier 3 (Associative Resonance):** Historical diffs selected via fast in-engine GEMV cosine scan:
+     $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda \Delta t} + \gamma \cdot \|\Delta_i\|$$
+4. **Persistent NVMe Ring Buffer (`src/storage.zig`):**
+   * Pre-allocated circular memory-mapped file for logging `MemoryDiff` structs asynchronously via Linux `io_uring`.
+5. **Benchmarks:**
+   * Measure FLOP savings and throughput multipliers on long continuous streams.
 
 ---
 
-## 6. Phase 1 Architecture Decision Summary
+## 5. PHASE 3: Cost-Governed Synaptic Plasticity & Thermodynamic Consolidation
 
-| Component | Phase 1 Choice | Rationale |
-| :--- | :--- | :--- |
-| **Engine Architecture** | Pure Zig with Vulkan Compute / CPU SIMD fallback | Maximum control, zero dependencies, direct memory control. |
-| **Model Format** | GGUF / `.safetensors` (Gemma-2B / LLaMA-3.2-1B/3B) | Readily available weights, quick iteration cycle. |
-| **Context Strategy** | **Approach A (Hierarchical KV Compressor + VQ Centroids)** | Works out-of-the-box with pre-trained weights without retraining. |
-| **Temporal Indexing** | True timestamp offsets passed to RoPE kernels | Preserves relative temporal distance for injected memory slots. |
-| **Storage Backend** | Memory-mapped circular log file + Zig POSIX `mmap` | Simplest zero-copy baseline before full `io_uring` integration. |
+### Objective
+Enable true on-the-fly learning and long-term memory maintenance by coupling thermodynamic forgetting with fast-weight synaptic baking.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ PHASE 3 ARCHITECTURE                                                   │
+│                                                                        │
+│ [ Recurrent Working Memory Tax ]                                       │
+│                │                                                       │
+│                ▼  (If Tax > Plasticity Risk)                           │
+│ [ Synaptic Weight Consolidation ] ──► Updates W_mlp in Unified RAM    │
+│                                       (Zero Context Cost Thereafter)   │
+│                                                                        │
+│ [ NVMe Diff Archive ] ──► [ Thermodynamic Sieve ] ──► [ Prune / Forget]│
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Technical Scope & Components
+1. **Thermodynamic Forgetting Sieve (`src/pruning.zig`):**
+   * Background garbage collection loop evaluating diff vitality:
+     $$\text{Vitality}(M_i) = \|\Delta_i\| \times \text{AccessCount}_i \times e^{-\lambda (t_{\text{now}} - t_{\text{last\_accessed}})}$$
+   * Automatically prune low-vitality diffs from NVMe storage to maintain a clean, high-density associative search space.
+2. **Synaptic Weight Baking Engine (`src/plasticity.zig`):**
+   * Implement in-place low-rank weight modulation for MLP blocks:
+     $$W_{\text{effective}} = W_{\text{base}} + \Delta W$$
+   * When a pattern's cumulative working memory tax exceeds the plasticity risk threshold, compile the associative landmark directly into $\Delta W$.
+   * Eliminates the need to repeatedly load familiar facts into working memory slots.
+3. **Cost/Reward Optimizer (`src/governor.zig`):**
+   * Runtime governor balancing task performance against compute, memory, and plasticity costs.
+
+---
+
+## 6. Phase Implementation Matrix
+
+| Capability | Phase 1 (Baseline) | Phase 2 (Hierarchical) | Phase 3 (Plasticity) |
+| :--- | :--- | :--- | :--- |
+| **Model Retraining Required** | **None (Zero)** | Minimal (Adapters only) | None (Delta weights) |
+| **Layer Context Layout** | Dynamic Ring + Static/FIFO | Dynamic Ring + 3-Tier Landmarks | Dynamic Ring + Dynamic Plasticity |
+| **Layer Execution Timing** | Synchronous all layers | Event-driven multi-rate skipping | Cost-governed dynamic scheduling |
+| **Long-Term Memory** | Ephemeral rolling buffer | Persistent NVMe + GEMV Recall | Persistent + Thermodynamic Sieve |
+| **Model Weights** | Static Read-Only | Static Read-Only | Dynamic in-place $\Delta W$ baking |
+| **Primary Metric** | Baseline inference parity | $3\times$–$5\times$ stream throughput | Zero-shot continuous retention |

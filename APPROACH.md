@@ -79,6 +79,29 @@ $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdo
 * **Revisited Concepts Stay Active:** Important topics that are periodically referenced appear in recent layer diffs, naturally remaining in the high-layer injected context.
 * **Historical Retrieval:** Deep historical diff archives can be rehydrated back into the injected context buffer using fast vector quantization (VQ) centroid clustering.
 
+### 6. The Principles of Cost, Reward, and Intentional Plasticity
+Biological intelligence is fundamentally an energy-minimizing prediction engine. Humans conserve metabolic energy by default: we remember something when the cost of forgetting exceeds the cost of storage, and we physically learn (modify neural synaptic wiring) only when the cost of continually re-processing an idea in working memory exceeds the cost of permanent synaptic consolidation.
+
+In this architecture, intelligence is framed as a **Cost/Reward Constrained Optimization**:
+
+$$\text{Objective} = \max(\text{Task Utility / Prediction Accuracy}) - \lambda \cdot \text{Cost}$$
+
+#### The Cost Dimensions:
+1. **Working Memory Tax:** Every active slot consumed in the layer buffer incurs an ongoing compute and memory bandwidth penalty.
+2. **Layer Compute Tax:** Activating higher association layers consumes GPU cycles and power.
+3. **Retrieval & Storage Tax:** Storing and scanning historical diffs consumes NVMe bandwidth and RAM.
+4. **Plasticity Risk Tax:** Modifying layer weights ($\Delta W$) carries a risk of catastrophic forgetting of core base capabilities.
+
+#### Intentional Forgetting (The Thermodynamic Sieve):
+To prevent hard drive bloat and retrieval pollution, historical diffs decay based on an organic **Vitality metric**:
+$$\text{Vitality}(M_i) = \|\Delta_i\| \times \text{AccessCount}_i \times e^{-\lambda (t_{\text{now}} - t_{\text{last\_accessed}})}$$
+When a memory's vitality falls below a minimum threshold $\epsilon$, it is pruned during background cleanup. Intentional forgetting is the necessary mathematical photo-negative of intentional memorization.
+
+#### Synaptic Weight Baking Trigger:
+When a recurrent pattern is retrieved into the landmark zone frequently enough that:
+$$\sum \text{Working Memory Tax}(P) > \text{Plasticity Risk Tax}(P)$$
+The engine consolidates that episodic memory directly into the layer's MLP weight deltas ($\Delta W$). Once baked into the weights, utilizing that knowledge costs **zero context slots** and **zero retrieval operations**.
+
 ---
 
 ## Detailed Benefits of the New Approach
