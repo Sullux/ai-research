@@ -41,17 +41,60 @@ pub const ModelConfig = struct {
     vocab_size: usize = 262144,
     hidden_size: usize = 1536,
     intermediate_size: usize = 12288,
-    hidden_size_per_layer_input: usize = 256,
+    hidden_size_per_layer_input: usize = 0,
     num_hidden_layers: usize = 35,
     num_attention_heads: usize = 8,
     num_key_value_heads: usize = 1,
     head_dim: usize = 256,
-    global_head_dim: usize = 512,
+    global_head_dim: usize = 256,
+    num_kv_shared_layers: usize = 0,
     rms_norm_eps: f32 = 1e-6,
     rope_theta: f32 = 10000.0,
     rope_theta_full: f32 = 1000000.0,
     sliding_window: usize = 512,
     max_seq_len: usize = 4096,
+
+    pub fn loadFromJson(allocator: std.mem.Allocator, path: []const u8) !ModelConfig {
+        const file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
+
+        const file_size = (try file.stat()).size;
+        const raw_json = try allocator.alloc(u8, file_size);
+        defer allocator.free(raw_json);
+        _ = try file.readAll(raw_json);
+
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, raw_json, .{});
+        defer parsed.deinit();
+
+        var root = parsed.value;
+        if (root.object.get("text_config")) |tc| {
+            if (tc == .object) root = tc;
+        }
+
+        var cfg = ModelConfig{};
+        if (root.object.get("vocab_size")) |v| cfg.vocab_size = @intCast(v.integer);
+        if (root.object.get("hidden_size")) |v| cfg.hidden_size = @intCast(v.integer);
+        if (root.object.get("intermediate_size")) |v| cfg.intermediate_size = @intCast(v.integer);
+        if (root.object.get("hidden_size_per_layer_input")) |v| {
+            cfg.hidden_size_per_layer_input = if (v == .integer) @intCast(v.integer) else 0;
+        }
+        if (root.object.get("num_hidden_layers")) |v| cfg.num_hidden_layers = @intCast(v.integer);
+        if (root.object.get("num_attention_heads")) |v| cfg.num_attention_heads = @intCast(v.integer);
+        if (root.object.get("num_key_value_heads")) |v| cfg.num_key_value_heads = @intCast(v.integer);
+        if (root.object.get("head_dim")) |v| cfg.head_dim = @intCast(v.integer);
+        if (root.object.get("global_head_dim")) |v| {
+            cfg.global_head_dim = @intCast(v.integer);
+        } else {
+            cfg.global_head_dim = cfg.head_dim;
+        }
+        if (root.object.get("num_kv_shared_layers")) |v| cfg.num_kv_shared_layers = @intCast(v.integer);
+        if (root.object.get("sliding_window")) |v| cfg.sliding_window = @intCast(v.integer);
+        if (root.object.get("rms_norm_eps")) |v| {
+            cfg.rms_norm_eps = if (v == .float) @floatCast(v.float) else 1e-6;
+        }
+
+        return cfg;
+    }
 };
 
 pub const KVCache = struct {
@@ -122,10 +165,10 @@ pub const ForwardScratch = struct {
             .v = try allocator.alloc(f32, max_kv_dim),
             .attn_scores = try allocator.alloc(f32, config.max_seq_len),
             .attn_out = try allocator.alloc(f32, @max(max_q_dim, config.hidden_size)),
-            .mlp_gate_up = try allocator.alloc(f32, config.intermediate_size),
+            .mlp_gate_up = try allocator.alloc(f32, config.intermediate_size * 2),
             .mlp_out = try allocator.alloc(f32, config.hidden_size),
-            .ple_context = try allocator.alloc(f32, total_ple_dim),
-            .ple_buf_1 = try allocator.alloc(f32, config.hidden_size_per_layer_input),
+            .ple_context = try allocator.alloc(f32, @max(total_ple_dim, 1)),
+            .ple_buf_1 = try allocator.alloc(f32, @max(config.hidden_size_per_layer_input, 1)),
             .ple_buf_2 = try allocator.alloc(f32, config.hidden_size),
             .logits = try allocator.alloc(f32, config.vocab_size),
         };
