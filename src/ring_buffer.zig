@@ -1,16 +1,16 @@
 const std = @import("std");
 
-pub const RingSlot = struct {
-    clock: usize,
-    active: bool,
-};
-
+/// Fixed per-layer context allocation split into three zones:
+///   [0 .. num_anchors)                       Tier 1: static anchors
+///   [num_anchors .. num_anchors+window_size) Tier 2: sliding FIFO window
+///   [num_anchors+window_size .. total)       Tier 3: associative recall slots
 pub const DynamicRingBuffer = struct {
     allocator: std.mem.Allocator,
     num_layers: usize,
     max_kv_dim: usize,
     num_anchors: usize,
     window_size: usize,
+    num_recall: usize,
     total_slots: usize,
 
     k: []f32,
@@ -25,8 +25,9 @@ pub const DynamicRingBuffer = struct {
         max_kv_dim: usize,
         num_anchors: usize,
         window_size: usize,
+        num_recall: usize,
     ) !DynamicRingBuffer {
-        const total_slots = num_anchors + window_size;
+        const total_slots = num_anchors + window_size + num_recall;
         const total_elements = num_layers * total_slots * max_kv_dim;
 
         const k_buf = try allocator.alloc(f32, total_elements);
@@ -39,12 +40,13 @@ pub const DynamicRingBuffer = struct {
         @memset(clocks_buf, 0);
         @memset(active_buf, false);
 
-        return DynamicRingBuffer{
+        return .{
             .allocator = allocator,
             .num_layers = num_layers,
             .max_kv_dim = max_kv_dim,
             .num_anchors = num_anchors,
             .window_size = window_size,
+            .num_recall = num_recall,
             .total_slots = total_slots,
             .k = k_buf,
             .v = v_buf,
@@ -69,6 +71,12 @@ pub const DynamicRingBuffer = struct {
         self.total_ingested = 0;
     }
 
+    inline fn recallStart(self: *const DynamicRingBuffer) usize {
+        return self.num_anchors + self.window_size;
+    }
+
+    /// Clock-indexed slot for Tier 1/Tier 2 writes only (recall slots are
+    /// addressed by rank via writeRecallKV).
     pub fn getSlotIndex(self: *const DynamicRingBuffer, clock: usize) usize {
         if (clock < self.num_anchors) return clock;
         return self.num_anchors + ((clock - self.num_anchors) % self.window_size);
@@ -82,8 +90,7 @@ pub const DynamicRingBuffer = struct {
         v_src: []const f32,
     ) void {
         const slot = self.getSlotIndex(clock);
-        const layer_offset = layer * self.total_slots;
-        const slot_idx = layer_offset + slot;
+        const slot_idx = layer * self.total_slots + slot;
         const kv_offset = slot_idx * self.max_kv_dim;
 
         @memcpy(self.k[kv_offset .. kv_offset + k_src.len], k_src);
@@ -94,6 +101,34 @@ pub const DynamicRingBuffer = struct {
         if (layer == 0 and clock >= self.total_ingested) {
             self.total_ingested = clock + 1;
         }
+    }
+
+    /// Deactivate every Tier-3 recall slot across all layers. Called once per
+    /// cycle before the associative recall slots are repopulated.
+    pub fn clearRecall(self: *DynamicRingBuffer) void {
+        const start = self.recallStart();
+        for (0..self.num_layers) |l| {
+            const base = l * self.total_slots + start;
+            @memset(self.active[base .. base + self.num_recall], false);
+        }
+    }
+
+    pub fn writeRecallKV(
+        self: *DynamicRingBuffer,
+        layer: usize,
+        rank: usize,
+        k_src: []const f32,
+        v_src: []const f32,
+        clock: usize,
+    ) void {
+        const slot = self.recallStart() + rank;
+        const slot_idx = layer * self.total_slots + slot;
+        const kv_offset = slot_idx * self.max_kv_dim;
+
+        @memcpy(self.k[kv_offset .. kv_offset + k_src.len], k_src);
+        @memcpy(self.v[kv_offset .. kv_offset + v_src.len], v_src);
+        self.clocks[slot_idx] = clock;
+        self.active[slot_idx] = true;
     }
 
     pub fn getActiveSlots(
@@ -115,7 +150,7 @@ pub const DynamicRingBuffer = struct {
 
         if (curr_clock >= self.num_anchors) {
             const min_valid_clock = if (curr_clock >= self.window_size) curr_clock - self.window_size + 1 else self.num_anchors;
-            for (self.num_anchors..self.total_slots) |s| {
+            for (self.num_anchors..self.recallStart()) |s| {
                 const global_idx = layer_offset + s;
                 if (!self.active[global_idx]) continue;
                 const slot_clock = self.clocks[global_idx];
@@ -123,6 +158,15 @@ pub const DynamicRingBuffer = struct {
                     out_slots[count] = s;
                     count += 1;
                 }
+            }
+        }
+
+        for (self.recallStart()..self.total_slots) |s| {
+            const global_idx = layer_offset + s;
+            if (!self.active[global_idx]) continue;
+            if (self.clocks[global_idx] <= curr_clock) {
+                out_slots[count] = s;
+                count += 1;
             }
         }
 
@@ -145,11 +189,11 @@ pub const DynamicRingBuffer = struct {
     }
 };
 
-test "dynamic ring buffer write and active slots" {
-    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 4, 8);
+test "ring buffer tiers and window eviction" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 4, 8, 4);
     defer ring.deinit();
 
-    try std.testing.expectEqual(@as(usize, 12), ring.total_slots);
+    try std.testing.expectEqual(@as(usize, 16), ring.total_slots);
 
     var dummy_k: [64]f32 = undefined;
     var dummy_v: [64]f32 = undefined;
@@ -160,13 +204,32 @@ test "dynamic ring buffer write and active slots" {
         ring.writeKV(0, c, &dummy_k, &dummy_v);
     }
 
-    var slots_buf: [16]usize = undefined;
+    var slots_buf: [32]usize = undefined;
     const count = ring.getActiveSlots(0, 19, &slots_buf);
 
-    // 4 anchors + 8 window slots = 12 total active
+    // 4 anchors + 8 window slots; recall zone untouched.
     try std.testing.expectEqual(@as(usize, 12), count);
     try std.testing.expectEqual(@as(usize, 0), slots_buf[0]);
-    try std.testing.expectEqual(@as(usize, 1), slots_buf[1]);
-    try std.testing.expectEqual(@as(usize, 2), slots_buf[2]);
     try std.testing.expectEqual(@as(usize, 3), slots_buf[3]);
+}
+
+test "recall slots are written, cleared, and included in active set" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 1, 8, 2, 4, 3);
+    defer ring.deinit();
+
+    var k_src: [8]f32 = undefined;
+    var v_src: [8]f32 = undefined;
+    @memset(&k_src, 1.0);
+    @memset(&v_src, 2.0);
+
+    ring.writeRecallKV(0, 0, &k_src, &v_src, 100);
+    ring.writeRecallKV(0, 1, &k_src, &v_src, 50);
+
+    var slots_buf: [16]usize = undefined;
+    const count = ring.getActiveSlots(0, 101, &slots_buf);
+    try std.testing.expectEqual(@as(usize, 2), count);
+
+    ring.clearRecall();
+    const after_clear = ring.getActiveSlots(0, 101, &slots_buf);
+    try std.testing.expectEqual(@as(usize, 0), after_clear);
 }

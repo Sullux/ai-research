@@ -52,7 +52,22 @@ pub const ContextBuffer = struct {
 
 ---
 
-## 2. Step 1: Foundational Baseline Runner Roadmap
+### D. Associative Memory Representation: Normalized Hidden States vs. Delta Vectors
+* **Decision:** Associative memory vectors ($M_i$) in the in-memory archive are stored as unit-normalized final hidden states ($\text{RMSNorm}(x_{\text{final}})$), while state velocities ($\Delta = x_t - x_{t-1}$) are retained for salience norms ($\|\Delta\|$) and disk serialization.
+* **Rationale:**
+  * **Semantic Resonance:** Cosine similarity $\cos(x_{\text{current}}, M_i)$ computes directional alignment in activation/concept space. Projecting current hidden state against a historical state vector measures whether the network is thinking about a similar concept. Resonating against a differential velocity vector ($\Delta$) measures rate-of-change alignment, which does not capture static semantic associations.
+  * **Layer KV Rehydration:** When recalling memory $M_i$ into layer KV slots via $W_K, W_V$, projecting a normalized hidden state vector mimics a standard token embedding passing through the network. Projecting a raw delta produces derivative KV features incompatible with standard attention dot products.
+  * **Role of the Delta:** The delta vector $\Delta$ remains critical for *gating* (triggering memory commits on novel events), *salience weighting* (the $\gamma \|\Delta_i\|$ score bonus), and *sparse disk compression* (storing compressed diffs on NVMe in Phase 2.2).
+
+### E. Scale-Invariant Landmark Gating & True Chronological RoPE
+* **Decision:** Commit landmark states when consecutive normalized states diverge below a cosine similarity threshold ($\cos(x_t, x_{t-1}) < 0.98$), and RoPE-rotate recalled KV slots at their original token clock coordinates.
+* **Rationale:**
+  * Cosine similarity is scale- and dimension-invariant, operating identically across varying hidden dimensions ($H = 1536$ for Gemma 4 E2B vs. $H = 3840$ for Gemma 4 12B).
+  * RoPE rotation at the original creation timestamp allows the attention mechanism to naturally compute relative temporal decay $\cos(\theta \cdot (t_{\text{now}} - t_{\text{event}}))$, preserving biological temporal perception.
+
+---
+
+## 2. Step 1: Foundational Baseline Runner Roadmap (Complete)
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -92,30 +107,36 @@ pub const ContextBuffer = struct {
 
 ---
 
-## 3. Step 2: Streaming Architecture & Dynamic Ring Integration
-
-Once Step 1 is verified and producing accurate, fast baseline output:
+## 3. Phase 2: Hierarchical Streaming & Associative Memory Roadmap
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ STEP 2 EXECUTION STAGES                                                │
+│ PHASE 2 EXECUTION STAGES                                               │
 │                                                                        │
-│ Stage 2.1: Dynamic Unified Ring Buffer (`src/ring_buffer.zig`)         │
-│            - Circular pointer ingestion (`head = (head + N) % SIZE`)   │
-│            - Multi-partition indexing (Landmarks vs. Sliding FIFO)     │
+│ Stage 2.1: 3-Tier Dual-Score Associative Memory Index [COMPLETE]       │
+│            - In-memory bounded DiffArchive (`src/memory.zig`)          │
+│            - 3-tier DynamicRingBuffer (`src/ring_buffer.zig`):         │
+│                [Anchors | Sliding FIFO Window | Associative Recall]    │
+│            - Injection engine (`src/model/memory_inject.zig`)          │
+│            - Dual-score recall: α·cos + β·e^(-λΔt) + γ·‖Δ‖             │
+│            - CLI controls: `--recall [slots]`, `--no-memory`           │
 │                                                                        │
-│ Stage 2.2: True Monotonic RoPE Clocking                                │
-│            - Pass absolute token timestamps into RoPE shader kernels   │
+│ Stage 2.2: Persistent NVMe Ring Buffer & Binary Diff Bank              │
+│            - Memory-mapped 32-byte header `MemoryDiff` binary layout   │
+│            - Asynchronous diff commit & disk archive scanning          │
+│            - Source: `src/storage.zig`                                 │
 │                                                                        │
-│ Stage 2.3: Sparse Landmark & Diff Extraction                           │
-│            - Compute state velocity: Δ = x_new - x_old                 │
-│            - Top-k entropy & salience selection                        │
+│ Stage 2.3: Hierarchical Multi-Scale Temporal Quiescence                │
+│            - Lower layers (0..N/2) execute every cycle                 │
+│            - Upper layers evaluate Δ_state; skip GEMM on Δ < τ         │
+│            - Source: `src/quiescence.zig`                              │
 │                                                                        │
 │ Stage 2.4: VQ Centroid Memory Compression                              │
-│            - Cluster historical diffs into landmark slots              │
+│            - Cluster deep historical archives into landmark centroids  │
 │                                                                        │
 │ Stage 2.5: Continuous Full-Duplex Streaming Interface                  │
-│            - Asynchronous input consumer + output emitter loop         │
+│            - Process-global monotonic token clocking across sessions   │
+│            - Real-time asynchronous I/O harness                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 

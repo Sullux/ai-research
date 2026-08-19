@@ -1,6 +1,8 @@
 const std = @import("std");
 pub const tensor = @import("../tensor.zig");
 pub const kernels = @import("../kernels.zig");
+pub const memory = @import("../memory.zig");
+pub const memory_inject = @import("memory_inject.zig");
 pub const types = @import("types.zig");
 pub const loader = @import("loader.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
@@ -10,7 +12,7 @@ const LayerWeights = types.LayerWeights;
 const ForwardScratch = types.ForwardScratch;
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
-pub fn forwardToken(self: *const Model, ring: *DynamicRingBuffer, scratch: *ForwardScratch, token_id: u32, clock: usize, tp: ?*std.Thread.Pool) void {
+pub fn forwardToken(self: *const Model, ring: *DynamicRingBuffer, scratch: *ForwardScratch, token_id: u32, clock: usize, tp: ?*std.Thread.Pool, memory_opt: ?*memory.DiffArchive) void {
     const H = self.config.hidden_size;
     const ple_dim = self.config.hidden_size_per_layer_input;
     const embed_scale = @sqrt(@as(f32, @floatFromInt(H)));
@@ -39,6 +41,8 @@ pub fn forwardToken(self: *const Model, ring: *DynamicRingBuffer, scratch: *Forw
     const cap: f32 = 30.0;
     const inv_cap: f32 = 1.0 / cap;
     for (scratch.logits) |*logit| logit.* = cap * std.math.tanh(logit.* * inv_cap);
+
+    if (memory_opt) |mem| memory_inject.integrateMemory(self, mem, ring, scratch, clock, H, tp);
 }
 
 fn preparePLE(self: *const Model, scratch: *ForwardScratch, token_id: u32, H: usize, ple_dim: usize, tp: ?*std.Thread.Pool) void {

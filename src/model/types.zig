@@ -6,6 +6,10 @@ const bf16 = tensor.bf16;
 pub const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 pub const LayerType = enum { sliding_attention, full_attention };
 
+/// Upper bound on associative recall slots injected per cycle. The runtime
+/// ring buffer may request fewer via the `--recall` CLI flag.
+pub const MAX_RECALL_SLOTS: usize = 512;
+
 pub const LayerWeights = struct {
     layer_type: LayerType,
     head_dim: usize,
@@ -125,6 +129,8 @@ pub const ForwardScratch = struct {
     ple_buf_2: []f32,
     logits: []f32,
     active_slots: []usize,
+    prev_normed_x: []f32,
+    recall_indices: []usize,
 
     pub fn init(allocator: std.mem.Allocator, config: ModelConfig) !ForwardScratch {
         const max_head = @max(config.head_dim, config.global_head_dim);
@@ -133,7 +139,7 @@ pub const ForwardScratch = struct {
         const total_ple = config.num_hidden_layers * config.hidden_size_per_layer_input;
         const max_slots = config.max_seq_len;
 
-        return ForwardScratch{
+        const scratch = ForwardScratch{
             .x = try allocator.alloc(f32, config.hidden_size),
             .prev_x = try allocator.alloc(f32, config.hidden_size),
             .delta_x = try allocator.alloc(f32, config.hidden_size),
@@ -150,10 +156,16 @@ pub const ForwardScratch = struct {
             .ple_buf_2 = try allocator.alloc(f32, config.hidden_size),
             .logits = try allocator.alloc(f32, config.vocab_size),
             .active_slots = try allocator.alloc(usize, max_slots),
+            .prev_normed_x = try allocator.alloc(f32, config.hidden_size),
+            .recall_indices = try allocator.alloc(usize, MAX_RECALL_SLOTS),
         };
+        @memset(scratch.prev_normed_x, 0);
+        return scratch;
     }
 
     pub fn deinit(self: *ForwardScratch, allocator: std.mem.Allocator) void {
+        allocator.free(self.prev_normed_x);
+        allocator.free(self.recall_indices);
         allocator.free(self.x);
         allocator.free(self.prev_x);
         allocator.free(self.delta_x);

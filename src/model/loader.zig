@@ -3,6 +3,7 @@ pub const safetensors = @import("../safetensors.zig");
 pub const tensor = @import("../tensor.zig");
 pub const types = @import("types.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
+pub const memory = @import("../memory.zig");
 
 const bf16 = tensor.bf16;
 const ModelConfig = types.ModelConfig;
@@ -112,9 +113,10 @@ pub const Model = struct {
         token_id: u32,
         clock: usize,
         thread_pool: ?*std.Thread.Pool,
+        memory_opt: ?*memory.DiffArchive,
     ) void {
         const fwd = @import("forward.zig");
-        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool);
+        fwd.forwardToken(self, ring, scratch, token_id, clock, thread_pool, memory_opt);
     }
 };
 

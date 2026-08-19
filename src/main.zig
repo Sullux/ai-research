@@ -6,6 +6,9 @@ pub const tokenizer = @import("tokenizer.zig");
 pub const model = @import("model.zig");
 pub const ring_buffer = @import("ring_buffer.zig");
 pub const diff = @import("diff.zig");
+pub const memory = @import("memory.zig");
+
+const MEMORY_CAPACITY: usize = 8192;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -26,6 +29,8 @@ pub fn main() !void {
     var max_tokens: usize = 128;
     var num_anchors: usize = 32;
     var window_size: usize = 512;
+    var num_recall: usize = 96;
+    var memory_enabled = true;
     var prompt_buf = std.ArrayList(u8).init(allocator);
     defer prompt_buf.deinit();
 
@@ -56,12 +61,22 @@ pub fn main() !void {
                 arg_idx += 2;
                 continue;
             }
+        } else if (std.mem.eql(u8, arg, "--recall")) {
+            if (arg_idx + 1 < args.len) {
+                num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96;
+                arg_idx += 2;
+                continue;
+            }
+        } else if (std.mem.eql(u8, arg, "--no-memory")) {
+            memory_enabled = false;
         } else {
             if (prompt_buf.items.len > 0) try prompt_buf.append(' ');
             try prompt_buf.appendSlice(arg);
         }
         arg_idx += 1;
     }
+
+    num_recall = @min(num_recall, model.types.MAX_RECALL_SLOTS);
 
     try stdout.print("Loading model from: {s}...\n", .{model_dir});
 
@@ -81,20 +96,26 @@ pub fn main() !void {
     defer m.deinit();
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
-    var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, num_anchors, window_size);
+    var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, num_anchors, window_size, num_recall);
     defer ring.deinit();
+
+    var archive: ?memory.DiffArchive = null;
+    if (memory_enabled) archive = try memory.DiffArchive.init(allocator, config.hidden_size, MEMORY_CAPACITY, .{});
+    defer if (archive) |*a| a.deinit();
 
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
 
+    const memory_ptr: ?*memory.DiffArchive = if (archive) |*a| a else null;
+
     if (prompt_buf.items.len > 0) {
-        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator);
+        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr);
         try stdout.print("\n", .{});
         return;
     }
 
     try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\n", .{model_dir});
-    try stdout.print("Anchors: {d}, Window: {d}, Total Slots: {d}\n", .{ num_anchors, window_size, ring.total_slots });
+    try stdout.print("Anchors: {d}, Window: {d}, Recall: {d}, Total Slots: {d}\n", .{ num_anchors, window_size, num_recall, ring.total_slots });
     try stdout.print("Type your prompt and press Enter. Type 'exit' or Ctrl+C to quit.\n\n", .{});
 
     var line_buf: [4096]u8 = undefined;
@@ -106,7 +127,7 @@ pub fn main() !void {
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, "exit") or std.mem.eql(u8, trimmed, "quit")) break;
 
-        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator);
+        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr);
         try stdout.print("\n\n", .{});
     }
 }
@@ -134,14 +155,16 @@ fn runInference(
     thread_pool: *std.Thread.Pool,
     stdout: anytype,
     allocator: std.mem.Allocator,
+    memory_opt: ?*memory.DiffArchive,
 ) !void {
     const prompt_tokens = try tok.encode(allocator, prompt, true);
     defer allocator.free(prompt_tokens);
 
     ring.reset();
+    if (memory_opt) |mem| mem.reset();
 
     for (prompt_tokens, 0..) |t, clock| {
-        m.forwardToken(ring, scratch, t, clock, thread_pool);
+        m.forwardToken(ring, scratch, t, clock, thread_pool, memory_opt);
     }
 
     var current_token = kernels.sampleArgmax(scratch.logits);
@@ -153,7 +176,7 @@ fn runInference(
 
         if (current_token == tok.eos_token_id) break;
 
-        m.forwardToken(ring, scratch, current_token, clock, thread_pool);
+        m.forwardToken(ring, scratch, current_token, clock, thread_pool, memory_opt);
         current_token = kernels.sampleArgmax(scratch.logits);
         clock += 1;
     }
@@ -166,4 +189,5 @@ test {
     _ = @import("tokenizer.zig");
     _ = @import("ring_buffer.zig");
     _ = @import("diff.zig");
+    _ = @import("memory.zig");
 }
