@@ -68,35 +68,50 @@ pub fn main() !void {
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
 
-    try stdout.print("Starting Autoregressive Inference Test (Multi-threaded CPU)...\n", .{});
-    try stdout.print("Prompt: [BOS] (Token ID: 2)\n", .{});
-    try stdout.print("Output stream: ", .{});
+    const prompt = "The capital of France is";
+    const prompt_tokens = try tok.encode(allocator, prompt, true);
+    defer allocator.free(prompt_tokens);
 
-    var current_token: u32 = 2; // BOS token
-    const max_generate_tokens: usize = 10;
+    try stdout.print("Prompt: \"{s}\"\n", .{prompt});
+    try stdout.print("Token IDs: {any}\n", .{prompt_tokens});
+    try stdout.print("Prefilling KV cache with {d} prompt tokens...\n", .{prompt_tokens.len});
+
+    var prefill_timer = try std.time.Timer.start();
+    for (prompt_tokens, 0..) |t, pos| {
+        m.forwardToken(&cache, &scratch, t, pos, &thread_pool);
+    }
+    const prefill_ms = @as(f64, @floatFromInt(prefill_timer.read())) / 1_000_000.0;
+    try stdout.print("Prefill complete in {d:.2} ms.\n\n", .{prefill_ms});
+
+    try stdout.print("Generating continuation:\n{s}", .{prompt});
+
+    var current_token = kernels.sampleArgmax(scratch.logits);
+    var pos = prompt_tokens.len;
+    const max_new_tokens: usize = 12;
 
     var gen_timer = try std.time.Timer.start();
-    for (0..max_generate_tokens) |pos| {
-        m.forwardToken(&cache, &scratch, current_token, pos, &thread_pool);
-
-        // Greedily pick highest logit
-        const next_token = kernels.sampleArgmax(scratch.logits);
-        const token_str = tok.decode(next_token);
-
+    for (0..max_new_tokens) |_| {
+        const token_str = tok.decode(current_token);
+        // Clean display of SentencePiece space
+        for (token_str) |b| {
+            if (b == 0x81 and token_str.len >= 3) {
+                // If it's part of utf-8   (\xe2\x96\x81)
+            }
+        }
         try stdout.print("{s}", .{token_str});
 
-        if (next_token == tok.eos_token_id) {
-            try stdout.print("\n[EOS reached]\n", .{});
-            break;
-        }
-        current_token = next_token;
+        if (current_token == tok.eos_token_id) break;
+
+        m.forwardToken(&cache, &scratch, current_token, pos, &thread_pool);
+        current_token = kernels.sampleArgmax(scratch.logits);
+        pos += 1;
     }
 
     const elapsed_gen_ms = @as(f64, @floatFromInt(gen_timer.read())) / 1_000_000.0;
-    try stdout.print("\n\nCompleted {d} tokens in {d:.2} ms ({d:.2} tokens/sec on multi-threaded CPU).\n", .{
-        max_generate_tokens,
+    try stdout.print("\n\nGenerated {d} tokens in {d:.2} ms ({d:.2} tokens/sec on multi-threaded CPU).\n", .{
+        max_new_tokens,
         elapsed_gen_ms,
-        @as(f64, @floatFromInt(max_generate_tokens)) / (elapsed_gen_ms / 1000.0),
+        @as(f64, @floatFromInt(max_new_tokens)) / (elapsed_gen_ms / 1000.0),
     });
 }
 
