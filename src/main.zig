@@ -196,4 +196,5 @@ test {
     _ = @import("memory.zig");
     _ = @import("storage.zig");
     _ = @import("quiescence.zig");
+    _ = @import("vq.zig");
 }

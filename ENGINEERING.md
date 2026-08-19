@@ -134,8 +134,10 @@ pub const ContextBuffer = struct {
 │            - CLI control: `--quiescence`                               │
 │            - Source: `src/quiescence.zig`                              │
 │                                                                        │
-│ Stage 2.4: VQ Centroid Memory Compression                              │
+│ Stage 2.4: VQ Centroid Memory Compression [COMPLETE]                   │
+│            - Spherical K-Means & online centroid codebook (`src/vq.zig`)│
 │            - Cluster deep historical archives into landmark centroids  │
+│            - Nearest-centroid query and least-salient eviction         │
 │                                                                        │
 │ Stage 2.5: Continuous Full-Duplex Streaming Interface                  │
 │            - Process-global monotonic token clocking across sessions   │
