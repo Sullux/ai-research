@@ -64,7 +64,6 @@ pub fn main() !void {
     }
 
     num_recall = @min(num_recall, model.types.MAX_RECALL_SLOTS);
-
     try stdout.print("Loading model from: {s}...\n", .{model_dir});
 
     var config_path_buf: [512]u8 = undefined;
@@ -78,7 +77,6 @@ pub fn main() !void {
 
     var st = try safetensors.SafeTensors.openDir(allocator, model_dir);
     defer st.deinit();
-
     var m = try model.Model.loadFromSafeTensors(allocator, &st, config);
     defer m.deinit();
 
@@ -106,22 +104,21 @@ pub fn main() !void {
 
     var q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = quiescence_enabled }, config.num_hidden_layers);
     const q_ptr: ?*quiescence.QuiescenceTracker = if (quiescence_enabled) &q_tracker else null;
-
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
-
     const memory_ptr: ?*memory.DiffArchive = if (archive) |*a| a else null;
 
     if (prompt_buf.items.len > 0) {
-        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr);
+        var clock: usize = 0;
+        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, &clock, true);
         try stdout.print("\n", .{});
         return;
     }
 
-    try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\n", .{model_dir});
-    try stdout.print("Anchors: {d}, Window: {d}, Recall: {d}, Total Slots: {d}\n", .{ num_anchors, window_size, num_recall, ring.total_slots });
+    try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\nAnchors: {d}, Window: {d}, Recall: {d}, Total Slots: {d}\n", .{ model_dir, num_anchors, window_size, num_recall, ring.total_slots });
     try stdout.print("Type your prompt and press Enter. Type 'exit' or Ctrl+C to quit.\n\n", .{});
 
+    var global_clock: usize = 0;
     var line_buf: [4096]u8 = undefined;
     while (true) {
         try stdout.print(">>> ", .{});
@@ -131,7 +128,7 @@ pub fn main() !void {
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, "exit") or std.mem.eql(u8, trimmed, "quit")) break;
 
-        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr);
+        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, &global_clock, false);
         try stdout.print("\n\n", .{});
     }
 }
@@ -161,18 +158,20 @@ fn runInference(
     allocator: std.mem.Allocator,
     memory_opt: ?*memory.DiffArchive,
     quiescence_opt: ?*quiescence.QuiescenceTracker,
+    clock_ptr: *usize,
+    reset_ring: bool,
 ) !void {
     const prompt_tokens = try tok.encode(allocator, prompt, true);
     defer allocator.free(prompt_tokens);
 
-    ring.reset();
+    if (reset_ring) ring.reset();
 
-    for (prompt_tokens, 0..) |t, clock| {
-        m.forwardToken(ring, scratch, t, clock, thread_pool, memory_opt, quiescence_opt);
+    for (prompt_tokens) |t| {
+        m.forwardToken(ring, scratch, t, clock_ptr.*, thread_pool, memory_opt, quiescence_opt);
+        clock_ptr.* += 1;
     }
 
     var current_token = kernels.sampleArgmax(scratch.logits);
-    var clock = prompt_tokens.len;
 
     for (0..max_tokens) |_| {
         const token_str = tok.decode(current_token);
@@ -180,9 +179,9 @@ fn runInference(
 
         if (current_token == tok.eos_token_id) break;
 
-        m.forwardToken(ring, scratch, current_token, clock, thread_pool, memory_opt, quiescence_opt);
+        m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt);
         current_token = kernels.sampleArgmax(scratch.logits);
-        clock += 1;
+        clock_ptr.* += 1;
     }
 }
 

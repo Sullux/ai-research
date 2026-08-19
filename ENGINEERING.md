@@ -139,9 +139,10 @@ pub const ContextBuffer = struct {
 │            - Cluster deep historical archives into landmark centroids  │
 │            - Nearest-centroid query and least-salient eviction         │
 │                                                                        │
-│ Stage 2.5: Continuous Full-Duplex Streaming Interface                  │
-│            - Process-global monotonic token clocking across sessions   │
-│            - Real-time asynchronous I/O harness                        │
+│ Stage 2.5: Continuous Full-Duplex Streaming Interface [COMPLETE]       │
+│            - Process-global monotonic token clocking across REPL turns │
+│            - Non-resetting DynamicRingBuffer & persistent anchor flow  │
+│            - Monotonic RoPE temporal distance alignment                │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
