@@ -124,6 +124,13 @@ pub const VkCommandBufferBeginInfo = extern struct {
     pInheritanceInfo: ?*const anyopaque = null,
 };
 
+pub const VkMemoryBarrier = extern struct {
+    sType: types.VkStructureType = .MEMORY_BARRIER,
+    pNext: ?*const anyopaque = null,
+    srcAccessMask: u32 = types.VK_ACCESS_SHADER_WRITE_BIT,
+    dstAccessMask: u32 = types.VK_ACCESS_SHADER_READ_BIT | types.VK_ACCESS_SHADER_WRITE_BIT,
+};
+
 pub const VkBufferMemoryBarrier = extern struct {
     sType: types.VkStructureType = .BUFFER_MEMORY_BARRIER,
     pNext: ?*const anyopaque = null,

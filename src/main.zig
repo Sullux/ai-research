@@ -149,14 +149,17 @@ pub fn main() !void {
 }
 
 fn printToken(stdout: anytype, token_str: []const u8) !void {
+    var buf: [512]u8 = undefined;
+    var out_len: usize = 0;
     var i: usize = 0;
-    while (i < token_str.len) {
+    while (i < token_str.len and out_len < buf.len) {
         if (i + 2 < token_str.len and token_str[i] == 0xE2 and token_str[i + 1] == 0x96 and token_str[i + 2] == 0x81) {
-            try stdout.print(" ", .{}); i += 3;
+            buf[out_len] = ' '; out_len += 1; i += 3;
         } else {
-            try stdout.print("{c}", .{token_str[i]}); i += 1;
+            buf[out_len] = token_str[i]; out_len += 1; i += 1;
         }
     }
+    try stdout.writeAll(buf[0..out_len]);
 }
 
 fn runInference(m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *ring_buffer.DynamicRingBuffer, scratch: *model.ForwardScratch, prompt: []const u8, max_tokens: usize, thread_pool: *std.Thread.Pool, stdout: anytype, allocator: std.mem.Allocator, memory_opt: ?*memory.DiffArchive, quiescence_opt: ?*quiescence.QuiescenceTracker, gpu_opt: ?*gpu.model_gpu.GpuModelContext, clock_ptr: *usize, reset_ring: bool) !void {

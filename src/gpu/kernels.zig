@@ -94,19 +94,19 @@ pub const GpuEngine = struct {
 
     pub fn recordGemv(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 1) / 2);
+        const workgroups: u32 = @intCast((m + 3) / 4);
         self.gemv_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordGemvLogits(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 1) / 2);
+        const workgroups: u32 = @intCast((m + 3) / 4);
         self.gemv_logits_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordGateUpSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 1) / 2);
+        const workgroups: u32 = @intCast((m + 3) / 4);
         self.gate_up_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
@@ -163,15 +163,9 @@ pub const GpuEngine = struct {
         self.qkv_rope_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), workgroups, 1, 1);
     }
 
-    pub fn recordBarrier(self: *const GpuEngine, buf: *const buffer.GpuBuffer) void {
-        const b = types_dispatch.VkBufferMemoryBarrier{
-            .srcAccessMask = types.VK_ACCESS_SHADER_WRITE_BIT | types.VK_ACCESS_SHADER_READ_BIT,
-            .dstAccessMask = types.VK_ACCESS_SHADER_READ_BIT | types.VK_ACCESS_SHADER_WRITE_BIT,
-            .buffer = buf.buffer,
-            .offset = 0,
-            .size = buf.size,
-        };
-        self.ctx.api.vkCmdPipelineBarrier(self.cmd_buf, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, null, 1, (&b)[0..1].ptr, 0, null);
+    pub fn recordBarrier(self: *const GpuEngine, _: ?*const buffer.GpuBuffer) void {
+        const b = types_dispatch.VkMemoryBarrier{};
+        self.ctx.api.vkCmdPipelineBarrier(self.cmd_buf, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, (&b)[0..1].ptr, 0, null, 0, null);
     }
 
     pub fn submitBatch(self: *const GpuEngine) !void {

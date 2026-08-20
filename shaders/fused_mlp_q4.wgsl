@@ -9,22 +9,22 @@ struct PushConstants {
 @group(0) @binding(3) var<storage, read_write> Y: array<f32>;
 var<push_constant> pc: PushConstants;
 
-var<workgroup> sdata_gate: array<f32, 64>;
-var<workgroup> sdata_up: array<f32, 64>;
+var<workgroup> sdata_gate: array<f32, 128>;
+var<workgroup> sdata_up: array<f32, 128>;
 
 fn gelu_tanh(x: f32) -> f32 {
     let inner = 0.7978845608 * (x + 0.044715 * x * x * x);
     return 0.5 * x * (1.0 + tanh(inner));
 }
 
-@compute @workgroup_size(64, 1, 1)
+@compute @workgroup_size(128, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
     let local_row = lid.x >> 5u;
     let lane = lid.x & 31u;
-    let row = wgid.x * 2u + local_row;
+    let row = wgid.x * 4u + local_row;
 
     let num_blocks = pc.K / 32u;
     let row_word_offset = row * num_blocks * 5u;
@@ -35,23 +35,53 @@ fn main(
     var up_acc: f32 = 0.0;
 
     if (row < pc.M) {
-        for (var b = 0u; b < num_blocks; b = b + 1u) {
-            let block_base = row_word_offset + b * 5u;
-            let x_val = X[b * 32u + lane];
+        var b = 0u;
+        while (b < num_blocks) {
+            let bb0 = row_word_offset + b * 5u;
+            let x0 = X[b * 32u + lane];
+            let gs0 = bitcast<f32>(W_gate[bb0]);
+            let gp0 = W_gate[bb0 + lane_word_idx];
+            let gn0 = (gp0 >> nib_shift) & 0x0Fu;
+            gate_acc = gate_acc + (f32(gn0) - 8.0) * gs0 * x0;
+            let us0 = bitcast<f32>(W_up[bb0]);
+            let up0 = W_up[bb0 + lane_word_idx];
+            let un0 = (up0 >> nib_shift) & 0x0Fu;
+            up_acc = up_acc + (f32(un0) - 8.0) * us0 * x0;
 
-            // Gate dequant
-            let g_scale = bitcast<f32>(W_gate[block_base]);
-            let g_packed = W_gate[block_base + lane_word_idx];
-            let g_nib = (g_packed >> nib_shift) & 0x0Fu;
-            let g_weight = (f32(g_nib) - 8.0) * g_scale;
-            gate_acc = gate_acc + g_weight * x_val;
+            let bb1 = bb0 + 5u;
+            let x1 = X[(b + 1u) * 32u + lane];
+            let gs1 = bitcast<f32>(W_gate[bb1]);
+            let gp1 = W_gate[bb1 + lane_word_idx];
+            let gn1 = (gp1 >> nib_shift) & 0x0Fu;
+            gate_acc = gate_acc + (f32(gn1) - 8.0) * gs1 * x1;
+            let us1 = bitcast<f32>(W_up[bb1]);
+            let up1 = W_up[bb1 + lane_word_idx];
+            let un1 = (up1 >> nib_shift) & 0x0Fu;
+            up_acc = up_acc + (f32(un1) - 8.0) * us1 * x1;
 
-            // Up dequant
-            let u_scale = bitcast<f32>(W_up[block_base]);
-            let u_packed = W_up[block_base + lane_word_idx];
-            let u_nib = (u_packed >> nib_shift) & 0x0Fu;
-            let u_weight = (f32(u_nib) - 8.0) * u_scale;
-            up_acc = up_acc + u_weight * x_val;
+            let bb2 = bb0 + 10u;
+            let x2 = X[(b + 2u) * 32u + lane];
+            let gs2 = bitcast<f32>(W_gate[bb2]);
+            let gp2 = W_gate[bb2 + lane_word_idx];
+            let gn2 = (gp2 >> nib_shift) & 0x0Fu;
+            gate_acc = gate_acc + (f32(gn2) - 8.0) * gs2 * x2;
+            let us2 = bitcast<f32>(W_up[bb2]);
+            let up2 = W_up[bb2 + lane_word_idx];
+            let un2 = (up2 >> nib_shift) & 0x0Fu;
+            up_acc = up_acc + (f32(un2) - 8.0) * us2 * x2;
+
+            let bb3 = bb0 + 15u;
+            let x3 = X[(b + 3u) * 32u + lane];
+            let gs3 = bitcast<f32>(W_gate[bb3]);
+            let gp3 = W_gate[bb3 + lane_word_idx];
+            let gn3 = (gp3 >> nib_shift) & 0x0Fu;
+            gate_acc = gate_acc + (f32(gn3) - 8.0) * gs3 * x3;
+            let us3 = bitcast<f32>(W_up[bb3]);
+            let up3 = W_up[bb3 + lane_word_idx];
+            let un3 = (up3 >> nib_shift) & 0x0Fu;
+            up_acc = up_acc + (f32(un3) - 8.0) * us3 * x3;
+
+            b = b + 4u;
         }
     }
 
@@ -59,15 +89,31 @@ fn main(
     sdata_up[lid.x] = up_acc;
     workgroupBarrier();
 
+    if (lane < 16u) {
+        sdata_gate[lid.x] = sdata_gate[lid.x] + sdata_gate[lid.x + 16u];
+        sdata_up[lid.x] = sdata_up[lid.x] + sdata_up[lid.x + 16u];
+    }
+    workgroupBarrier();
+    if (lane < 8u) {
+        sdata_gate[lid.x] = sdata_gate[lid.x] + sdata_gate[lid.x + 8u];
+        sdata_up[lid.x] = sdata_up[lid.x] + sdata_up[lid.x + 8u];
+    }
+    workgroupBarrier();
+    if (lane < 4u) {
+        sdata_gate[lid.x] = sdata_gate[lid.x] + sdata_gate[lid.x + 4u];
+        sdata_up[lid.x] = sdata_up[lid.x] + sdata_up[lid.x + 4u];
+    }
+    workgroupBarrier();
+    if (lane < 2u) {
+        sdata_gate[lid.x] = sdata_gate[lid.x] + sdata_gate[lid.x + 2u];
+        sdata_up[lid.x] = sdata_up[lid.x] + sdata_up[lid.x + 2u];
+    }
+    workgroupBarrier();
+
     if (lane == 0u && row < pc.M) {
-        let base_idx = local_row * 32u;
-        var g_sum: f32 = 0.0;
-        var u_sum: f32 = 0.0;
-        for (var i = 0u; i < 32u; i = i + 1u) {
-            g_sum = g_sum + sdata_gate[base_idx + i];
-            u_sum = u_sum + sdata_up[base_idx + i];
-        }
-        let act = gelu_tanh(g_sum);
-        Y[row] = act * u_sum;
+        let g_final = sdata_gate[lid.x] + sdata_gate[lid.x + 1u];
+        let u_final = sdata_up[lid.x] + sdata_up[lid.x + 1u];
+        let act = gelu_tanh(g_final);
+        Y[row] = act * u_final;
     }
 }

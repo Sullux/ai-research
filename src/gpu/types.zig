@@ -45,6 +45,7 @@ pub const VkStructureType = enum(i32) {
     COMMAND_BUFFER_ALLOCATE_INFO = 40,
     COMMAND_BUFFER_BEGIN_INFO = 42,
     BUFFER_MEMORY_BARRIER = 44,
+    MEMORY_BARRIER = 46,
     _,
 };
 

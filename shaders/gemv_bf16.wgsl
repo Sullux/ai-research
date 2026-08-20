@@ -8,20 +8,20 @@ struct PushConstants {
 @group(0) @binding(2) var<storage, read_write> Y: array<f32>;
 var<push_constant> pc: PushConstants;
 
-var<workgroup> sdata: array<f32, 64>;
+var<workgroup> sdata: array<f32, 128>;
 
 fn bf16_to_f32(u: u32) -> f32 {
     return bitcast<f32>(u << 16u);
 }
 
-@compute @workgroup_size(64, 1, 1)
+@compute @workgroup_size(128, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
     let local_row = lid.x >> 5u;
     let lane = lid.x & 31u;
-    let row = wgid.x * 2u + local_row;
+    let row = wgid.x * 4u + local_row;
 
     let k_words = pc.K / 2u;
     let row_offset = row * k_words;
@@ -48,12 +48,16 @@ fn main(
     sdata[lid.x] = acc;
     workgroupBarrier();
 
+    if (lane < 16u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 16u]; }
+    workgroupBarrier();
+    if (lane < 8u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 8u]; }
+    workgroupBarrier();
+    if (lane < 4u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 4u]; }
+    workgroupBarrier();
+    if (lane < 2u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 2u]; }
+    workgroupBarrier();
+
     if (lane == 0u && row < pc.M) {
-        let base_idx = local_row * 32u;
-        var sum: f32 = 0.0;
-        for (var i = 0u; i < 32u; i = i + 1u) {
-            sum = sum + sdata[base_idx + i];
-        }
-        Y[row] = sum;
+        Y[row] = sdata[lid.x] + sdata[lid.x + 1u];
     }
 }

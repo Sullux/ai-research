@@ -41,64 +41,54 @@ pub fn gpuDispatchForwardToken(
 
         // 1. Input RMSNorm: buf_x -> buf_normed_x
         gpu.engine.recordRmsNorm(l_gpu.desc.input_norm, H, eps);
-        gpu.engine.recordBarrier(&gpu.buf_normed_x);
+        gpu.engine.recordBarrier(null);
 
-        // 2. Q, K, V Projections
+        // 2. Q, K, V Projections (concurrent dispatches)
         gpu.engine.recordGemv(l_gpu.desc.q_proj, q_dim, H);
         gpu.engine.recordGemv(l_gpu.desc.k_proj, kv_dim, H);
         gpu.engine.recordGemv(l_gpu.desc.v_proj, kv_dim, H);
-        gpu.engine.recordBarrier(&gpu.buf_q);
-        gpu.engine.recordBarrier(&gpu.buf_k);
-        gpu.engine.recordBarrier(&gpu.buf_v);
+        gpu.engine.recordBarrier(null);
 
         // 3. QKV RoPE + Cache write
         gpu.engine.recordQkvRope(l_gpu.desc.qkv_rope, @intCast(clock), @intCast(config.num_attention_heads), @intCast(l_cpu.num_kv_heads), head_dim, rot_dim, @intCast(slot_idx), l_cpu.k_eq_v, theta, eps);
-        gpu.engine.recordBarrier(&gpu.buf_q);
-        gpu.engine.recordBarrier(&l_gpu.buf_k_cache);
-        gpu.engine.recordBarrier(&l_gpu.buf_v_cache);
+        gpu.engine.recordBarrier(null);
 
         // 4. Decode Attention
         gpu.engine.recordDecodeAttn(l_gpu.desc.attn, n_active, head_dim, kv_dim, gqa_ratio, inv_sqrt_dim, config.num_attention_heads);
-        gpu.engine.recordBarrier(&gpu.buf_attn_out);
+        gpu.engine.recordBarrier(null);
 
         // 5. O Projection
         gpu.engine.recordGemv(l_gpu.desc.o_proj, H, q_dim);
-        gpu.engine.recordBarrier(&gpu.buf_mlp_out);
-
-        // 5.5 Post-Attention RMSNorm
         if (l_gpu.has_post_attn_norm) {
+            gpu.engine.recordBarrier(null);
             gpu.engine.recordRmsNorm(l_gpu.desc.post_attn_norm, H, eps);
-            gpu.engine.recordBarrier(&gpu.buf_mlp_out);
         }
+        gpu.engine.recordBarrier(null);
 
         // 6. Attention residual + pre-FFN RMSNorm: buf_x += buf_mlp_out -> buf_normed_x
         gpu.engine.recordAddRmsNorm(l_gpu.desc.pre_ffn_norm, H, eps, 1.0);
-        gpu.engine.recordBarrier(&gpu.buf_normed_x);
-        gpu.engine.recordBarrier(&gpu.buf_x);
+        gpu.engine.recordBarrier(null);
 
         // 7. FFN (Gate + Up + GeGLU)
         gpu.engine.recordGateUpSwiGlu(l_gpu.desc.gate_up_swiglu, inter, H);
-        gpu.engine.recordBarrier(&gpu.buf_act);
+        gpu.engine.recordBarrier(null);
 
         // 8. Down projection
         gpu.engine.recordGemv(l_gpu.desc.down_proj, H, inter);
-        gpu.engine.recordBarrier(&gpu.buf_mlp_out);
-
-        // 8.5 Post-FFN RMSNorm
         if (l_gpu.has_post_ffn_norm) {
+            gpu.engine.recordBarrier(null);
             gpu.engine.recordRmsNorm(l_gpu.desc.post_ffn_norm, H, eps);
-            gpu.engine.recordBarrier(&gpu.buf_mlp_out);
         }
+        gpu.engine.recordBarrier(null);
 
-        // 9. FFN residual + next RMSNorm: buf_x += scalar * buf_mlp_out -> buf_normed_x
+        // 9. FFN residual: buf_x = (buf_x + buf_mlp_out) * layer_scalar
         gpu.engine.recordAddRmsNorm(l_gpu.desc.post_ffn_add, H, eps, l_gpu.layer_scalar);
-        gpu.engine.recordBarrier(&gpu.buf_normed_x);
-        gpu.engine.recordBarrier(&gpu.buf_x);
+        gpu.engine.recordBarrier(null);
     }
 
     // 10. Final RMSNorm: buf_x -> buf_normed_x
     gpu.engine.recordRmsNorm(gpu.desc_final_norm, H, eps);
-    gpu.engine.recordBarrier(&gpu.buf_normed_x);
+    gpu.engine.recordBarrier(null);
 
     // 11. Logits projection
     gpu.engine.recordGemvLogits(gpu.desc_logits, V, H);
