@@ -156,7 +156,7 @@ test "vulkan gemv_q4 compute execution on AMD GPU" {
     const bufs = [_]*const buffer.GpuBuffer{ &buf_w, &buf_x, &buf_y };
     try pipe.bindBuffers(&bufs);
     const pc = [_]u32{ @intCast(m_rows), @intCast(k_cols) };
-    try pipe.dispatch(std.mem.sliceAsBytes(&pc), 1, 1, 1);
+    try pipe.dispatch(std.mem.sliceAsBytes(&pc), @intCast(m_rows), 1, 1);
 
     var expected: f32 = 0.0;
     for (buf_x.asSlice(f32)) |x| expected += x;

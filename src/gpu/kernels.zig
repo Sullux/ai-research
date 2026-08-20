@@ -9,6 +9,7 @@ pub const quant = @import("../quant.zig");
 
 pub const GpuEngine = struct {
     ctx: *const context.GpuContext,
+    mode: quant.QuantMode,
     gemv_pipe: pipeline.ComputePipeline,
     swiglu_pipe: pipeline.ComputePipeline,
     cmd_pool: types.VkCommandPool,
@@ -42,6 +43,7 @@ pub const GpuEngine = struct {
 
         return .{
             .ctx = ctx,
+            .mode = mode,
             .gemv_pipe = gemv,
             .swiglu_pipe = swiglu,
             .cmd_pool = pool,
@@ -65,7 +67,7 @@ pub const GpuEngine = struct {
 
     pub fn recordGemv(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 63) / 64);
+        const workgroups: u32 = if (self.mode == .q4) @intCast(m) else @intCast((m + 63) / 64);
         self.gemv_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
@@ -103,7 +105,7 @@ pub const GpuEngine = struct {
         const bufs = [_]*const buffer.GpuBuffer{ w, x, y };
         try self.gemv_pipe.bindBuffers(&bufs);
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 63) / 64);
+        const workgroups: u32 = if (self.mode == .q4) @intCast(m) else @intCast((m + 63) / 64);
         try self.gemv_pipe.dispatch(std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
