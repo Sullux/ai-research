@@ -44,7 +44,25 @@ pub const ComputePipeline = struct {
         if (ctx.api.vkCreatePipelineLayout(ctx.device, &pl_info, null, &pipeline_layout) != .SUCCESS) return error.VkPipelineLayoutCreationFailed;
         errdefer ctx.api.vkDestroyPipelineLayout(ctx.device, pipeline_layout, null);
 
-        const cp_info = types_dispatch.VkComputePipelineCreateInfo{ .stage = .{ .module = shader_module }, .layout = pipeline_layout };
+        const main_name: [:0]const u8 = "main";
+        const stage_info = types_dispatch.VkPipelineShaderStageCreateInfo{
+            .sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = types.VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = shader_module,
+            .pName = main_name.ptr,
+            .pSpecializationInfo = null,
+        };
+        const cp_info = types_dispatch.VkComputePipelineCreateInfo{
+            .sType = .COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = stage_info,
+            .layout = pipeline_layout,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
         var pipeline: types.VkPipeline = null;
         if (ctx.api.vkCreateComputePipelines(ctx.device, null, 1, (&cp_info)[0..1].ptr, null, (&pipeline)[0..1].ptr) != .SUCCESS) return error.VkPipelineCreationFailed;
         errdefer ctx.api.vkDestroyPipeline(ctx.device, pipeline, null);

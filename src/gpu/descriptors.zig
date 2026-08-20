@@ -5,9 +5,11 @@ pub const context = @import("context.zig");
 pub const buffer = @import("buffer.zig");
 
 pub const LayerDescriptorSets = struct {
+    input_norm: types.VkDescriptorSet,
     q_proj: types.VkDescriptorSet,
     k_proj: types.VkDescriptorSet,
     v_proj: types.VkDescriptorSet,
+    attn: types.VkDescriptorSet,
     o_proj: types.VkDescriptorSet,
     gate_proj: types.VkDescriptorSet,
     up_proj: types.VkDescriptorSet,
@@ -16,6 +18,7 @@ pub const LayerDescriptorSets = struct {
     gate_up_swiglu: types.VkDescriptorSet,
     pre_ffn_norm: types.VkDescriptorSet,
     post_attn_norm: types.VkDescriptorSet,
+    post_ffn_norm: types.VkDescriptorSet,
 };
 
 pub const DescriptorManager = struct {
@@ -24,7 +27,7 @@ pub const DescriptorManager = struct {
 
     pub fn init(ctx: *const context.GpuContext, max_sets: u32) !DescriptorManager {
         const pool_size = [_]types_dispatch.VkDescriptorPoolSize{
-            .{ .descriptorType = types.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = max_sets * 4 },
+            .{ .descriptorType = types.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = max_sets * 8 },
         };
         const pool_info = types_dispatch.VkDescriptorPoolCreateInfo{
             .maxSets = max_sets,

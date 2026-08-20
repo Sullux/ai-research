@@ -70,7 +70,7 @@ pub fn gpuDispatchLayerFFN(
     gpu.engine.recordBarrier(&gpu.buf_mlp_out);
 
     if (l.has_post_attn_norm) {
-        gpu.engine.recordAddRmsNorm(l.desc.post_attn_norm, H, eps);
+        gpu.engine.recordRmsNorm(l.desc.post_attn_norm, H, eps);
         gpu.engine.recordBarrier(&gpu.buf_mlp_out);
     }
 
@@ -89,6 +89,10 @@ pub fn gpuDispatchLayerFFN(
         gpu.engine.recordSwiGlu(l.desc.swiglu, inter);
         gpu.engine.recordBarrier(&gpu.buf_act);
         gpu.engine.recordGemv(l.desc.down_proj, H, inter);
+    }
+    if (l.has_post_ffn_norm) {
+        gpu.engine.recordBarrier(&gpu.buf_mlp_out);
+        gpu.engine.recordRmsNorm(l.desc.post_ffn_norm, H, eps);
     }
     gpu.engine.submitBatch() catch return false;
 
@@ -122,6 +126,10 @@ pub fn gpuDispatchMlp(
         gpu.engine.recordSwiGlu(l.desc.swiglu, inter);
         gpu.engine.recordBarrier(&gpu.buf_act);
         gpu.engine.recordGemv(l.desc.down_proj, H, inter);
+    }
+    if (l.has_post_ffn_norm) {
+        gpu.engine.recordBarrier(&gpu.buf_mlp_out);
+        gpu.engine.recordRmsNorm(l.desc.post_ffn_norm, H, 1e-6);
     }
     gpu.engine.submitBatch() catch return false;
 

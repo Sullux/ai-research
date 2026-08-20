@@ -94,7 +94,7 @@ fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuff
     }
 }
 
-fn forwardLayerGpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, g: *GpuModelContext) void {
+pub fn forwardLayerGpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, g: *GpuModelContext) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
     const first_kv_shared = self.config.num_hidden_layers - self.config.num_kv_shared_layers;
     const is_shared = (self.config.num_kv_shared_layers > 0 and layer_idx >= first_kv_shared);
@@ -125,7 +125,7 @@ fn forwardLayerGpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer
     _ = gpu.model_dispatch.gpuDispatchLayerFFN(g, layer_idx, scratch.attn_out[0..l.q_dim], scratch.x, H, l.q_dim, l.intermediate_dim, self.config.rms_norm_eps);
 }
 
-fn forwardAttentionCpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
+pub fn forwardAttentionCpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
     const first_kv_shared = self.config.num_hidden_layers - self.config.num_kv_shared_layers;
     const is_shared = (self.config.num_kv_shared_layers > 0 and layer_idx >= first_kv_shared);
@@ -175,7 +175,7 @@ fn forwardAttentionCpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBu
     for (scratch.x, scratch.mlp_out) |*x_val, attn_v| x_val.* += attn_v;
 }
 
-fn forwardMlpCpu(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, H: usize, tp: ?*std.Thread.Pool) void {
+pub fn forwardMlpCpu(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, H: usize, tp: ?*std.Thread.Pool) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.pre_feedforward_layernorm, self.config.rms_norm_eps);
     kernels.gatedMlp(scratch.mlp_out, scratch.normed_x, l.gate_proj, l.up_proj, l.down_proj, H, l.intermediate_dim, scratch.mlp_gate_up, tp);
     if (l.post_feedforward_layernorm) |pfl| kernels.rmsNorm(scratch.mlp_out, scratch.mlp_out, pfl, self.config.rms_norm_eps);

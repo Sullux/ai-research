@@ -90,17 +90,74 @@ pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
 }
 
 pub fn quantizeMatrix(dst_words: []u32, src_bf16: []const u16, rows: usize, cols: usize, mode: QuantMode) void {
+    if (rows == 0 or cols == 0 or src_bf16.len == 0) return;
     const row_bf16_len = cols;
     const row_words_len = getQuantizedRowWords(cols, mode);
-    var r: usize = 0;
-    while (r < rows) : (r += 1) {
-        const src_row = src_bf16[r * row_bf16_len .. (r + 1) * row_bf16_len];
-        const dst_row = dst_words[r * row_words_len .. (r + 1) * row_words_len];
-        switch (mode) {
-            .q8 => quantizeRowQ8_0(dst_row, src_row),
-            .q4 => quantizeRowQ4_0(dst_row, src_row),
-            .none => unreachable,
+
+    const num_threads: usize = @min(std.Thread.getCpuCount() catch 16, 16);
+    if (rows < num_threads * 4) {
+        var r: usize = 0;
+        while (r < rows) : (r += 1) {
+            const src_row = src_bf16[r * row_bf16_len .. (r + 1) * row_bf16_len];
+            const dst_row = dst_words[r * row_words_len .. (r + 1) * row_words_len];
+            switch (mode) {
+                .q8 => quantizeRowQ8_0(dst_row, src_row),
+                .q4 => quantizeRowQ4_0(dst_row, src_row),
+                .none => unreachable,
+            }
         }
+        return;
+    }
+
+    const Task = struct {
+        dst: []u32,
+        src: []const u16,
+        r_start: usize,
+        r_end: usize,
+        row_b_len: usize,
+        row_w_len: usize,
+        m: QuantMode,
+
+        fn run(self: @This()) void {
+            var r = self.r_start;
+            while (r < self.r_end) : (r += 1) {
+                const src_row = self.src[r * self.row_b_len .. (r + 1) * self.row_b_len];
+                const dst_row = self.dst[r * self.row_w_len .. (r + 1) * self.row_w_len];
+                switch (self.m) {
+                    .q8 => quantizeRowQ8_0(dst_row, src_row),
+                    .q4 => quantizeRowQ4_0(dst_row, src_row),
+                    .none => unreachable,
+                }
+            }
+        }
+    };
+
+    var threads: [16]std.Thread = undefined;
+    const chunk = (rows + num_threads - 1) / num_threads;
+    var spawned: usize = 0;
+
+    for (0..num_threads) |t| {
+        const r_start = t * chunk;
+        if (r_start >= rows) break;
+        const r_end = @min(r_start + chunk, rows);
+        const task = Task{
+            .dst = dst_words,
+            .src = src_bf16,
+            .r_start = r_start,
+            .r_end = r_end,
+            .row_b_len = row_bf16_len,
+            .row_w_len = row_words_len,
+            .m = mode,
+        };
+        threads[spawned] = std.Thread.spawn(.{}, Task.run, .{task}) catch {
+            task.run();
+            continue;
+        };
+        spawned += 1;
+    }
+
+    for (0..spawned) |t| {
+        threads[t].join();
     }
 }
 

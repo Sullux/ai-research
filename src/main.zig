@@ -12,6 +12,7 @@ pub const quiescence = @import("quiescence.zig");
 pub const vq = @import("vq.zig");
 pub const gpu = @import("gpu.zig");
 pub const quant = @import("quant.zig");
+pub const bench = @import("model/bench.zig");
 
 const MEMORY_CAPACITY: usize = 8192;
 
@@ -19,24 +20,20 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
     var thread_pool: std.Thread.Pool = undefined;
     try thread_pool.init(.{ .allocator = allocator });
     defer thread_pool.deinit();
 
-    const stdout = std.io.getStdOut().writer();
-    const stdin = std.io.getStdIn().reader();
+    const stdout, const stdin = .{ std.io.getStdOut().writer(), std.io.getStdIn().reader() };
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
     var model_dir: []const u8 = "../gemma-4-E2B";
-    var max_tokens: usize = 128;
-    var num_anchors: usize = 32;
-    var window_size: usize = 512;
-    var num_recall: usize = 96;
+    var max_tokens: usize, var num_anchors: usize, var window_size: usize, var num_recall: usize = .{ 128, 32, 512, 96 };
     var memory_enabled = true;
     var quiescence_enabled = false;
     var gpu_enabled = false;
+    var bench_mode = false;
     var quant_mode: quant.QuantMode = .none;
     var storage_path: ?[]const u8 = null;
     var prompt_buf = std.ArrayList(u8).init(allocator);
@@ -52,6 +49,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--recall") and arg_idx + 1 < args.len) { num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) { storage_path = args[arg_idx + 1]; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--bench")) { bench_mode = true; gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--gpu")) { gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--q8")) { quant_mode = .q8; gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--q4")) { quant_mode = .q4; gpu_enabled = true;
@@ -76,7 +74,10 @@ pub fn main() !void {
     var m = try model.Model.loadFromSafeTensors(allocator, &st, config);
     defer m.deinit();
 
-    var gpu_ctx: ?gpu.context.GpuContext = if (gpu_enabled) gpu.context.GpuContext.init(allocator) catch null else null;
+    var gpu_ctx: ?gpu.context.GpuContext = if (gpu_enabled) gpu.context.GpuContext.init(allocator) catch |err| {
+        try stdout.print("GpuContext.init error: {}\n", .{err});
+        return err;
+    } else null;
     defer if (gpu_ctx) |*gc| gc.deinit();
     var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode) catch |err| {
         std.debug.print("GPU init error: {any}\n", .{err});
@@ -87,6 +88,13 @@ pub fn main() !void {
     if (gpu_ctx) |gc| {
         const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4 => "Q4_0" };
         try stdout.print("GPU: {s} (UMA Compute, {s})\n", .{ gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)], mode_tag });
+    }
+
+    if (bench_mode) {
+        if (gpu_ptr) |g| {
+            try bench.runGpuBenchmark(&m, config, g, stdout);
+            return;
+        }
     }
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
@@ -144,23 +152,14 @@ fn printToken(stdout: anytype, token_str: []const u8) !void {
     var i: usize = 0;
     while (i < token_str.len) {
         if (i + 2 < token_str.len and token_str[i] == 0xE2 and token_str[i + 1] == 0x96 and token_str[i + 2] == 0x81) {
-            try stdout.print(" ", .{});
-            i += 3;
+            try stdout.print(" ", .{}); i += 3;
         } else {
-            try stdout.print("{c}", .{token_str[i]});
-            i += 1;
+            try stdout.print("{c}", .{token_str[i]}); i += 1;
         }
     }
 }
 
-fn runInference(
-    m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *ring_buffer.DynamicRingBuffer,
-    scratch: *model.ForwardScratch, prompt: []const u8, max_tokens: usize,
-    thread_pool: *std.Thread.Pool, stdout: anytype, allocator: std.mem.Allocator,
-    memory_opt: ?*memory.DiffArchive, quiescence_opt: ?*quiescence.QuiescenceTracker,
-    gpu_opt: ?*gpu.model_gpu.GpuModelContext,
-    clock_ptr: *usize, reset_ring: bool,
-) !void {
+fn runInference(m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *ring_buffer.DynamicRingBuffer, scratch: *model.ForwardScratch, prompt: []const u8, max_tokens: usize, thread_pool: *std.Thread.Pool, stdout: anytype, allocator: std.mem.Allocator, memory_opt: ?*memory.DiffArchive, quiescence_opt: ?*quiescence.QuiescenceTracker, gpu_opt: ?*gpu.model_gpu.GpuModelContext, clock_ptr: *usize, reset_ring: bool) !void {
     const prompt_tokens = try tok.encode(allocator, prompt, true);
     defer allocator.free(prompt_tokens);
     if (reset_ring) ring.reset();

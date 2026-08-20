@@ -10,6 +10,7 @@ pub const model_types = @import("../model/types.zig");
 pub const quant = @import("../quant.zig");
 
 pub const GpuLayerWeights = struct {
+    input_norm: buffer.GpuBuffer,
     q_proj: buffer.GpuBuffer,
     k_proj: buffer.GpuBuffer,
     v_proj: buffer.GpuBuffer,
@@ -19,10 +20,13 @@ pub const GpuLayerWeights = struct {
     down_proj: buffer.GpuBuffer,
     pre_ffn_norm: buffer.GpuBuffer,
     post_attn_norm: buffer.GpuBuffer,
+    post_ffn_norm: buffer.GpuBuffer,
     has_post_attn_norm: bool,
+    has_post_ffn_norm: bool,
     desc: descriptors.LayerDescriptorSets,
 
     pub fn deinit(self: *GpuLayerWeights) void {
+        self.post_ffn_norm.deinit();
         self.post_attn_norm.deinit();
         self.pre_ffn_norm.deinit();
         self.down_proj.deinit();
@@ -32,6 +36,7 @@ pub const GpuLayerWeights = struct {
         self.v_proj.deinit();
         self.k_proj.deinit();
         self.q_proj.deinit();
+        self.input_norm.deinit();
     }
 };
 
@@ -83,7 +88,7 @@ pub const GpuModelContext = struct {
         var engine = try kernels.GpuEngine.init(ctx, mode);
         errdefer engine.deinit();
 
-        const max_sets: u32 = @intCast(m.layers.len * 12 + 8);
+        const max_sets: u32 = @intCast(m.layers.len * 14 + 8);
         var desc_mgr = try descriptors.DescriptorManager.init(ctx, max_sets);
         errdefer desc_mgr.deinit();
 
@@ -111,6 +116,7 @@ pub const GpuModelContext = struct {
             const q_dim = l.q_proj.len / H;
             const kv_dim = l.k_proj.len / H;
             var w = GpuLayerWeights{
+                .input_norm = try createNormBuffer(ctx, l.input_layernorm, H),
                 .q_proj = try createWeightBuffer(ctx, l.q_proj, q_dim, H, mode),
                 .k_proj = try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
                 .v_proj = if (l.v_proj.len > 0) try createWeightBuffer(ctx, l.v_proj, kv_dim, H, mode) else try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
@@ -120,11 +126,15 @@ pub const GpuModelContext = struct {
                 .down_proj = try createWeightBuffer(ctx, l.down_proj, H, I, mode),
                 .pre_ffn_norm = try createNormBuffer(ctx, l.pre_feedforward_layernorm, H),
                 .post_attn_norm = try createNormBuffer(ctx, if (l.post_attention_layernorm) |p| p else &.{}, H),
+                .post_ffn_norm = try createNormBuffer(ctx, if (l.post_feedforward_layernorm) |p| p else &.{}, H),
                 .has_post_attn_norm = (l.post_attention_layernorm != null),
+                .has_post_ffn_norm = (l.post_feedforward_layernorm != null),
                 .desc = .{
+                    .input_norm = try desc_mgr.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
                     .q_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .k_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .v_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
+                    .attn = try desc_mgr.allocateSet(engine.attn_pipe.desc_set_layout),
                     .o_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .gate_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .up_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
@@ -132,12 +142,15 @@ pub const GpuModelContext = struct {
                     .down_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .gate_up_swiglu = try desc_mgr.allocateSet(engine.gate_up_pipe.desc_set_layout),
                     .pre_ffn_norm = try desc_mgr.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
-                    .post_attn_norm = try desc_mgr.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
+                    .post_attn_norm = try desc_mgr.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
+                    .post_ffn_norm = try desc_mgr.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
                 },
             };
+            desc_mgr.bindBuffers(w.desc.input_norm, &.{ &buf_x, &buf_mlp_out, &w.input_norm, &buf_normed_x });
             desc_mgr.bindBuffers(w.desc.q_proj, &.{ &w.q_proj, &buf_normed_x, &buf_q });
             desc_mgr.bindBuffers(w.desc.k_proj, &.{ &w.k_proj, &buf_normed_x, &buf_k });
             desc_mgr.bindBuffers(w.desc.v_proj, &.{ &w.v_proj, &buf_normed_x, &buf_v });
+            desc_mgr.bindBuffers(w.desc.attn, &.{ &buf_q, &buf_k, &buf_v, &buf_x, &buf_attn_out });
             desc_mgr.bindBuffers(w.desc.o_proj, &.{ &w.o_proj, &buf_attn_out, &buf_mlp_out });
             desc_mgr.bindBuffers(w.desc.gate_proj, &.{ &w.gate_proj, &buf_normed_x, &buf_gate });
             desc_mgr.bindBuffers(w.desc.up_proj, &.{ &w.up_proj, &buf_normed_x, &buf_up });
@@ -145,7 +158,8 @@ pub const GpuModelContext = struct {
             desc_mgr.bindBuffers(w.desc.down_proj, &.{ &w.down_proj, &buf_act, &buf_mlp_out });
             desc_mgr.bindBuffers(w.desc.gate_up_swiglu, &.{ &w.gate_proj, &w.up_proj, &buf_normed_x, &buf_act });
             desc_mgr.bindBuffers(w.desc.pre_ffn_norm, &.{ &buf_x, &buf_mlp_out, &w.pre_ffn_norm, &buf_normed_x });
-            desc_mgr.bindBuffers(w.desc.post_attn_norm, &.{ &buf_mlp_out, &buf_mlp_out, &w.post_attn_norm, &buf_mlp_out });
+            desc_mgr.bindBuffers(w.desc.post_attn_norm, &.{ &buf_mlp_out, &w.post_attn_norm, &buf_mlp_out });
+            desc_mgr.bindBuffers(w.desc.post_ffn_norm, &.{ &buf_mlp_out, &w.post_ffn_norm, &buf_mlp_out });
             gpu_layers[i] = w;
         }
 
@@ -154,24 +168,11 @@ pub const GpuModelContext = struct {
         desc_mgr.bindBuffers(desc_logits, &.{ &embed_tokens, &buf_normed_x, &buf_logits });
 
         return .{
-            .allocator = allocator,
-            .ctx = ctx,
-            .engine = engine,
-            .desc_mgr = desc_mgr,
-            .layers = gpu_layers,
-            .embed_tokens = embed_tokens,
-            .desc_logits = desc_logits,
-            .buf_x = buf_x,
-            .buf_normed_x = buf_normed_x,
-            .buf_q = buf_q,
-            .buf_k = buf_k,
-            .buf_v = buf_v,
-            .buf_attn_out = buf_attn_out,
-            .buf_gate = buf_gate,
-            .buf_up = buf_up,
-            .buf_act = buf_act,
-            .buf_mlp_out = buf_mlp_out,
-            .buf_logits = buf_logits,
+            .allocator = allocator, .ctx = ctx, .engine = engine, .desc_mgr = desc_mgr,
+            .layers = gpu_layers, .embed_tokens = embed_tokens, .desc_logits = desc_logits,
+            .buf_x = buf_x, .buf_normed_x = buf_normed_x, .buf_q = buf_q, .buf_k = buf_k,
+            .buf_v = buf_v, .buf_attn_out = buf_attn_out, .buf_gate = buf_gate, .buf_up = buf_up,
+            .buf_act = buf_act, .buf_mlp_out = buf_mlp_out, .buf_logits = buf_logits,
         };
     }
 
