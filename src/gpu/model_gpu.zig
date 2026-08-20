@@ -109,6 +109,7 @@ pub const GpuModelContext = struct {
                     .up_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .swiglu = try desc_mgr.allocateSet(engine.swiglu_pipe.desc_set_layout),
                     .down_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
+                    .gate_up_swiglu = try desc_mgr.allocateSet(engine.gate_up_pipe.desc_set_layout),
                 },
             };
             desc_mgr.bindBuffers(w.desc.q_proj, &.{ &w.q_proj, &buf_normed_x, &buf_q });
@@ -119,6 +120,7 @@ pub const GpuModelContext = struct {
             desc_mgr.bindBuffers(w.desc.up_proj, &.{ &w.up_proj, &buf_normed_x, &buf_up });
             desc_mgr.bindBuffers(w.desc.swiglu, &.{ &buf_gate, &buf_up, &buf_act });
             desc_mgr.bindBuffers(w.desc.down_proj, &.{ &w.down_proj, &buf_act, &buf_mlp_out });
+            desc_mgr.bindBuffers(w.desc.gate_up_swiglu, &.{ &w.gate_proj, &w.up_proj, &buf_normed_x, &buf_act });
             gpu_layers[i] = w;
         }
 

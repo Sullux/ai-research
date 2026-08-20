@@ -12,6 +12,7 @@ pub const GpuEngine = struct {
     mode: quant.QuantMode,
     gemv_pipe: pipeline.ComputePipeline,
     swiglu_pipe: pipeline.ComputePipeline,
+    gate_up_pipe: pipeline.ComputePipeline,
     cmd_pool: types.VkCommandPool,
     cmd_buf: types.VkCommandBuffer,
     fence: types.VkFence,
@@ -27,6 +28,9 @@ pub const GpuEngine = struct {
 
         var swiglu = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4);
         errdefer swiglu.deinit();
+
+        var gate_up = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, 4, 8);
+        errdefer gate_up.deinit();
 
         const cp_info = types_dispatch.VkCommandPoolCreateInfo{ .queueFamilyIndex = ctx.queue_family_index };
         var pool: types.VkCommandPool = null;
@@ -46,6 +50,7 @@ pub const GpuEngine = struct {
             .mode = mode,
             .gemv_pipe = gemv,
             .swiglu_pipe = swiglu,
+            .gate_up_pipe = gate_up,
             .cmd_pool = pool,
             .cmd_buf = cmd,
             .fence = fence,
@@ -55,6 +60,7 @@ pub const GpuEngine = struct {
     pub fn deinit(self: *GpuEngine) void {
         self.ctx.api.vkDestroyFence(self.ctx.device, self.fence, null);
         self.ctx.api.vkDestroyCommandPool(self.ctx.device, self.cmd_pool, null);
+        self.gate_up_pipe.deinit();
         self.swiglu_pipe.deinit();
         self.gemv_pipe.deinit();
     }
@@ -69,6 +75,12 @@ pub const GpuEngine = struct {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
         const workgroups: u32 = if (self.mode == .q4) @intCast(m) else @intCast((m + 63) / 64);
         self.gemv_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+    }
+
+    pub fn recordGateUpSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
+        const pc = [_]u32{ @intCast(m), @intCast(k) };
+        const workgroups: u32 = @intCast(m);
+        self.gate_up_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, dim: usize) void {
@@ -107,13 +119,5 @@ pub const GpuEngine = struct {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
         const workgroups: u32 = if (self.mode == .q4) @intCast(m) else @intCast((m + 63) / 64);
         try self.gemv_pipe.dispatch(std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
-    }
-
-    pub fn dispatchSwiGlu(self: *const GpuEngine, gate: *const buffer.GpuBuffer, up: *const buffer.GpuBuffer, out: *const buffer.GpuBuffer, dim: usize) !void {
-        const bufs = [_]*const buffer.GpuBuffer{ gate, up, out };
-        try self.swiglu_pipe.bindBuffers(&bufs);
-        const pc = [_]u32{@intCast(dim)};
-        const workgroups: u32 = @intCast((dim + 63) / 64);
-        try self.swiglu_pipe.dispatch(std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 };

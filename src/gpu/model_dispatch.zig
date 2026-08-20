@@ -63,13 +63,19 @@ pub fn gpuDispatchMlp(
     @memcpy(gpu.buf_normed_x.asSlice(f32)[0..H], normed_x[0..H]);
 
     gpu.engine.beginBatch();
-    gpu.engine.recordGemv(l.desc.gate_proj, inter, H);
-    gpu.engine.recordGemv(l.desc.up_proj, inter, H);
-    gpu.engine.recordBarrier(&gpu.buf_gate);
-    gpu.engine.recordBarrier(&gpu.buf_up);
-    gpu.engine.recordSwiGlu(l.desc.swiglu, inter);
-    gpu.engine.recordBarrier(&gpu.buf_act);
-    gpu.engine.recordGemv(l.desc.down_proj, H, inter);
+    if (gpu.engine.mode == .q4) {
+        gpu.engine.recordGateUpSwiGlu(l.desc.gate_up_swiglu, inter, H);
+        gpu.engine.recordBarrier(&gpu.buf_act);
+        gpu.engine.recordGemv(l.desc.down_proj, H, inter);
+    } else {
+        gpu.engine.recordGemv(l.desc.gate_proj, inter, H);
+        gpu.engine.recordGemv(l.desc.up_proj, inter, H);
+        gpu.engine.recordBarrier(&gpu.buf_gate);
+        gpu.engine.recordBarrier(&gpu.buf_up);
+        gpu.engine.recordSwiGlu(l.desc.swiglu, inter);
+        gpu.engine.recordBarrier(&gpu.buf_act);
+        gpu.engine.recordGemv(l.desc.down_proj, H, inter);
+    }
     gpu.engine.submitBatch() catch return false;
 
     @memcpy(mlp_out[0..H], gpu.buf_mlp_out.asSlice(f32)[0..H]);

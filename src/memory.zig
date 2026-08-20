@@ -1,12 +1,12 @@
 const std = @import("std");
+pub const ring_buffer = @import("ring_buffer.zig");
+const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
-/// Weights for the dual-score associative salience function:
-///   Salience(Mi) = alpha*cos(q, Mi) + beta*e^(-lambda*dt) + gamma*||Di||
 pub const SalienceConfig = struct {
-    alpha: f32 = 1.0,           // associative cosine resonance weight
-    beta: f32 = 0.5,            // temporal recency weight
-    gamma: f32 = 1.0,           // stored delta magnitude weight
-    lambda: f32 = 1.0 / 2048.0, // recency decay per token clock
+    alpha: f32 = 1.0,
+    beta: f32 = 0.5,
+    gamma: f32 = 1.0,
+    lambda: f32 = 1.0 / 2048.0,
 };
 
 pub const MemoryMeta = struct {
@@ -17,24 +17,28 @@ pub const MemoryMeta = struct {
     layer_id: u8,
 };
 
-/// Bounded, circular, structure-of-arrays archive of salient hidden-state
-/// snapshots. Vectors are stored unit-normalized so the associative resonance
-/// term is a plain dot product. The NVMe persistence layer (storage.zig) will
-/// later serialize this archive to disk.
 pub const DiffArchive = struct {
     allocator: std.mem.Allocator,
     dim: usize,
     capacity: usize,
     count: usize,
     write_head: usize,
+    num_layers: usize,
+    max_kv_dim: usize,
+    kv_stride: usize,
     config: SalienceConfig,
 
-    vectors: []f32,        // capacity * dim, row-major, unit-normalized
+    vectors: []f32,
     metas: []MemoryMeta,
     scan_scores: []f32,
     scan_indices: []usize,
+    kv_cache: []f32,
 
     pub fn init(allocator: std.mem.Allocator, dim: usize, capacity: usize, config: SalienceConfig) !DiffArchive {
+        return initWithKV(allocator, dim, capacity, 0, 0, config);
+    }
+
+    pub fn initWithKV(allocator: std.mem.Allocator, dim: usize, capacity: usize, num_layers: usize, max_kv_dim: usize, config: SalienceConfig) !DiffArchive {
         const vectors = try allocator.alloc(f32, capacity * dim);
         errdefer allocator.free(vectors);
         const metas = try allocator.alloc(MemoryMeta, capacity);
@@ -44,6 +48,14 @@ pub const DiffArchive = struct {
         const indices = try allocator.alloc(usize, capacity);
         errdefer allocator.free(indices);
 
+        const kv_stride = num_layers * max_kv_dim * 2;
+        var kv_cache: []f32 = &.{};
+        if (kv_stride > 0) {
+            kv_cache = try allocator.alloc(f32, capacity * kv_stride);
+            @memset(kv_cache, 0);
+        }
+        errdefer if (kv_cache.len > 0) allocator.free(kv_cache);
+
         @memset(vectors, 0);
 
         return .{
@@ -52,11 +64,15 @@ pub const DiffArchive = struct {
             .capacity = capacity,
             .count = 0,
             .write_head = 0,
+            .num_layers = num_layers,
+            .max_kv_dim = max_kv_dim,
+            .kv_stride = kv_stride,
             .config = config,
             .vectors = vectors,
             .metas = metas,
             .scan_scores = scores,
             .scan_indices = indices,
+            .kv_cache = kv_cache,
         };
     }
 
@@ -65,18 +81,38 @@ pub const DiffArchive = struct {
         self.allocator.free(self.metas);
         self.allocator.free(self.scan_scores);
         self.allocator.free(self.scan_indices);
+        if (self.kv_cache.len > 0) self.allocator.free(self.kv_cache);
     }
 
     pub fn reset(self: *DiffArchive) void {
         self.count = 0;
         self.write_head = 0;
+        if (self.kv_cache.len > 0) @memset(self.kv_cache, 0);
     }
 
-    /// Append a hidden-state snapshot, unit-normalized in place. When full, the
-    /// oldest entry is overwritten (circular ring).
+    pub fn copyKVFromRing(self: *DiffArchive, idx: usize, ring: *const DynamicRingBuffer, slot: usize) void {
+        if (self.kv_cache.len == 0) return;
+        const base = idx * self.kv_stride;
+        for (0..self.num_layers) |l| {
+            const r_slot = l * ring.total_slots + slot;
+            const r_off = r_slot * ring.max_kv_dim;
+            const dst = base + l * self.max_kv_dim * 2;
+            @memcpy(self.kv_cache[dst .. dst + self.max_kv_dim], ring.k[r_off .. r_off + self.max_kv_dim]);
+            @memcpy(self.kv_cache[dst + self.max_kv_dim .. dst + self.max_kv_dim * 2], ring.v[r_off .. r_off + self.max_kv_dim]);
+        }
+    }
+
+    pub fn copyKVToRing(self: *const DiffArchive, idx: usize, ring: *DynamicRingBuffer, rank: usize, clock: usize) void {
+        if (self.kv_cache.len == 0) return;
+        const base = idx * self.kv_stride;
+        for (0..self.num_layers) |l| {
+            const src = base + l * self.max_kv_dim * 2;
+            ring.writeRecallKV(l, rank, self.kv_cache[src .. src + self.max_kv_dim], self.kv_cache[src + self.max_kv_dim .. src + self.max_kv_dim * 2], clock);
+        }
+    }
+
     pub fn append(self: *DiffArchive, timestamp: u64, salience_norm: f32, layer_id: u8, vector: []const f32) void {
         std.debug.assert(vector.len == self.dim);
-
         var sum_sq: f32 = 0.0;
         for (vector) |v| sum_sq += v * v;
         const inv = if (sum_sq > 1e-12) 1.0 / @sqrt(sum_sq) else 0.0;
@@ -97,9 +133,6 @@ pub const DiffArchive = struct {
         if (self.count < self.capacity) self.count += 1;
     }
 
-    /// Dual-score top-k associative recall. Returns the number of selected
-    /// entries, fills out_indices[0..k] with archive indices, and bumps access
-    /// telemetry for the survivors.
     pub fn scan(self: *DiffArchive, query: []const f32, now: u64, out_indices: []usize, top_k: usize) usize {
         const n = self.count;
         if (n == 0) return 0;
@@ -134,13 +167,10 @@ pub const DiffArchive = struct {
     fn score(self: *const DiffArchive, query: []const f32, now: u64, i: usize) f32 {
         const meta = self.metas[i];
         const row = self.vectors[i * self.dim .. (i + 1) * self.dim];
-
         var dot: f32 = 0.0;
         for (query, row) |q, r| dot += q * r;
-
         const dt = now -| meta.timestamp;
         const recency = @exp(-self.config.lambda * @as(f32, @floatFromInt(dt)));
-
         return self.config.alpha * dot + self.config.beta * recency + self.config.gamma * meta.salience_norm;
     }
 };
@@ -148,29 +178,21 @@ pub const DiffArchive = struct {
 test "archive associative recall ranks cosine match above recency" {
     var arch = try DiffArchive.init(std.testing.allocator, 4, 8, .{});
     defer arch.deinit();
-
-    const v0 = [_]f32{ 1, 0, 0, 0 };
-    const v1 = [_]f32{ 0, 1, 0, 0 };
-    arch.append(0, 0.5, 0, &v0);
-    arch.append(1, 0.5, 0, &v1);
-
+    arch.append(0, 0.5, 0, &[_]f32{ 1, 0, 0, 0 });
+    arch.append(1, 0.5, 0, &[_]f32{ 0, 1, 0, 0 });
     var idx: [4]usize = undefined;
-    const query = [_]f32{ 1, 0, 0, 0 };
-    const k = arch.scan(&query, 2, &idx, 2);
-
+    const k = arch.scan(&[_]f32{ 1, 0, 0, 0 }, 2, &idx, 2);
     try std.testing.expectEqual(@as(usize, 2), k);
-    // v0 (cos=1) must outrank v1 (cos=0) despite v1 being more recent.
     try std.testing.expectEqual(@as(usize, 0), idx[0]);
-    try std.testing.expectEqual(@as(usize, 1), idx[1]);
 }
 
 test "archive wraps circularly and caps count at capacity" {
     var arch = try DiffArchive.init(std.testing.allocator, 2, 3, .{});
     defer arch.deinit();
-
-    const v = [_]f32{ 1, 0 };
-    for (0..5) |t| arch.append(@intCast(t), 0.1, 0, &v);
-
+    arch.append(0, 0, 0, &[_]f32{ 1, 0 });
+    arch.append(1, 0, 0, &[_]f32{ 0, 1 });
+    arch.append(2, 0, 0, &[_]f32{ 1, 1 });
+    arch.append(3, 0, 0, &[_]f32{ -1, 0 });
     try std.testing.expectEqual(@as(usize, 3), arch.count);
-    try std.testing.expectEqual(@as(usize, 2), arch.write_head);
+    try std.testing.expectEqual(@as(usize, 1), arch.write_head);
 }

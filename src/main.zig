@@ -97,7 +97,7 @@ pub fn main() !void {
     var store: ?storage.PersistentDiffStore = null;
     defer if (store) |*s| s.close();
     if (memory_enabled) {
-        var arch = try memory.DiffArchive.init(allocator, config.hidden_size, MEMORY_CAPACITY, .{});
+        var arch = try memory.DiffArchive.initWithKV(allocator, config.hidden_size, MEMORY_CAPACITY, config.num_hidden_layers, max_kv_dim, .{});
         if (storage_path) |sp| {
             var s = try storage.PersistentDiffStore.open(sp, MEMORY_CAPACITY, config.hidden_size);
             _ = s.loadIntoArchive(&arch);
