@@ -67,6 +67,13 @@ pub const VK_BUFFER_USAGE_TRANSFER_SRC_BIT: u32 = 0x00000001;
 pub const VK_BUFFER_USAGE_TRANSFER_DST_BIT: u32 = 0x00000002;
 pub const VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT: u32 = 0x00000010;
 pub const VK_BUFFER_USAGE_STORAGE_BUFFER_BIT: u32 = 0x00000020;
+pub const VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT: u32 = 0x00000100;
+
+pub const VkDispatchIndirectCommand = extern struct {
+    x: u32,
+    y: u32,
+    z: u32,
+};
 
 pub const VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: u32 = 7;
 pub const VK_SHADER_STAGE_COMPUTE_BIT: u32 = 0x00000020;
@@ -182,15 +189,5 @@ pub const VkBufferCreateInfo = extern struct {
     pQueueFamilyIndices: ?*const u32 = null,
 };
 
-pub const VkMemoryRequirements = extern struct {
-    size: u64,
-    alignment: u64,
-    memoryTypeBits: u32,
-};
-
-pub const VkMemoryAllocateInfo = extern struct {
-    sType: VkStructureType = .MEMORY_ALLOCATE_INFO,
-    pNext: ?*const anyopaque = null,
-    allocationSize: u64,
-    memoryTypeIndex: u32,
-};
+pub const VkMemoryRequirements = extern struct { size: u64, alignment: u64, memoryTypeBits: u32 };
+pub const VkMemoryAllocateInfo = extern struct { sType: VkStructureType = .MEMORY_ALLOCATE_INFO, pNext: ?*const anyopaque = null, allocationSize: u64, memoryTypeIndex: u32 };

@@ -1,13 +1,12 @@
 struct PushConstants {
-    clock: u32,
     num_q_heads: u32,
     num_kv_heads: u32,
     head_dim: u32,
     rotary_dim: u32,
-    slot_idx: u32,
     k_eq_v: u32,
     rope_theta: f32,
     eps: f32,
+    pad: u32,
 };
 
 @group(0) @binding(0) var<storage, read> Q_in: array<f32>;
@@ -18,6 +17,7 @@ struct PushConstants {
 @group(0) @binding(5) var<storage, read_write> Q_out: array<f32>;
 @group(0) @binding(6) var<storage, read_write> K_cache: array<f32>;
 @group(0) @binding(7) var<storage, read_write> V_cache: array<f32>;
+@group(0) @binding(8) var<storage, read> Step_params: array<u32>;
 var<push_constant> pc: PushConstants;
 
 var<workgroup> s_sum_sq: array<f32, 32>;
@@ -27,6 +27,8 @@ fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
+    let clock = Step_params[0];
+    let slot_idx = Step_params[1];
     let head_idx = wgid.x;
     let lane = lid.x;
     let D = pc.head_dim;
@@ -71,7 +73,7 @@ fn main(
 
             let freq_exp = (2.0 * f32(d)) / f32(rot_D);
             let freq = 1.0 / pow(pc.rope_theta, freq_exp);
-            let angle = f32(pc.clock) * freq;
+            let angle = f32(clock) * freq;
             let cos_a = cos(angle);
             let sin_a = sin(angle);
 
@@ -94,7 +96,7 @@ fn main(
         }
         let in_head_offset = kv_head * D;
         let kv_dim = pc.num_kv_heads * D;
-        let cache_head_offset = pc.slot_idx * kv_dim + kv_head * D;
+        let cache_head_offset = slot_idx * kv_dim + kv_head * D;
 
         // 1. RMS of K head
         var sum_sq: f32 = 0.0;
@@ -130,7 +132,7 @@ fn main(
 
             let freq_exp = (2.0 * f32(d)) / f32(rot_D);
             let freq = 1.0 / pow(pc.rope_theta, freq_exp);
-            let angle = f32(pc.clock) * freq;
+            let angle = f32(clock) * freq;
             let cos_a = cos(angle);
             let sin_a = sin(angle);
 

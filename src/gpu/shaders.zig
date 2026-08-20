@@ -10,6 +10,7 @@ pub const fused_q8 = @import("shaders_fused_q8.zig");
 pub const fused = @import("shaders_fused.zig");
 pub const attn = @import("shaders_attn.zig");
 pub const argmax = @import("shaders_argmax.zig");
+pub const quiescence = @import("shaders_quiescence.zig");
 pub const qkv_prep = @import("shaders_qkv_prep.zig");
 pub const qkv_rope = @import("shaders_qkv_rope.zig");
 
@@ -25,5 +26,6 @@ pub const FUSED_GATE_UP_SWIGLU_Q8_SPIRV = fused_q8.FUSED_GATE_UP_SWIGLU_Q8_SPIRV
 pub const FUSED_SWIGLU_SPIRV = fused.FUSED_SWIGLU_SPIRV;
 pub const DECODE_ATTENTION_SPIRV = attn.DECODE_ATTENTION_SPIRV;
 pub const ARGMAX_SPIRV = argmax.ARGMAX_SPIRV;
+pub const QUIESCENCE_GATE_SPIRV = quiescence.QUIESCENCE_GATE_SPIRV;
 pub const QKV_PREP_SPIRV = qkv_prep.QKV_PREP_SPIRV;
 pub const QKV_ROPE_SPIRV = qkv_rope.QKV_ROPE_SPIRV;

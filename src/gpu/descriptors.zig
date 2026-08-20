@@ -27,9 +27,30 @@ pub const DescriptorManager = struct {
     ctx: *const context.GpuContext,
     pool: types.VkDescriptorPool,
 
+    pub fn allocateLayerSets(self: *DescriptorManager, engine: anytype) !LayerDescriptorSets {
+        return .{
+            .input_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
+            .q_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .k_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .v_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .qkv_rope = try self.allocateSet(engine.qkv_rope_pipe.desc_set_layout),
+            .attn = try self.allocateSet(engine.attn_pipe.desc_set_layout),
+            .o_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .gate_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .up_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .swiglu = try self.allocateSet(engine.swiglu_pipe.desc_set_layout),
+            .down_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .gate_up_swiglu = try self.allocateSet(engine.gate_up_pipe.desc_set_layout),
+            .pre_ffn_norm = try self.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
+            .post_attn_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
+            .post_ffn_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
+            .post_ffn_add = try self.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
+        };
+    }
+
     pub fn init(ctx: *const context.GpuContext, max_sets: u32) !DescriptorManager {
         const pool_size = [_]types_dispatch.VkDescriptorPoolSize{
-            .{ .descriptorType = types.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = max_sets * 8 },
+            .{ .descriptorType = types.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = max_sets * 16 },
         };
         const pool_info = types_dispatch.VkDescriptorPoolCreateInfo{
             .maxSets = max_sets,
@@ -57,9 +78,9 @@ pub const DescriptorManager = struct {
     }
 
     pub fn bindBuffers(self: *const DescriptorManager, set: types.VkDescriptorSet, bufs: []const *const buffer.GpuBuffer) void {
-        var writes: [8]types_dispatch.VkWriteDescriptorSet = undefined;
-        var infos: [8]types_dispatch.VkDescriptorBufferInfo = undefined;
-        const count = @min(bufs.len, 8);
+        var writes: [16]types_dispatch.VkWriteDescriptorSet = undefined;
+        var infos: [16]types_dispatch.VkDescriptorBufferInfo = undefined;
+        const count = @min(bufs.len, 16);
 
         for (0..count) |i| {
             infos[i] = .{

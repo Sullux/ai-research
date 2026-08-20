@@ -41,6 +41,7 @@ pub const PFN_vkCmdBindDescriptorSets = *const fn (types.VkCommandBuffer, u32, t
 pub const PFN_vkCmdPushConstants = *const fn (types.VkCommandBuffer, types.VkPipelineLayout, u32, u32, u32, *const anyopaque) callconv(.C) void;
 pub const PFN_vkCmdPipelineBarrier = *const fn (types.VkCommandBuffer, u32, u32, u32, u32, ?*const anyopaque, u32, ?[*]const types_dispatch.VkBufferMemoryBarrier, u32, ?*const anyopaque) callconv(.C) void;
 pub const PFN_vkCmdDispatch = *const fn (types.VkCommandBuffer, u32, u32, u32) callconv(.C) void;
+pub const PFN_vkCmdDispatchIndirect = *const fn (types.VkCommandBuffer, types.VkBuffer, u64) callconv(.C) void;
 pub const PFN_vkCreateFence = *const fn (types.VkDevice, *const types_dispatch.VkFenceCreateInfo, ?*const anyopaque, *types.VkFence) callconv(.C) types.VkResult;
 pub const PFN_vkDestroyFence = *const fn (types.VkDevice, types.VkFence, ?*const anyopaque) callconv(.C) void;
 pub const PFN_vkResetFences = *const fn (types.VkDevice, u32, [*]const types.VkFence) callconv(.C) types.VkResult;
@@ -91,6 +92,7 @@ pub const VulkanApi = struct {
     vkCmdPushConstants: PFN_vkCmdPushConstants,
     vkCmdPipelineBarrier: PFN_vkCmdPipelineBarrier,
     vkCmdDispatch: PFN_vkCmdDispatch,
+    vkCmdDispatchIndirect: PFN_vkCmdDispatchIndirect,
     vkCreateFence: PFN_vkCreateFence,
     vkDestroyFence: PFN_vkDestroyFence,
     vkResetFences: PFN_vkResetFences,
@@ -152,6 +154,7 @@ pub const VulkanApi = struct {
             .vkCmdPushConstants = lib.lookup(PFN_vkCmdPushConstants, "vkCmdPushConstants") orelse return error.SymbolNotFound,
             .vkCmdPipelineBarrier = lib.lookup(PFN_vkCmdPipelineBarrier, "vkCmdPipelineBarrier") orelse return error.SymbolNotFound,
             .vkCmdDispatch = lib.lookup(PFN_vkCmdDispatch, "vkCmdDispatch") orelse return error.SymbolNotFound,
+            .vkCmdDispatchIndirect = lib.lookup(PFN_vkCmdDispatchIndirect, "vkCmdDispatchIndirect") orelse return error.SymbolNotFound,
             .vkCreateFence = lib.lookup(PFN_vkCreateFence, "vkCreateFence") orelse return error.SymbolNotFound,
             .vkDestroyFence = lib.lookup(PFN_vkDestroyFence, "vkDestroyFence") orelse return error.SymbolNotFound,
             .vkResetFences = lib.lookup(PFN_vkResetFences, "vkResetFences") orelse return error.SymbolNotFound,

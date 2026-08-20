@@ -53,10 +53,10 @@ pub const GpuEngine = struct {
         var rms = try pipeline.ComputePipeline.init(ctx, &shaders.RMSNORM_SPIRV, 3, 8);
         errdefer rms.deinit();
 
-        var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 5, 20);
+        var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 6, 16);
         errdefer attn.deinit();
 
-        var qkv_rope = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_ROPE_SPIRV, 8, 32);
+        var qkv_rope = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_ROPE_SPIRV, 9, 32);
         errdefer qkv_rope.deinit();
 
         var argmax = try pipeline.ComputePipeline.init(ctx, &shaders.ARGMAX_SPIRV, 2, 4);
@@ -103,85 +103,81 @@ pub const GpuEngine = struct {
         _ = self.ctx.api.vkBeginCommandBuffer(self.cmd_buf, &begin_info);
     }
 
-    pub fn recordGemv(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
+    pub fn recordGemv(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 3) / 4);
-        self.gemv_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+        self.gemv_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
     }
-
-    pub fn recordGemvLogits(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
+    pub fn recordGemvLogits(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 3) / 4);
-        self.gemv_logits_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+        self.gemv_logits_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
     }
-
-    pub fn recordGateUpSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
+    pub fn recordGateUpSwiGlu(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast((m + 3) / 4);
-        self.gate_up_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+        self.gate_up_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
     }
-
-    pub fn recordSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, dim: usize) void {
+    pub fn recordSwiGlu(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, dim: usize) void {
         const pc = [_]u32{@intCast(dim)};
-        const workgroups: u32 = @intCast((dim + 63) / 64);
-        self.swiglu_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+        self.swiglu_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((dim + 63) / 64), 1, 1);
     }
-
-    pub fn recordAddRmsNorm(self: *const GpuEngine, set: types.VkDescriptorSet, H: usize, eps: f32, scalar: f32) void {
+    pub fn recordAddRmsNorm(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, H: usize, eps: f32, scalar: f32) void {
         const pc = extern struct { h: u32, eps: f32, scalar: f32 }{ .h = @intCast(H), .eps = eps, .scalar = scalar };
-        self.add_rmsnorm_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
+        self.add_rmsnorm_pipe.record(cmd, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
-
-    pub fn recordRmsNorm(self: *const GpuEngine, set: types.VkDescriptorSet, H: usize, eps: f32) void {
+    pub fn recordRmsNorm(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, H: usize, eps: f32) void {
         const pc = extern struct { h: u32, eps: f32 }{ .h = @intCast(H), .eps = eps };
-        self.rmsnorm_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
+        self.rmsnorm_pipe.record(cmd, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
 
-    pub fn recordDecodeAttn(self: *const GpuEngine, set: types.VkDescriptorSet, n_active: usize, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, num_q_heads: usize) void {
-        const pc = extern struct { n_active: u32, head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32 }{
-            .n_active = @intCast(n_active),
-            .head_dim = @intCast(head_dim),
-            .kv_dim = @intCast(kv_dim),
-            .gqa_ratio = @intCast(gqa_ratio),
-            .inv_sqrt_dim = inv_sqrt_dim,
+    pub fn recordDecodeAttn(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, num_q_heads: usize) void {
+        const pc = extern struct { head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32 }{
+            .head_dim = @intCast(head_dim), .kv_dim = @intCast(kv_dim), .gqa_ratio = @intCast(gqa_ratio), .inv_sqrt_dim = inv_sqrt_dim,
         };
-        self.attn_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), @intCast(num_q_heads), 1, 1);
+        self.attn_pipe.record(cmd, set, std.mem.asBytes(&pc), @intCast(num_q_heads), 1, 1);
     }
 
-    pub fn recordQkvRope(self: *const GpuEngine, set: types.VkDescriptorSet, clock: usize, num_q: usize, num_kv: usize, head_dim: usize, rotary_dim: usize, slot_idx: usize, k_eq_v: bool, theta: f32, eps: f32) void {
-        const pc = extern struct {
-            clock: u32,
-            num_q: u32,
-            num_kv: u32,
-            head_dim: u32,
-            rotary_dim: u32,
-            slot_idx: u32,
-            k_eq_v: u32,
-            theta: f32,
-            eps: f32,
-        }{
-            .clock = @intCast(clock),
-            .num_q = @intCast(num_q),
-            .num_kv = @intCast(num_kv),
-            .head_dim = @intCast(head_dim),
-            .rotary_dim = @intCast(rotary_dim),
-            .slot_idx = @intCast(slot_idx),
-            .k_eq_v = if (k_eq_v) 1 else 0,
-            .theta = theta,
-            .eps = eps,
+    pub fn recordQkvRope(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, num_q: usize, num_kv: usize, head_dim: usize, rotary_dim: usize, k_eq_v: bool, theta: f32, eps: f32) void {
+        const pc = extern struct { num_q: u32, num_kv: u32, head_dim: u32, rotary_dim: u32, k_eq_v: u32, theta: f32, eps: f32, pad: u32 }{
+            .num_q = @intCast(num_q), .num_kv = @intCast(num_kv), .head_dim = @intCast(head_dim),
+            .rotary_dim = @intCast(rotary_dim), .k_eq_v = if (k_eq_v) 1 else 0, .theta = theta, .eps = eps, .pad = 0,
         };
-        const workgroups: u32 = @intCast(num_q + num_kv);
-        self.qkv_rope_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), workgroups, 1, 1);
+        self.qkv_rope_pipe.record(cmd, set, std.mem.asBytes(&pc), @intCast(num_q + num_kv), 1, 1);
     }
 
-    pub fn recordArgmax(self: *const GpuEngine, set: types.VkDescriptorSet, vocab_size: usize) void {
+    pub fn recordArgmax(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, vocab_size: usize) void {
         const pc = extern struct { v: u32 }{ .v = @intCast(vocab_size) };
-        self.argmax_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
+        self.argmax_pipe.record(cmd, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
 
-    pub fn recordBarrier(self: *const GpuEngine, _: ?*const buffer.GpuBuffer) void {
-        const b = types_dispatch.VkMemoryBarrier{};
-        self.ctx.api.vkCmdPipelineBarrier(self.cmd_buf, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, (&b)[0..1].ptr, 0, null, 0, null);
+    pub fn recordBarrier(self: *const GpuEngine, cmd: types.VkCommandBuffer) void {
+        const b = types_dispatch.VkMemoryBarrier{
+            .srcAccessMask = 0x00000040 | 0x00004000,
+            .dstAccessMask = 0x00000020 | 0x00000040 | 0x00000001,
+        };
+        self.ctx.api.vkCmdPipelineBarrier(
+            cmd,
+            types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | 0x00004000,
+            types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1,
+            (&b)[0..1].ptr,
+            0,
+            null,
+            0,
+            null,
+        );
+    }
+
+    pub fn submitPreRecorded(self: *const GpuEngine, cmd_buf: types.VkCommandBuffer) !void {
+        _ = self.ctx.api.vkResetFences(self.ctx.device, 1, (&self.fence)[0..1].ptr);
+        const submit_info = types_dispatch.VkSubmitInfo{ .commandBufferCount = 1, .pCommandBuffers = (&cmd_buf)[0..1].ptr };
+        if (self.ctx.api.vkQueueSubmit(self.ctx.queue, 1, (&submit_info)[0..1].ptr, self.fence) != .SUCCESS) return error.VkQueueSubmitFailed;
+
+        var spin: usize = 0;
+        while (spin < 500_000) : (spin += 1) {
+            if (self.ctx.api.vkGetFenceStatus(self.ctx.device, self.fence) == .SUCCESS) return;
+            std.atomic.spinLoopHint();
+        }
+        if (self.ctx.api.vkWaitForFences(self.ctx.device, 1, (&self.fence)[0..1].ptr, 1, 5_000_000_000) != .SUCCESS) return error.VkFenceTimeout;
     }
 
     pub fn submitBatch(self: *const GpuEngine) !void {

@@ -1,5 +1,4 @@
 struct PushConstants {
-    n_active: u32,
     head_dim: u32,
     kv_dim: u32,
     gqa_ratio: u32,
@@ -11,6 +10,7 @@ struct PushConstants {
 @group(0) @binding(2) var<storage, read> V_cache: array<f32>;
 @group(0) @binding(3) var<storage, read> Active_slots: array<u32>;
 @group(0) @binding(4) var<storage, read_write> Attn_out: array<f32>;
+@group(0) @binding(5) var<storage, read> Step_params: array<u32>;
 var<push_constant> pc: PushConstants;
 
 var<workgroup> sdata_dot: array<f32, 32>;
@@ -27,7 +27,7 @@ fn main(
     let kv_h = q_head / pc.gqa_ratio;
     let q_offset = q_head * D;
 
-    let S = pc.n_active;
+    let S = Step_params[2];
 
     // 1. Compute dot product scores for all active slots
     for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
