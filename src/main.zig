@@ -11,6 +11,7 @@ pub const storage = @import("storage.zig");
 pub const quiescence = @import("quiescence.zig");
 pub const vq = @import("vq.zig");
 pub const gpu = @import("gpu.zig");
+pub const quant = @import("quant.zig");
 
 const MEMORY_CAPACITY: usize = 8192;
 
@@ -25,7 +26,6 @@ pub fn main() !void {
 
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
-
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -37,6 +37,7 @@ pub fn main() !void {
     var memory_enabled = true;
     var quiescence_enabled = false;
     var gpu_enabled = false;
+    var quant_mode: quant.QuantMode = .none;
     var storage_path: ?[]const u8 = null;
     var prompt_buf = std.ArrayList(u8).init(allocator);
     defer prompt_buf.deinit();
@@ -52,6 +53,9 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) { storage_path = args[arg_idx + 1]; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true;
         } else if (std.mem.eql(u8, arg, "--gpu")) { gpu_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--q8")) { quant_mode = .q8; gpu_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--q4")) { quant_mode = .q4; gpu_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--quant") and arg_idx + 1 < args.len) { quant_mode = quant.QuantMode.fromString(args[arg_idx + 1]); gpu_enabled = true; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--no-memory")) { memory_enabled = false;
         } else {
             if (prompt_buf.items.len > 0) try prompt_buf.append(' ');
@@ -64,11 +68,9 @@ pub fn main() !void {
 
     var config_path_buf: [512]u8 = undefined;
     const config = try model.ModelConfig.loadFromJson(allocator, try std.fmt.bufPrint(&config_path_buf, "{s}/config.json", .{model_dir}));
-
     var tok_path_buf: [512]u8 = undefined;
     var tok = try tokenizer.Tokenizer.loadFromJson(allocator, try std.fmt.bufPrint(&tok_path_buf, "{s}/tokenizer.json", .{model_dir}));
     defer tok.deinit();
-
     var st = try safetensors.SafeTensors.openDir(allocator, model_dir);
     defer st.deinit();
     var m = try model.Model.loadFromSafeTensors(allocator, &st, config);
@@ -76,10 +78,13 @@ pub fn main() !void {
 
     var gpu_ctx: ?gpu.context.GpuContext = if (gpu_enabled) gpu.context.GpuContext.init(allocator) catch null else null;
     defer if (gpu_ctx) |*gc| gc.deinit();
-    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config) catch null else null;
+    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode) catch null else null;
     defer if (gpu_model_ctx) |*gmc| gmc.deinit();
     const gpu_ptr: ?*gpu.model_gpu.GpuModelContext = if (gpu_model_ctx) |*gmc| gmc else null;
-    if (gpu_ctx) |gc| try stdout.print("GPU: {s} (UMA Compute)\n", .{gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)]});
+    if (gpu_ctx) |gc| {
+        const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4 => "Q4_0" };
+        try stdout.print("GPU: {s} (UMA Compute, {s})\n", .{ gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)], mode_tag });
+    }
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
     var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, num_anchors, window_size, num_recall);
@@ -115,8 +120,7 @@ pub fn main() !void {
         return;
     }
 
-    try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\nAnchors: {d}, Window: {d}, Recall: {d}, Total Slots: {d}\n", .{ model_dir, num_anchors, window_size, num_recall, ring.total_slots });
-    try stdout.print("Type your prompt and press Enter. Type 'exit' or Ctrl+C to quit.\n\n", .{});
+    try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\nAnchors: {d}, Window: {d}, Recall: {d}, Total Slots: {d}\n\n", .{ model_dir, num_anchors, window_size, num_recall, ring.total_slots });
 
     var global_clock: usize = 0;
     var line_buf: [4096]u8 = undefined;
@@ -183,15 +187,8 @@ fn runInference(
 }
 
 test {
-    _ = @import("safetensors.zig");
-    _ = @import("tensor.zig");
-    _ = @import("kernels.zig");
-    _ = @import("tokenizer.zig");
-    _ = @import("ring_buffer.zig");
-    _ = @import("diff.zig");
-    _ = @import("memory.zig");
-    _ = @import("storage.zig");
-    _ = @import("quiescence.zig");
-    _ = @import("vq.zig");
-    _ = @import("gpu.zig");
+    _ = @import("safetensors.zig"); _ = @import("tensor.zig"); _ = @import("kernels.zig");
+    _ = @import("tokenizer.zig"); _ = @import("ring_buffer.zig"); _ = @import("diff.zig");
+    _ = @import("memory.zig"); _ = @import("storage.zig"); _ = @import("quiescence.zig");
+    _ = @import("vq.zig"); _ = @import("gpu.zig"); _ = @import("quant.zig");
 }

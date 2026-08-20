@@ -3,14 +3,20 @@ pub const context = @import("context.zig");
 pub const buffer = @import("buffer.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const shaders = @import("shaders.zig");
+pub const quant = @import("../quant.zig");
 
 pub const GpuEngine = struct {
     ctx: *const context.GpuContext,
     gemv_pipe: pipeline.ComputePipeline,
     swiglu_pipe: pipeline.ComputePipeline,
 
-    pub fn init(ctx: *const context.GpuContext) !GpuEngine {
-        var gemv = try pipeline.ComputePipeline.init(ctx, &shaders.GEMV_BF16_SPIRV, 3, 8);
+    pub fn init(ctx: *const context.GpuContext, mode: quant.QuantMode) !GpuEngine {
+        const gemv_spirv = switch (mode) {
+            .none => &shaders.GEMV_BF16_SPIRV,
+            .q8 => &shaders.GEMV_Q8_SPIRV,
+            .q4 => &shaders.GEMV_Q4_SPIRV,
+        };
+        var gemv = try pipeline.ComputePipeline.init(ctx, gemv_spirv, 3, 8);
         errdefer gemv.deinit();
 
         var swiglu = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4);

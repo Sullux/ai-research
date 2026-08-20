@@ -6,6 +6,7 @@ pub const kernels = @import("kernels.zig");
 pub const tensor = @import("../tensor.zig");
 pub const model = @import("../model.zig");
 pub const model_types = @import("../model/types.zig");
+pub const quant = @import("../quant.zig");
 
 pub const GpuLayerWeights = struct {
     q_proj: buffer.GpuBuffer,
@@ -43,15 +44,33 @@ pub const GpuModelContext = struct {
     buf_mlp_out: buffer.GpuBuffer,
     buf_logits: buffer.GpuBuffer,
 
-    fn createWeightBuffer(ctx: *const context.GpuContext, src: []const tensor.bf16) !buffer.GpuBuffer {
-        const byte_size = @as(u64, @intCast(src.len * @sizeOf(tensor.bf16)));
+    fn createWeightBuffer(
+        ctx: *const context.GpuContext,
+        src: []const tensor.bf16,
+        rows: usize,
+        cols: usize,
+        mode: quant.QuantMode,
+    ) !buffer.GpuBuffer {
+        if (mode == .none or src.len == 0) {
+            const byte_size = @as(u64, @intCast(src.len * @sizeOf(tensor.bf16)));
+            var buf = try buffer.GpuBuffer.init(ctx, byte_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            if (src.len > 0) @memcpy(buf.asSlice(u8), std.mem.sliceAsBytes(src));
+            return buf;
+        }
+        const byte_size = @as(u64, @intCast(quant.getQuantizedSizeBytes(rows, cols, mode)));
         var buf = try buffer.GpuBuffer.init(ctx, byte_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        @memcpy(buf.asSlice(u8), std.mem.sliceAsBytes(src));
+        quant.quantizeMatrix(buf.asSlice(u32), @as([]const u16, @ptrCast(src)), rows, cols, mode);
         return buf;
     }
 
-    pub fn init(allocator: std.mem.Allocator, ctx: *const context.GpuContext, m: *const model.Model, config: model_types.ModelConfig) !GpuModelContext {
-        const engine = try kernels.GpuEngine.init(ctx);
+    pub fn init(
+        allocator: std.mem.Allocator,
+        ctx: *const context.GpuContext,
+        m: *const model.Model,
+        config: model_types.ModelConfig,
+        mode: quant.QuantMode,
+    ) !GpuModelContext {
+        const engine = try kernels.GpuEngine.init(ctx, mode);
         const H = config.hidden_size;
         const I = config.intermediate_size;
         const V = config.vocab_size;
@@ -63,18 +82,23 @@ pub const GpuModelContext = struct {
         errdefer allocator.free(gpu_layers);
 
         for (m.layers, 0..) |l, i| {
+            const q_dim = l.q_proj.len / H;
+            const kv_dim = l.k_proj.len / H;
             gpu_layers[i] = .{
-                .q_proj = try createWeightBuffer(ctx, l.q_proj),
-                .k_proj = try createWeightBuffer(ctx, l.k_proj),
-                .v_proj = if (l.v_proj.len > 0) try createWeightBuffer(ctx, l.v_proj) else try createWeightBuffer(ctx, l.k_proj),
-                .o_proj = try createWeightBuffer(ctx, l.o_proj),
-                .gate_proj = try createWeightBuffer(ctx, l.gate_proj),
-                .up_proj = try createWeightBuffer(ctx, l.up_proj),
-                .down_proj = try createWeightBuffer(ctx, l.down_proj),
+                .q_proj = try createWeightBuffer(ctx, l.q_proj, q_dim, H, mode),
+                .k_proj = try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
+                .v_proj = if (l.v_proj.len > 0)
+                    try createWeightBuffer(ctx, l.v_proj, kv_dim, H, mode)
+                else
+                    try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
+                .o_proj = try createWeightBuffer(ctx, l.o_proj, H, q_dim, mode),
+                .gate_proj = try createWeightBuffer(ctx, l.gate_proj, I, H, mode),
+                .up_proj = try createWeightBuffer(ctx, l.up_proj, I, H, mode),
+                .down_proj = try createWeightBuffer(ctx, l.down_proj, H, I, mode),
             };
         }
 
-        const embed_tokens = try createWeightBuffer(ctx, m.embed_tokens);
+        const embed_tokens = try createWeightBuffer(ctx, m.embed_tokens, V, H, mode);
 
         const buf_normed_x = try buffer.GpuBuffer.init(ctx, H * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         const buf_q = try buffer.GpuBuffer.init(ctx, max_q * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
