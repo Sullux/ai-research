@@ -17,7 +17,7 @@ pub const GpuEngine = struct {
     add_rmsnorm_pipe: pipeline.ComputePipeline,
     rmsnorm_pipe: pipeline.ComputePipeline,
     attn_pipe: pipeline.ComputePipeline,
-    qkv_prep_pipe: pipeline.ComputePipeline,
+    qkv_rope_pipe: pipeline.ComputePipeline,
     cmd_pool: types.VkCommandPool,
     cmd_buf: types.VkCommandBuffer,
     fence: types.VkFence,
@@ -50,10 +50,13 @@ pub const GpuEngine = struct {
         var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 5, 20);
         errdefer attn.deinit();
 
-        var qkv_prep = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_PREP_SPIRV, 7, 16);
-        errdefer qkv_prep.deinit();
+        var qkv_rope = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_ROPE_SPIRV, 8, 32);
+        errdefer qkv_rope.deinit();
 
-        const cp_info = types_dispatch.VkCommandPoolCreateInfo{ .queueFamilyIndex = ctx.queue_family_index };
+        const cp_info = types_dispatch.VkCommandPoolCreateInfo{
+            .flags = types.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = ctx.queue_family_index,
+        };
         var pool: types.VkCommandPool = null;
         if (ctx.api.vkCreateCommandPool(ctx.device, &cp_info, null, &pool) != .SUCCESS) return error.VkCmdPoolCreationFailed;
         errdefer ctx.api.vkDestroyCommandPool(ctx.device, pool, null);
@@ -67,33 +70,20 @@ pub const GpuEngine = struct {
         if (ctx.api.vkCreateFence(ctx.device, &fence_info, null, &fence) != .SUCCESS) return error.VkFenceCreationFailed;
 
         return .{
-            .ctx = ctx,
-            .mode = mode,
-            .gemv_pipe = gemv,
-            .gemv_logits_pipe = gemv_logits,
-            .swiglu_pipe = swiglu,
-            .gate_up_pipe = gate_up,
-            .add_rmsnorm_pipe = add_rms,
-            .rmsnorm_pipe = rms,
-            .attn_pipe = attn,
-            .qkv_prep_pipe = qkv_prep,
-            .cmd_pool = pool,
-            .cmd_buf = cmd,
-            .fence = fence,
+            .ctx = ctx, .mode = mode, .gemv_pipe = gemv, .gemv_logits_pipe = gemv_logits,
+            .swiglu_pipe = swiglu, .gate_up_pipe = gate_up, .add_rmsnorm_pipe = add_rms,
+            .rmsnorm_pipe = rms, .attn_pipe = attn, .qkv_rope_pipe = qkv_rope,
+            .cmd_pool = pool, .cmd_buf = cmd, .fence = fence,
         };
     }
 
     pub fn deinit(self: *GpuEngine) void {
+        _ = self.ctx.api.vkQueueWaitIdle(self.ctx.queue);
         self.ctx.api.vkDestroyFence(self.ctx.device, self.fence, null);
         self.ctx.api.vkDestroyCommandPool(self.ctx.device, self.cmd_pool, null);
-        self.qkv_prep_pipe.deinit();
-        self.attn_pipe.deinit();
-        self.rmsnorm_pipe.deinit();
-        self.add_rmsnorm_pipe.deinit();
-        self.gate_up_pipe.deinit();
-        self.swiglu_pipe.deinit();
-        self.gemv_logits_pipe.deinit();
-        self.gemv_pipe.deinit();
+        self.qkv_rope_pipe.deinit(); self.attn_pipe.deinit(); self.rmsnorm_pipe.deinit();
+        self.add_rmsnorm_pipe.deinit(); self.gate_up_pipe.deinit(); self.swiglu_pipe.deinit();
+        self.gemv_logits_pipe.deinit(); self.gemv_pipe.deinit();
     }
 
     pub fn beginBatch(self: *const GpuEngine) void {
@@ -104,19 +94,19 @@ pub const GpuEngine = struct {
 
     pub fn recordGemv(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast(m);
+        const workgroups: u32 = @intCast((m + 1) / 2);
         self.gemv_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordGemvLogits(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast(m);
+        const workgroups: u32 = @intCast((m + 1) / 2);
         self.gemv_logits_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordGateUpSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        const workgroups: u32 = @intCast(m);
+        const workgroups: u32 = @intCast((m + 1) / 2);
         self.gate_up_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
@@ -147,14 +137,28 @@ pub const GpuEngine = struct {
         self.attn_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), @intCast(num_q_heads), 1, 1);
     }
 
-    pub fn recordQkvPrep(self: *const GpuEngine, set: types.VkDescriptorSet, clock: usize, rotary_dim: usize, theta: f32, slot_idx: usize) void {
-        const pc = extern struct { clock: u32, rotary_dim: u32, theta: f32, slot: u32 }{
+    pub fn recordQkvRope(self: *const GpuEngine, set: types.VkDescriptorSet, clock: usize, num_q: usize, num_kv: usize, head_dim: usize, rotary_dim: usize, slot_idx: usize, theta: f32, eps: f32) void {
+        const pc = extern struct {
+            clock: u32,
+            num_q: u32,
+            num_kv: u32,
+            head_dim: u32,
+            rotary_dim: u32,
+            slot_idx: u32,
+            theta: f32,
+            eps: f32,
+        }{
             .clock = @intCast(clock),
+            .num_q = @intCast(num_q),
+            .num_kv = @intCast(num_kv),
+            .head_dim = @intCast(head_dim),
             .rotary_dim = @intCast(rotary_dim),
+            .slot_idx = @intCast(slot_idx),
             .theta = theta,
-            .slot = @intCast(slot_idx),
+            .eps = eps,
         };
-        self.qkv_prep_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 32, 1, 1);
+        const workgroups: u32 = @intCast(num_q + num_kv);
+        self.qkv_rope_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordBarrier(self: *const GpuEngine, buf: *const buffer.GpuBuffer) void {

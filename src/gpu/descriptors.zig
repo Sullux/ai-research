@@ -9,6 +9,7 @@ pub const LayerDescriptorSets = struct {
     q_proj: types.VkDescriptorSet,
     k_proj: types.VkDescriptorSet,
     v_proj: types.VkDescriptorSet,
+    qkv_rope: types.VkDescriptorSet,
     attn: types.VkDescriptorSet,
     o_proj: types.VkDescriptorSet,
     gate_proj: types.VkDescriptorSet,

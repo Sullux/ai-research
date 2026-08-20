@@ -176,7 +176,7 @@ fn runInference(m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *r
         const token_str = tok.decode(current_token);
         try printToken(stdout, token_str);
         gen_count += 1;
-        if (current_token == tok.eos_token_id) break;
+        if (current_token == tok.eos_token_id or current_token == 106) break;
         m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt);
         current_token = kernels.sampleArgmax(scratch.logits);
         clock_ptr.* += 1;

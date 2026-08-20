@@ -11,6 +11,7 @@ shaders = [
     ("fused_swiglu", "FUSED_SWIGLU_SPIRV", "src/gpu/shaders_fused.zig"),
     ("decode_attn", "DECODE_ATTENTION_SPIRV", "src/gpu/shaders_attn.zig"),
     ("qkv_prep", "QKV_PREP_SPIRV", "src/gpu/shaders_qkv_prep.zig"),
+    ("qkv_rope", "QKV_ROPE_SPIRV", "src/gpu/shaders_qkv_rope.zig"),
 ]
 
 def compile_wgsl(src, dst):

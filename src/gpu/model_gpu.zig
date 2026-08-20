@@ -11,6 +11,8 @@ pub const quant = @import("../quant.zig");
 
 pub const GpuLayerWeights = struct {
     input_norm: buffer.GpuBuffer,
+    q_norm: buffer.GpuBuffer,
+    k_norm: buffer.GpuBuffer,
     q_proj: buffer.GpuBuffer,
     k_proj: buffer.GpuBuffer,
     v_proj: buffer.GpuBuffer,
@@ -26,16 +28,10 @@ pub const GpuLayerWeights = struct {
     desc: descriptors.LayerDescriptorSets,
 
     pub fn deinit(self: *GpuLayerWeights) void {
-        self.post_ffn_norm.deinit();
-        self.post_attn_norm.deinit();
-        self.pre_ffn_norm.deinit();
-        self.down_proj.deinit();
-        self.up_proj.deinit();
-        self.gate_proj.deinit();
-        self.o_proj.deinit();
-        self.v_proj.deinit();
-        self.k_proj.deinit();
-        self.q_proj.deinit();
+        self.post_ffn_norm.deinit(); self.post_attn_norm.deinit(); self.pre_ffn_norm.deinit();
+        self.down_proj.deinit(); self.up_proj.deinit(); self.gate_proj.deinit();
+        self.o_proj.deinit(); self.v_proj.deinit(); self.k_proj.deinit();
+        self.q_proj.deinit(); self.k_norm.deinit(); self.q_norm.deinit();
         self.input_norm.deinit();
     }
 };
@@ -88,7 +84,7 @@ pub const GpuModelContext = struct {
         var engine = try kernels.GpuEngine.init(ctx, mode);
         errdefer engine.deinit();
 
-        const max_sets: u32 = @intCast(m.layers.len * 14 + 8);
+        const max_sets: u32 = @intCast(m.layers.len * 16 + 16);
         var desc_mgr = try descriptors.DescriptorManager.init(ctx, max_sets);
         errdefer desc_mgr.deinit();
 
@@ -117,6 +113,8 @@ pub const GpuModelContext = struct {
             const kv_dim = l.k_proj.len / H;
             var w = GpuLayerWeights{
                 .input_norm = try createNormBuffer(ctx, l.input_layernorm, H),
+                .q_norm = try createNormBuffer(ctx, l.q_norm, l.head_dim),
+                .k_norm = try createNormBuffer(ctx, l.k_norm, l.head_dim),
                 .q_proj = try createWeightBuffer(ctx, l.q_proj, q_dim, H, mode),
                 .k_proj = try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
                 .v_proj = if (l.v_proj.len > 0) try createWeightBuffer(ctx, l.v_proj, kv_dim, H, mode) else try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
@@ -134,6 +132,7 @@ pub const GpuModelContext = struct {
                     .q_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .k_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .v_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
+                    .qkv_rope = try desc_mgr.allocateSet(engine.qkv_rope_pipe.desc_set_layout),
                     .attn = try desc_mgr.allocateSet(engine.attn_pipe.desc_set_layout),
                     .o_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
                     .gate_proj = try desc_mgr.allocateSet(engine.gemv_pipe.desc_set_layout),
@@ -150,6 +149,7 @@ pub const GpuModelContext = struct {
             desc_mgr.bindBuffers(w.desc.q_proj, &.{ &w.q_proj, &buf_normed_x, &buf_q });
             desc_mgr.bindBuffers(w.desc.k_proj, &.{ &w.k_proj, &buf_normed_x, &buf_k });
             desc_mgr.bindBuffers(w.desc.v_proj, &.{ &w.v_proj, &buf_normed_x, &buf_v });
+            desc_mgr.bindBuffers(w.desc.qkv_rope, &.{ &buf_q, &buf_k, &buf_v, &w.q_norm, &w.k_norm, &buf_q, &buf_k, &buf_v });
             desc_mgr.bindBuffers(w.desc.attn, &.{ &buf_q, &buf_k, &buf_v, &buf_x, &buf_attn_out });
             desc_mgr.bindBuffers(w.desc.o_proj, &.{ &w.o_proj, &buf_attn_out, &buf_mlp_out });
             desc_mgr.bindBuffers(w.desc.gate_proj, &.{ &w.gate_proj, &buf_normed_x, &buf_gate });
@@ -178,21 +178,14 @@ pub const GpuModelContext = struct {
     }
 
     pub fn deinit(self: *GpuModelContext) void {
-        self.buf_logits.deinit();
-        self.buf_mlp_out.deinit();
-        self.buf_act.deinit();
-        self.buf_up.deinit();
-        self.buf_gate.deinit();
-        self.buf_attn_out.deinit();
-        self.buf_v.deinit();
-        self.buf_k.deinit();
-        self.buf_q.deinit();
-        self.buf_normed_x.deinit();
-        self.buf_x.deinit();
-        self.embed_tokens.deinit();
+        self.engine.deinit();
+        self.desc_mgr.deinit();
         for (self.layers) |*l| l.deinit();
         self.allocator.free(self.layers);
-        self.desc_mgr.deinit();
-        self.engine.deinit();
+        self.embed_tokens.deinit();
+        self.buf_logits.deinit(); self.buf_mlp_out.deinit(); self.buf_act.deinit();
+        self.buf_up.deinit(); self.buf_gate.deinit(); self.buf_attn_out.deinit();
+        self.buf_v.deinit(); self.buf_k.deinit(); self.buf_q.deinit();
+        self.buf_normed_x.deinit(); self.buf_x.deinit();
     }
 };
