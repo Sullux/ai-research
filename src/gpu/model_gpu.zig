@@ -160,7 +160,7 @@ pub const GpuModelContext = struct {
             gpu_layers[i] = w;
         }
 
-        const embed_mode: quant.QuantMode = if (mode == .q4) .none else mode;
+        const embed_mode: quant.QuantMode = if (mode == .q4) .q8 else mode;
         const embed_tokens = try createWeightBuffer(ctx, m.embed_tokens, V, H, embed_mode);
         const final_norm = try createNormBuffer(ctx, m.final_norm, H);
         const desc_logits = try desc_mgr.allocateSet(engine.gemv_logits_pipe.desc_set_layout);

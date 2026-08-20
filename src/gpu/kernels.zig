@@ -31,7 +31,7 @@ pub const GpuEngine = struct {
         var gemv = try pipeline.ComputePipeline.init(ctx, gemv_spirv, 3, 8);
         errdefer gemv.deinit();
 
-        const logits_spirv = if (mode == .q4) &shaders.GEMV_BF16_SPIRV else gemv_spirv;
+        const logits_spirv = if (mode == .q4) &shaders.GEMV_Q8_SPIRV else gemv_spirv;
         var gemv_logits = try pipeline.ComputePipeline.init(ctx, logits_spirv, 3, 8);
         errdefer gemv_logits.deinit();
 

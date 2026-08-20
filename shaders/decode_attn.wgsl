@@ -44,12 +44,17 @@ fn main(
         sdata_dot[lane] = dot;
         workgroupBarrier();
 
+        if (lane < 16u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 16u]; }
+        workgroupBarrier();
+        if (lane < 8u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 8u]; }
+        workgroupBarrier();
+        if (lane < 4u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 4u]; }
+        workgroupBarrier();
+        if (lane < 2u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 2u]; }
+        workgroupBarrier();
+
         if (lane == 0u) {
-            var sum: f32 = 0.0;
-            for (var i = 0u; i < 32u; i = i + 1u) {
-                sum = sum + sdata_dot[i];
-            }
-            s_scores[slot_i] = sum * pc.inv_sqrt_dim;
+            s_scores[slot_i] = (sdata_dot[0] + sdata_dot[1]) * pc.inv_sqrt_dim;
         }
         workgroupBarrier();
     }
