@@ -18,6 +18,7 @@ pub const GpuEngine = struct {
     rmsnorm_pipe: pipeline.ComputePipeline,
     attn_pipe: pipeline.ComputePipeline,
     qkv_rope_pipe: pipeline.ComputePipeline,
+    argmax_pipe: pipeline.ComputePipeline,
     cmd_pool: types.VkCommandPool,
     cmd_buf: types.VkCommandBuffer,
     fence: types.VkFence,
@@ -58,6 +59,9 @@ pub const GpuEngine = struct {
         var qkv_rope = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_ROPE_SPIRV, 8, 32);
         errdefer qkv_rope.deinit();
 
+        var argmax = try pipeline.ComputePipeline.init(ctx, &shaders.ARGMAX_SPIRV, 2, 4);
+        errdefer argmax.deinit();
+
         const cp_info = types_dispatch.VkCommandPoolCreateInfo{
             .flags = types.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = ctx.queue_family_index,
@@ -78,6 +82,7 @@ pub const GpuEngine = struct {
             .ctx = ctx, .mode = mode, .gemv_pipe = gemv, .gemv_logits_pipe = gemv_logits,
             .swiglu_pipe = swiglu, .gate_up_pipe = gate_up, .add_rmsnorm_pipe = add_rms,
             .rmsnorm_pipe = rms, .attn_pipe = attn, .qkv_rope_pipe = qkv_rope,
+            .argmax_pipe = argmax,
             .cmd_pool = pool, .cmd_buf = cmd, .fence = fence,
         };
     }
@@ -89,6 +94,7 @@ pub const GpuEngine = struct {
         self.qkv_rope_pipe.deinit(); self.attn_pipe.deinit(); self.rmsnorm_pipe.deinit();
         self.add_rmsnorm_pipe.deinit(); self.gate_up_pipe.deinit(); self.swiglu_pipe.deinit();
         self.gemv_logits_pipe.deinit(); self.gemv_pipe.deinit();
+        self.argmax_pipe.deinit();
     }
 
     pub fn beginBatch(self: *const GpuEngine) void {
@@ -166,6 +172,11 @@ pub const GpuEngine = struct {
         };
         const workgroups: u32 = @intCast(num_q + num_kv);
         self.qkv_rope_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), workgroups, 1, 1);
+    }
+
+    pub fn recordArgmax(self: *const GpuEngine, set: types.VkDescriptorSet, vocab_size: usize) void {
+        const pc = extern struct { v: u32 }{ .v = @intCast(vocab_size) };
+        self.argmax_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
 
     pub fn recordBarrier(self: *const GpuEngine, _: ?*const buffer.GpuBuffer) void {

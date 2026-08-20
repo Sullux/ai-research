@@ -39,12 +39,12 @@ pub const GpuModelContext = struct {
     desc_mgr: descriptors.DescriptorManager,
     layers: []GpuLayerWeights,
     embed_tokens: buffer.GpuBuffer, final_norm: buffer.GpuBuffer,
-    desc_logits: types.VkDescriptorSet, desc_final_norm: types.VkDescriptorSet,
+    desc_logits: types.VkDescriptorSet, desc_final_norm: types.VkDescriptorSet, desc_argmax: types.VkDescriptorSet,
     buf_x: buffer.GpuBuffer, buf_normed_x: buffer.GpuBuffer,
     buf_q: buffer.GpuBuffer, buf_k: buffer.GpuBuffer, buf_v: buffer.GpuBuffer,
     buf_attn_out: buffer.GpuBuffer, buf_active_slots: buffer.GpuBuffer,
     buf_gate: buffer.GpuBuffer, buf_up: buffer.GpuBuffer, buf_act: buffer.GpuBuffer,
-    buf_mlp_out: buffer.GpuBuffer, buf_logits: buffer.GpuBuffer,
+    buf_mlp_out: buffer.GpuBuffer, buf_logits: buffer.GpuBuffer, buf_sampled_token: buffer.GpuBuffer,
 
     fn createWeightBuffer(ctx: *const context.GpuContext, src: []const tensor.bf16, rows: usize, cols: usize, mode: quant.QuantMode) !buffer.GpuBuffer {
         if (mode == .none or src.len == 0) {
@@ -98,6 +98,7 @@ pub const GpuModelContext = struct {
         const buf_act = try buffer.GpuBuffer.init(ctx, I * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         const buf_mlp_out = try buffer.GpuBuffer.init(ctx, H * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         const buf_logits = try buffer.GpuBuffer.init(ctx, V * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        const buf_sampled_token = try buffer.GpuBuffer.init(ctx, 4, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
         var gpu_layers = try allocator.alloc(GpuLayerWeights, m.layers.len);
         for (m.layers, 0..) |l, i| {
@@ -165,17 +166,19 @@ pub const GpuModelContext = struct {
         const final_norm = try createNormBuffer(ctx, m.final_norm, H);
         const desc_logits = try desc_mgr.allocateSet(engine.gemv_logits_pipe.desc_set_layout);
         const desc_final_norm = try desc_mgr.allocateSet(engine.rmsnorm_pipe.desc_set_layout);
+        const desc_argmax = try desc_mgr.allocateSet(engine.argmax_pipe.desc_set_layout);
         desc_mgr.bindBuffers(desc_final_norm, &.{ &buf_x, &final_norm, &buf_normed_x });
         desc_mgr.bindBuffers(desc_logits, &.{ &embed_tokens, &buf_normed_x, &buf_logits });
+        desc_mgr.bindBuffers(desc_argmax, &.{ &buf_logits, &buf_sampled_token });
 
         return .{
             .allocator = allocator, .ctx = ctx, .engine = engine, .desc_mgr = desc_mgr,
             .layers = gpu_layers, .embed_tokens = embed_tokens, .final_norm = final_norm,
-            .desc_logits = desc_logits, .desc_final_norm = desc_final_norm,
+            .desc_logits = desc_logits, .desc_final_norm = desc_final_norm, .desc_argmax = desc_argmax,
             .buf_x = buf_x, .buf_normed_x = buf_normed_x, .buf_q = buf_q, .buf_k = buf_k,
             .buf_v = buf_v, .buf_attn_out = buf_attn_out, .buf_active_slots = buf_active_slots,
             .buf_gate = buf_gate, .buf_up = buf_up, .buf_act = buf_act, .buf_mlp_out = buf_mlp_out,
-            .buf_logits = buf_logits,
+            .buf_logits = buf_logits, .buf_sampled_token = buf_sampled_token,
         };
     }
 
@@ -186,6 +189,7 @@ pub const GpuModelContext = struct {
         self.allocator.free(self.layers);
         self.final_norm.deinit();
         self.embed_tokens.deinit();
+        self.buf_sampled_token.deinit();
         self.buf_logits.deinit(); self.buf_mlp_out.deinit(); self.buf_act.deinit();
         self.buf_up.deinit(); self.buf_gate.deinit(); self.buf_active_slots.deinit();
         self.buf_attn_out.deinit(); self.buf_v.deinit(); self.buf_k.deinit(); self.buf_q.deinit();

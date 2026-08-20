@@ -15,7 +15,7 @@ pub fn gpuDispatchForwardToken(
     clock: usize,
     slot_idx: usize,
     active_slots: []const usize,
-) bool {
+) u32 {
     const H = config.hidden_size;
     const inter = config.intermediate_size;
     const eps = config.rms_norm_eps;
@@ -86,16 +86,24 @@ pub fn gpuDispatchForwardToken(
         gpu.engine.recordBarrier(null);
     }
 
-    // 10. Final RMSNorm: buf_x -> buf_normed_x
-    gpu.engine.recordRmsNorm(gpu.desc_final_norm, H, eps);
-    gpu.engine.recordBarrier(null);
+    if (logits.len >= V) {
+        // 10. Final RMSNorm: buf_x -> buf_normed_x
+        gpu.engine.recordRmsNorm(gpu.desc_final_norm, H, eps);
+        gpu.engine.recordBarrier(null);
 
-    // 11. Logits projection
-    gpu.engine.recordGemvLogits(gpu.desc_logits, V, H);
-    gpu.engine.submitBatch() catch return false;
+        // 11. Logits projection
+        gpu.engine.recordGemvLogits(gpu.desc_logits, V, H);
+        gpu.engine.recordBarrier(null);
 
-    @memcpy(logits[0..V], gpu.buf_logits.asSlice(f32)[0..V]);
-    return true;
+        // 12. GPU Argmax
+        gpu.engine.recordArgmax(gpu.desc_argmax, V);
+    }
+    gpu.engine.submitBatch() catch return 0;
+
+    if (logits.len >= V) {
+        return gpu.buf_sampled_token.asSlice(u32)[0];
+    }
+    return 0;
 }
 
 pub fn gpuDispatchQkv(

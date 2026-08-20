@@ -26,7 +26,8 @@ pub fn forwardToken(
     memory_opt: ?*memory.DiffArchive,
     quiescence_opt: ?*quiescence.QuiescenceTracker,
     gpu_opt: ?*GpuModelContext,
-) void {
+    compute_logits: bool,
+) u32 {
     const H = self.config.hidden_size;
     const ple_dim = self.config.hidden_size_per_layer_input;
     const embed_scale = @sqrt(@as(f32, @floatFromInt(H)));
@@ -35,10 +36,13 @@ pub fn forwardToken(
     const emb_offset = @as(usize, token_id) * H;
     for (scratch.x, self.embed_tokens[emb_offset .. emb_offset + H]) |*out, e| out.* = e.toF32() * embed_scale;
 
+    var result_token: u32 = 0;
+
     if (gpu_opt) |g| {
         const slot_idx = ring.activateSlot(0, clock);
         const active_count = ring.getActiveSlots(0, clock, scratch.active_slots);
-        _ = gpu.model_dispatch.gpuDispatchForwardToken(g, &self.config, self.layers, scratch.x, scratch.logits, clock, slot_idx, scratch.active_slots[0..active_count]);
+        const logits_slice = if (compute_logits) scratch.logits else scratch.logits[0..0];
+        result_token = gpu.model_dispatch.gpuDispatchForwardToken(g, &self.config, self.layers, scratch.x, logits_slice, clock, slot_idx, scratch.active_slots[0..active_count]);
     } else {
         if (ple_dim > 0) ple.preparePLE(self, scratch, token_id, H, ple_dim, tp);
 
@@ -55,15 +59,19 @@ pub fn forwardToken(
             }
         }
 
-        kernels.rmsNorm(scratch.normed_x, scratch.x, self.final_norm, self.config.rms_norm_eps);
-        if (tp) |pool| {
-            kernels.gemvParallel(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H, pool);
-        } else {
-            kernels.gemv(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H);
+        if (compute_logits) {
+            kernels.rmsNorm(scratch.normed_x, scratch.x, self.final_norm, self.config.rms_norm_eps);
+            if (tp) |pool| {
+                kernels.gemvParallel(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H, pool);
+            } else {
+                kernels.gemv(scratch.logits, scratch.normed_x, self.embed_tokens, self.config.vocab_size, H);
+            }
+            result_token = kernels.sampleArgmax(scratch.logits);
         }
     }
 
     if (memory_opt) |mem| memory_inject.integrateMemory(self, mem, ring, scratch, clock, H, tp);
+    return result_token;
 }
 
 fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, kv_layer: usize, clock: usize) void {

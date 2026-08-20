@@ -167,11 +167,12 @@ fn runInference(m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *r
     defer allocator.free(prompt_tokens);
     if (reset_ring) ring.reset();
 
-    for (prompt_tokens) |t| {
-        m.forwardToken(ring, scratch, t, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt);
+    var current_token: u32 = 0;
+    for (prompt_tokens, 0..) |t, i| {
+        const is_last = (i == prompt_tokens.len - 1);
+        current_token = m.forwardToken(ring, scratch, t, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt, is_last);
         clock_ptr.* += 1;
     }
-    var current_token = kernels.sampleArgmax(scratch.logits);
 
     const gen_start = std.time.milliTimestamp();
     var gen_count: usize = 0;
@@ -180,8 +181,7 @@ fn runInference(m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *r
         try printToken(stdout, token_str);
         gen_count += 1;
         if (current_token == tok.eos_token_id or current_token == 106) break;
-        m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt);
-        current_token = kernels.sampleArgmax(scratch.logits);
+        current_token = m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt, true);
         clock_ptr.* += 1;
     }
     const elapsed_ms = std.time.milliTimestamp() - gen_start;
