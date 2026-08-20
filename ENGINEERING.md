@@ -189,12 +189,76 @@ pub const ContextBuffer = struct {
 │           - Real-time GPU dequantizing GEMV SPIR-V compute kernels     │
 │           - CLI controls: `--q8`, `--q4`, `--quant [q8|q4]`            │
 │           - Files: `src/quant.zig`, `src/gpu/shaders_q8.zig`, `q4.zig` │
+│                                                                        │
+│ Stage G5: Persistent Graphs, Fused Kernels & GPU Argmax [COMPLETE]     │
+│           - Persistent pre-recorded command graphs (0 CPU recording)   │
+│           - Dynamic step params via coherent storage buffer (`params`) │
+│           - GPU-native autonomous quiescence (`quiescence_gate.wgsl`)  │
+│           - Fused Gate+Up+GeGLU MLP shaders (`fused_mlp_q4/q8.wgsl`)   │
+│           - 256-thread GPU on-device argmax reduction (`argmax.wgsl`)  │
+│           - Gated prefill logits calculation                           │
+│           - Measured throughput: 18.6 tok/s on Gemma 4 12B-it Q4_0     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. Testing & Verification Criteria
+## 5. Architectural Memory Throughput & Quantization Analysis
+
+### A. Sustained Bandwidth vs Physical Hardware Limit
+* **Hardware Ceiling:** AMD Ryzen AI Max+ 395 (LPDDR5X-8000 256-bit bus) has a theoretical peak DRAM bandwidth of **256.0 GB/s**, with real-world achievable UMA sustained read bandwidth of **~180–200 GB/s**.
+* **Memory Transferred Per Token ($N=1$ Autoregressive Decode):**
+  * 48 Layers Q4_0 Weights: $10.66\text{ B parameters} \times 0.5625\text{ B/param} \approx 6.00\text{ GB}$
+  * Output Vocabulary Classifier (Q8_0): $262,144 \times 3840 \times 1.125\text{ B/param} \approx 1.13\text{ GB}$
+  * Norm weights, KV cache reads, scratch activations: $\approx 0.05\text{ GB}$
+  * **Total DRAM Read Per Token:** $\approx 7.18\text{ GB}$
+* **Measured Performance:** At **18.6 tok/s**, sustained DRAM throughput is $18.6 \times 7.18\text{ GB} = \mathbf{133.5\text{ GB/s}}$ (**~67–74% of usable physical bus saturation**).
+* **Physical Hardware Ceiling:** At 100% bus utilization (180–200 GB/s), maximum unquiesced throughput is **~25–27 tok/s**.
+
+---
+
+### B. Critical Finding: Quantization Limits on Output Vocabulary Projection (`embed_tokens`)
+
+> **IMPORTANT EMPIRICAL FINDING (Failed Experiment):**
+> 
+> * **Hypothesis:** Quantizing the $262,144 \times 3840$ output classifier (`embed_tokens` transposed) to **Q4_0** would reduce memory read from $1.13\text{ GB} \rightarrow 0.566\text{ GB}$ per token, potentially saving ~0.56 GB of memory bandwidth and adding ~1.5–2.0 tok/s.
+> * **Experimental Result:** 
+>   * While throughput marginally changed (from ~16.5 to ~17.1 tok/s), Q4_0 quantization caused severe precision loss across the massive 262,144-dimensional logit classification distribution.
+>   * During long-context generation, subtle compression artifacts skewed the tail logit distribution, causing rogue multimodal and control tokens (e.g. `<audio|>`, stray hyphens) to cross the argmax threshold mid-sentence (e.g., *"Thanks to a<audio|> property called superposition..."*).
+> * **Architectural Decision:** 
+>   * Transformer layer weights $0..47$ are quantized to **Q4_0** ($6.00\text{ GB}$).
+>   * The final classification projection layer is **strictly retained in high-precision Q8_0** ($1.13\text{ GB}$) when running with `--q4`.
+>   * Input token embedding lookups remain unquantized in **BF16**.
+
+---
+
+## 6. Optimization Opportunities Roadmap (Pushing to Physical Hardware Limit)
+
+The remaining ~25–30% performance gap between 18.6 tok/s and the ~25–27 tok/s physical hardware saturation limit can be captured via the following roadmap:
+
+### 1. Fused QKV Projection GEMV Kernel (In Progress)
+* **Current State:** $Q$, $K$, and $V$ are computed via 3 separate GEMV shader dispatches and 3 pipeline barriers per layer ($144$ dispatches total per step).
+* **Optimization:** Fuse $Q$, $K$, and $V$ weight matrix projections into a single combined kernel. The normalized hidden state $X_{\text{norm}}$ is loaded into L1 cache once, saving 96 pipeline dispatches and barriers per token.
+* **Expected Gain:** **+0.8 to +1.2 tok/s**.
+
+### 2. 128-Byte Cacheline Coalesced Memory Layout
+* **Current State:** Q4_0 blocks ($20\text{ B}$ per 32 weights) are linearly arrayed in standard row-major order.
+* **Optimization:** Transpose or pad Q4_0 weight block data structures to align with 64-byte and 128-byte memory controller burst transactions on RDNA 3.5 (`gfx1150`).
+* **Expected Gain:** **+1.0 to +1.5 tok/s** (pushes memory controller efficiency from ~70% to ~85%+).
+
+### 3. Layer-to-Layer Fused Post-FFN Residual Accumulation
+* **Current State:** Post-FFN residual addition ($x = x + \text{mlp\_out}$) writes back to intermediate UMA buffer `buf_x`, which is then read by the next layer's input RMSNorm.
+* **Optimization:** Fuse the residual addition directly into the subsequent layer's input RMSNorm shader, eliminating 48 intermediate round-trip buffer writes.
+* **Expected Gain:** **+0.3 to +0.5 tok/s**.
+
+### 4. Dynamic GPU Layer Quiescence (Phase 3 Architecture)
+* **Current State:** All 48 layers execute densely on every token step.
+* **Optimization:** Using the newly integrated `shaders/quiescence_gate.wgsl` and `vkCmdDispatchIndirect`, upper layers evaluate activation velocity $\|\Delta x\|^2$ and dynamically skip execution during low-entropy decoding.
+* **Expected Gain:** Skipping 20–30% of upper layers on steady-state tokens drops memory read to **~4.5–5.0 GB/token**, scaling decoding speed to **28–35+ tok/s**.
+
+---
+
+## 7. Testing & Verification Criteria
 
 | Stage | Verification Milestone | Success Criteria |
 | :--- | :--- | :--- |
