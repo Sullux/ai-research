@@ -190,14 +190,13 @@ pub const ContextBuffer = struct {
 │           - CLI controls: `--q8`, `--q4`, `--quant [q8|q4]`            │
 │           - Files: `src/quant.zig`, `src/gpu/shaders_q8.zig`, `q4.zig` │
 │                                                                        │
-│ Stage G5: Persistent Graphs, Fused Kernels & GPU Argmax [COMPLETE]     │
-│           - Persistent pre-recorded command graphs (0 CPU recording)   │
-│           - Dynamic step params via coherent storage buffer (`params`) │
-│           - GPU-native autonomous quiescence (`quiescence_gate.wgsl`)  │
-│           - Fused Gate+Up+GeGLU MLP shaders (`fused_mlp_q4/q8.wgsl`)   │
-│           - 256-thread GPU on-device argmax reduction (`argmax.wgsl`)  │
-│           - Gated prefill logits calculation                           │
-│           - Measured throughput: 18.6 tok/s on Gemma 4 12B-it Q4_0     │
+│ Stage G7: Dynamic GPU Layer Quiescence & Indirect Dispatch [COMPLETE] │
+│           - On-device temporal velocity tracker (`quiescence_gate.wgsl`)│
+│           - Autonomous hardware gating via `vkCmdDispatchIndirect`      │
+│           - Zero CPU recording / 0 CPU sync during decode skips         │
+│           - Configurable velocity threshold (`--quiescence-threshold`)  │
+│           - Verified scaling up to 30.9 tok/s on skipped layer passes  │
+│           - Files: `shaders/quiescence_gate.wgsl`, `src/gpu/*`         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
