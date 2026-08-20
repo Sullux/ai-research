@@ -147,11 +147,31 @@ fn main(
             d = d + 32u;
         }
 
-        // 3. Write V to V_cache
+        // 3. RMS + Write V to V_cache (v_norm: unit RMSNorm without weight)
+        var sum_sq_v: f32 = 0.0;
         d = lane;
         while (d < D) {
-            let v_val = select(V_in[in_head_offset + d], K_in[in_head_offset + d] * inv_rms * K_norm_w[d], pc.k_eq_v == 1u);
-            V_cache[cache_head_offset + d] = v_val;
+            let v_raw = select(V_in[in_head_offset + d], K_in[in_head_offset + d], pc.k_eq_v == 1u);
+            sum_sq_v = sum_sq_v + v_raw * v_raw;
+            d = d + 32u;
+        }
+        s_sum_sq[lane] = sum_sq_v;
+        workgroupBarrier();
+
+        if (lane == 0u) {
+            var total_v: f32 = 0.0;
+            for (var i = 0u; i < 32u; i = i + 1u) {
+                total_v = total_v + s_sum_sq[i];
+            }
+            s_sum_sq[0] = 1.0 / sqrt(total_v / f32(D) + pc.eps);
+        }
+        workgroupBarrier();
+        let inv_rms_v = s_sum_sq[0];
+
+        d = lane;
+        while (d < D) {
+            let v_raw = select(V_in[in_head_offset + d], K_in[in_head_offset + d], pc.k_eq_v == 1u);
+            V_cache[cache_head_offset + d] = v_raw * inv_rms_v;
             d = d + 32u;
         }
     }

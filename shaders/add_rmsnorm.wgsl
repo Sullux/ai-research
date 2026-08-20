@@ -22,7 +22,7 @@ fn main(
     var sum_sq: f32 = 0.0;
     var idx = tid;
     while (idx < D) {
-        let v = X[idx] + pc.scalar * R[idx];
+        let v = (X[idx] + R[idx]) * pc.scalar;
         X[idx] = v;
         sum_sq = sum_sq + v * v;
         idx = idx + 256u;

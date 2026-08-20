@@ -37,7 +37,7 @@ pub fn gpuDispatchForwardToken(
         const rot_dim: u32 = @intCast(l_cpu.rotary_dim);
         const theta: f32 = if (l_cpu.layer_type == .full_attention) config.rope_theta_full else config.rope_theta;
         const gqa_ratio: u32 = @intCast(config.num_attention_heads / l_cpu.num_kv_heads);
-        const inv_sqrt_dim: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(l_cpu.head_dim)));
+        const inv_sqrt_dim: f32 = 1.0;
 
         // 1. Input RMSNorm: buf_x -> buf_normed_x
         gpu.engine.recordRmsNorm(l_gpu.desc.input_norm, H, eps);
@@ -71,8 +71,8 @@ pub fn gpuDispatchForwardToken(
             gpu.engine.recordBarrier(&gpu.buf_mlp_out);
         }
 
-        // 6. Attention residual + pre-FFN RMSNorm: buf_x += scalar * buf_mlp_out -> buf_normed_x
-        gpu.engine.recordAddRmsNorm(l_gpu.desc.pre_ffn_norm, H, eps, l_gpu.layer_scalar);
+        // 6. Attention residual + pre-FFN RMSNorm: buf_x += buf_mlp_out -> buf_normed_x
+        gpu.engine.recordAddRmsNorm(l_gpu.desc.pre_ffn_norm, H, eps, 1.0);
         gpu.engine.recordBarrier(&gpu.buf_normed_x);
         gpu.engine.recordBarrier(&gpu.buf_x);
 

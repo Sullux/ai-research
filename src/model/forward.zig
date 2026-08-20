@@ -49,13 +49,10 @@ pub fn forwardToken(
             @memcpy(scratch.prev_x, scratch.x);
             forwardAttentionCpu(self, l, ring, scratch, layer_idx, clock, H, tp);
             forwardMlpCpu(self, l, scratch, H, tp);
-            if (l.layer_scalar) |s| {
-                for (scratch.x, scratch.prev_x) |*x_val, px| {
-                    const update = x_val.* - px;
-                    x_val.* = px + s * update;
-                }
-            }
             if (ple_dim > 0) ple.forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
+            if (l.layer_scalar) |s| {
+                for (scratch.x) |*x_val| x_val.* *= s;
+            }
         }
 
         kernels.rmsNorm(scratch.normed_x, scratch.x, self.final_norm, self.config.rms_norm_eps);
@@ -72,7 +69,7 @@ pub fn forwardToken(
 fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, kv_layer: usize, clock: usize) void {
     const active_count = ring.getActiveSlots(kv_layer, clock, scratch.active_slots);
     const gqa_group_size = self.config.num_attention_heads / l.num_kv_heads;
-    const inv_sqrt_dim = 1.0 / @sqrt(@as(f32, @floatFromInt(l.head_dim)));
+    const inv_sqrt_dim: f32 = 1.0;
 
     for (0..self.config.num_attention_heads) |h| {
         const kv_h = h / gqa_group_size;
@@ -130,6 +127,8 @@ pub fn forwardAttentionCpu(self: *const Model, l: LayerWeights, ring: *DynamicRi
         for (0..l.num_kv_heads) |kv_h| {
             const head_k = scratch.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             kernels.rmsNorm(head_k, head_k, l.k_norm, self.config.rms_norm_eps);
+            const head_v = scratch.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
+            kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
         }
         kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
         ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);
