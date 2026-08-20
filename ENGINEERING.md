@@ -182,6 +182,13 @@ pub const ContextBuffer = struct {
 │           - AVX-512 / SIMD vectorized CPU kernel acceleration          │
 │           - Verification: Parity & tok/s on Gemma 4 E2B & 12B-it       │
 │           - Files: `src/gpu/model_dispatch.zig`, `src/main.zig`        │
+│                                                                        │
+│ Stage G4: Vectorized Bursts & Load-Time Quantization [COMPLETE]        │
+│           - 128-bit vectorized burst loads (`uvec4`) for BF16 GEMV     │
+│           - Load-time block quantization: Q8_0 (36 B/blk) & Q4_0 (20 B)│
+│           - Real-time GPU dequantizing GEMV SPIR-V compute kernels     │
+│           - CLI controls: `--q8`, `--q4`, `--quant [q8|q4]`            │
+│           - Files: `src/quant.zig`, `src/gpu/shaders_q8.zig`, `q4.zig` │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
