@@ -47,7 +47,7 @@ pub const GpuEngine = struct {
         var rms = try pipeline.ComputePipeline.init(ctx, &shaders.RMSNORM_SPIRV, 3, 8);
         errdefer rms.deinit();
 
-        var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 5, 16);
+        var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 5, 20);
         errdefer attn.deinit();
 
         var qkv_prep = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_PREP_SPIRV, 7, 16);
@@ -136,10 +136,11 @@ pub const GpuEngine = struct {
         self.rmsnorm_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
 
-    pub fn recordDecodeAttn(self: *const GpuEngine, set: types.VkDescriptorSet, n_active: usize, head_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, num_q_heads: usize) void {
-        const pc = extern struct { n_active: u32, head_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32 }{
+    pub fn recordDecodeAttn(self: *const GpuEngine, set: types.VkDescriptorSet, n_active: usize, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, num_q_heads: usize) void {
+        const pc = extern struct { n_active: u32, head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32 }{
             .n_active = @intCast(n_active),
             .head_dim = @intCast(head_dim),
+            .kv_dim = @intCast(kv_dim),
             .gqa_ratio = @intCast(gqa_ratio),
             .inv_sqrt_dim = inv_sqrt_dim,
         };

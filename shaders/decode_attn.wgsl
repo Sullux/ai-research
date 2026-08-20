@@ -1,6 +1,7 @@
 struct PushConstants {
     n_active: u32,
     head_dim: u32,
+    kv_dim: u32,
     gqa_ratio: u32,
     inv_sqrt_dim: f32,
 };
@@ -31,7 +32,7 @@ fn main(
     // 1. Compute dot product scores for all active slots
     for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
         let physical_slot = Active_slots[slot_i];
-        let kv_offset = physical_slot * D;
+        let kv_offset = physical_slot * pc.kv_dim + kv_h * D;
 
         var dot: f32 = 0.0;
         var d = lane;
@@ -80,7 +81,7 @@ fn main(
         var out_val: f32 = 0.0;
         for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
             let physical_slot = Active_slots[slot_i];
-            let kv_offset = physical_slot * D;
+            let kv_offset = physical_slot * pc.kv_dim + kv_h * D;
             out_val = out_val + s_scores[slot_i] * V_cache[kv_offset + d];
         }
         Attn_out[q_offset + d] = out_val;
