@@ -1,6 +1,7 @@
 struct PushConstants {
     dim: u32,
     eps: f32,
+    scalar: f32,
 };
 
 @group(0) @binding(0) var<storage, read_write> X: array<f32>;
@@ -21,7 +22,7 @@ fn main(
     var sum_sq: f32 = 0.0;
     var idx = tid;
     while (idx < D) {
-        let v = X[idx] + R[idx];
+        let v = X[idx] + pc.scalar * R[idx];
         X[idx] = v;
         sum_sq = sum_sq + v * v;
         idx = idx + 256u;

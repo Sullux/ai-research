@@ -28,39 +28,24 @@ pub const DynamicRingBuffer = struct {
         const clocks_buf = try allocator.alloc(usize, num_layers * total_slots);
         const active_buf = try allocator.alloc(bool, num_layers * total_slots);
 
-        @memset(k_buf, 0);
-        @memset(v_buf, 0);
-        @memset(clocks_buf, 0);
-        @memset(active_buf, false);
+        @memset(k_buf, 0); @memset(v_buf, 0); @memset(clocks_buf, 0); @memset(active_buf, false);
 
         return .{
-            .allocator = allocator,
-            .num_layers = num_layers,
-            .max_kv_dim = max_kv_dim,
-            .num_anchors = num_anchors,
-            .window_size = window_size,
-            .num_recall = num_recall,
-            .total_slots = total_slots,
-            .k = k_buf,
-            .v = v_buf,
-            .clocks = clocks_buf,
-            .active = active_buf,
-            .total_ingested = 0,
+            .allocator = allocator, .num_layers = num_layers, .max_kv_dim = max_kv_dim,
+            .num_anchors = num_anchors, .window_size = window_size, .num_recall = num_recall,
+            .total_slots = total_slots, .k = k_buf, .v = v_buf, .clocks = clocks_buf,
+            .active = active_buf, .total_ingested = 0,
         };
     }
 
     pub fn deinit(self: *DynamicRingBuffer) void {
-        self.allocator.free(self.k);
-        self.allocator.free(self.v);
-        self.allocator.free(self.clocks);
-        self.allocator.free(self.active);
+        self.allocator.free(self.k); self.allocator.free(self.v);
+        self.allocator.free(self.clocks); self.allocator.free(self.active);
     }
 
     pub fn reset(self: *DynamicRingBuffer) void {
-        @memset(self.k, 0);
-        @memset(self.v, 0);
-        @memset(self.clocks, 0);
-        @memset(self.active, false);
+        @memset(self.k, 0); @memset(self.v, 0);
+        @memset(self.clocks, 0); @memset(self.active, false);
         self.total_ingested = 0;
     }
 
@@ -71,6 +56,15 @@ pub const DynamicRingBuffer = struct {
     pub fn getSlotIndex(self: *const DynamicRingBuffer, clock: usize) usize {
         if (clock < self.num_anchors) return clock;
         return self.num_anchors + ((clock - self.num_anchors) % self.window_size);
+    }
+
+    pub fn activateSlot(self: *DynamicRingBuffer, layer: usize, clock: usize) usize {
+        const slot = self.getSlotIndex(clock);
+        const slot_idx = layer * self.total_slots + slot;
+        self.clocks[slot_idx] = clock;
+        self.active[slot_idx] = true;
+        if (layer == 0 and clock >= self.total_ingested) self.total_ingested = clock + 1;
+        return slot;
     }
 
     pub fn writeKV(self: *DynamicRingBuffer, layer: usize, clock: usize, k_src: []const f32, v_src: []const f32) void {

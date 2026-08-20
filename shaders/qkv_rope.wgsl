@@ -5,6 +5,7 @@ struct PushConstants {
     head_dim: u32,
     rotary_dim: u32,
     slot_idx: u32,
+    k_eq_v: u32,
     rope_theta: f32,
     eps: f32,
 };
@@ -12,19 +13,14 @@ struct PushConstants {
 @group(0) @binding(0) var<storage, read> Q_in: array<f32>;
 @group(0) @binding(1) var<storage, read> K_in: array<f32>;
 @group(0) @binding(2) var<storage, read> V_in: array<f32>;
-@group(0) @binding(3) var<storage, read> Q_norm_w: array<u32>;
-@group(0) @binding(4) var<storage, read> K_norm_w: array<u32>;
+@group(0) @binding(3) var<storage, read> Q_norm_w: array<f32>;
+@group(0) @binding(4) var<storage, read> K_norm_w: array<f32>;
 @group(0) @binding(5) var<storage, read_write> Q_out: array<f32>;
 @group(0) @binding(6) var<storage, read_write> K_cache: array<f32>;
 @group(0) @binding(7) var<storage, read_write> V_cache: array<f32>;
 var<push_constant> pc: PushConstants;
 
 var<workgroup> s_sum_sq: array<f32, 32>;
-
-fn unpack_bf16(packed: u32, idx: u32) -> f32 {
-    let half_w = select(packed & 0xFFFFu, (packed >> 16u) & 0xFFFFu, (idx & 1u) == 1u);
-    return bitcast<f32>(half_w << 16u);
-}
 
 @compute @workgroup_size(32, 1, 1)
 fn main(
@@ -68,8 +64,8 @@ fn main(
         while (d < half_rot) {
             let idx0 = d;
             let idx1 = d + half_rot;
-            let w0 = unpack_bf16(Q_norm_w[idx0 / 2u], idx0);
-            let w1 = unpack_bf16(Q_norm_w[idx1 / 2u], idx1);
+            let w0 = Q_norm_w[idx0];
+            let w1 = Q_norm_w[idx1];
             let v0 = Q_in[head_offset + idx0] * inv_rms * w0;
             let v1 = Q_in[head_offset + idx1] * inv_rms * w1;
 
@@ -87,7 +83,7 @@ fn main(
         // Pass-through unrotated suffix
         d = rot_D + lane;
         while (d < D) {
-            let w = unpack_bf16(Q_norm_w[d / 2u], d);
+            let w = Q_norm_w[d];
             Q_out[head_offset + d] = Q_in[head_offset + d] * inv_rms * w;
             d = d + 32u;
         }
@@ -127,8 +123,8 @@ fn main(
         while (d < half_rot) {
             let idx0 = d;
             let idx1 = d + half_rot;
-            let w0 = unpack_bf16(K_norm_w[idx0 / 2u], idx0);
-            let w1 = unpack_bf16(K_norm_w[idx1 / 2u], idx1);
+            let w0 = K_norm_w[idx0];
+            let w1 = K_norm_w[idx1];
             let v0 = K_in[in_head_offset + idx0] * inv_rms * w0;
             let v1 = K_in[in_head_offset + idx1] * inv_rms * w1;
 
@@ -146,15 +142,16 @@ fn main(
         // Pass-through unrotated suffix for K
         d = rot_D + lane;
         while (d < D) {
-            let w = unpack_bf16(K_norm_w[d / 2u], d);
+            let w = K_norm_w[d];
             K_cache[cache_head_offset + d] = K_in[in_head_offset + d] * inv_rms * w;
             d = d + 32u;
         }
 
-        // 3. Copy V directly to V_cache
+        // 3. Write V to V_cache
         d = lane;
         while (d < D) {
-            V_cache[cache_head_offset + d] = V_in[in_head_offset + d];
+            let v_val = select(V_in[in_head_offset + d], K_in[in_head_offset + d] * inv_rms * K_norm_w[d], pc.k_eq_v == 1u);
+            V_cache[cache_head_offset + d] = v_val;
             d = d + 32u;
         }
     }

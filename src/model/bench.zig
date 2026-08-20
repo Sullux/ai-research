@@ -24,7 +24,7 @@ fn recordAndSubmit(m: *const model.Model, config: model_types.ModelConfig, g: *g
     g.engine.beginBatch();
     for (0..m.layers.len) |l_i| {
         const l = &g.layers[l_i];
-        g.engine.recordAddRmsNorm(l.desc.input_norm, config.hidden_size, config.rms_norm_eps);
+        g.engine.recordAddRmsNorm(l.desc.input_norm, config.hidden_size, config.rms_norm_eps, 1.0);
         g.engine.recordBarrier(&g.buf_normed_x);
         g.engine.recordGemv(l.desc.q_proj, config.hidden_size, config.hidden_size);
         g.engine.recordGemv(l.desc.k_proj, 2048, config.hidden_size);
@@ -32,7 +32,7 @@ fn recordAndSubmit(m: *const model.Model, config: model_types.ModelConfig, g: *g
         g.engine.recordBarrier(&g.buf_q);
         g.engine.recordGemv(l.desc.o_proj, config.hidden_size, config.hidden_size);
         g.engine.recordBarrier(&g.buf_mlp_out);
-        g.engine.recordAddRmsNorm(l.desc.pre_ffn_norm, config.hidden_size, config.rms_norm_eps);
+        g.engine.recordAddRmsNorm(l.desc.pre_ffn_norm, config.hidden_size, config.rms_norm_eps, 1.0);
         g.engine.recordBarrier(&g.buf_normed_x);
         if (g.engine.mode == .q4) {
             g.engine.recordGateUpSwiGlu(l.desc.gate_up_swiglu, config.intermediate_size, config.hidden_size);

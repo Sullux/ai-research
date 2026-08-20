@@ -20,6 +20,7 @@ pub const LayerDescriptorSets = struct {
     pre_ffn_norm: types.VkDescriptorSet,
     post_attn_norm: types.VkDescriptorSet,
     post_ffn_norm: types.VkDescriptorSet,
+    post_ffn_add: types.VkDescriptorSet,
 };
 
 pub const DescriptorManager = struct {

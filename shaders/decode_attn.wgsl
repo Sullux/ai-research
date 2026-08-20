@@ -14,7 +14,7 @@ struct PushConstants {
 var<push_constant> pc: PushConstants;
 
 var<workgroup> sdata_dot: array<f32, 32>;
-var<workgroup> s_scores: array<f32, 512>;
+var<workgroup> s_scores: array<f32, 1024>;
 
 @compute @workgroup_size(32, 1, 1)
 fn main(

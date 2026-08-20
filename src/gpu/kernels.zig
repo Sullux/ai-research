@@ -41,7 +41,7 @@ pub const GpuEngine = struct {
         var gate_up = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, 4, 8);
         errdefer gate_up.deinit();
 
-        var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 8);
+        var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 12);
         errdefer add_rms.deinit();
 
         var rms = try pipeline.ComputePipeline.init(ctx, &shaders.RMSNORM_SPIRV, 3, 8);
@@ -116,8 +116,8 @@ pub const GpuEngine = struct {
         self.swiglu_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
-    pub fn recordAddRmsNorm(self: *const GpuEngine, set: types.VkDescriptorSet, H: usize, eps: f32) void {
-        const pc = extern struct { h: u32, eps: f32 }{ .h = @intCast(H), .eps = eps };
+    pub fn recordAddRmsNorm(self: *const GpuEngine, set: types.VkDescriptorSet, H: usize, eps: f32, scalar: f32) void {
+        const pc = extern struct { h: u32, eps: f32, scalar: f32 }{ .h = @intCast(H), .eps = eps, .scalar = scalar };
         self.add_rmsnorm_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
 
@@ -137,7 +137,7 @@ pub const GpuEngine = struct {
         self.attn_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), @intCast(num_q_heads), 1, 1);
     }
 
-    pub fn recordQkvRope(self: *const GpuEngine, set: types.VkDescriptorSet, clock: usize, num_q: usize, num_kv: usize, head_dim: usize, rotary_dim: usize, slot_idx: usize, theta: f32, eps: f32) void {
+    pub fn recordQkvRope(self: *const GpuEngine, set: types.VkDescriptorSet, clock: usize, num_q: usize, num_kv: usize, head_dim: usize, rotary_dim: usize, slot_idx: usize, k_eq_v: bool, theta: f32, eps: f32) void {
         const pc = extern struct {
             clock: u32,
             num_q: u32,
@@ -145,6 +145,7 @@ pub const GpuEngine = struct {
             head_dim: u32,
             rotary_dim: u32,
             slot_idx: u32,
+            k_eq_v: u32,
             theta: f32,
             eps: f32,
         }{
@@ -154,6 +155,7 @@ pub const GpuEngine = struct {
             .head_dim = @intCast(head_dim),
             .rotary_dim = @intCast(rotary_dim),
             .slot_idx = @intCast(slot_idx),
+            .k_eq_v = if (k_eq_v) 1 else 0,
             .theta = theta,
             .eps = eps,
         };
