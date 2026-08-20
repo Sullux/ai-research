@@ -147,7 +147,7 @@ pub fn gpuDispatchLogits(
     @memcpy(gpu.buf_normed_x.asSlice(f32)[0..H], normed_x[0..H]);
 
     gpu.engine.beginBatch();
-    gpu.engine.recordGemv(gpu.desc_logits, V, H);
+    gpu.engine.recordGemvLogits(gpu.desc_logits, V, H);
     gpu.engine.submitBatch() catch return false;
 
     @memcpy(logits[0..V], gpu.buf_logits.asSlice(f32)[0..V]);

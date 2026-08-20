@@ -11,6 +11,7 @@ pub const GpuEngine = struct {
     ctx: *const context.GpuContext,
     mode: quant.QuantMode,
     gemv_pipe: pipeline.ComputePipeline,
+    gemv_logits_pipe: pipeline.ComputePipeline,
     swiglu_pipe: pipeline.ComputePipeline,
     gate_up_pipe: pipeline.ComputePipeline,
     add_rmsnorm_pipe: pipeline.ComputePipeline,
@@ -29,6 +30,10 @@ pub const GpuEngine = struct {
         };
         var gemv = try pipeline.ComputePipeline.init(ctx, gemv_spirv, 3, 8);
         errdefer gemv.deinit();
+
+        const logits_spirv = if (mode == .q4) &shaders.GEMV_BF16_SPIRV else gemv_spirv;
+        var gemv_logits = try pipeline.ComputePipeline.init(ctx, logits_spirv, 3, 8);
+        errdefer gemv_logits.deinit();
 
         var swiglu = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4);
         errdefer swiglu.deinit();
@@ -65,6 +70,7 @@ pub const GpuEngine = struct {
             .ctx = ctx,
             .mode = mode,
             .gemv_pipe = gemv,
+            .gemv_logits_pipe = gemv_logits,
             .swiglu_pipe = swiglu,
             .gate_up_pipe = gate_up,
             .add_rmsnorm_pipe = add_rms,
@@ -86,6 +92,7 @@ pub const GpuEngine = struct {
         self.add_rmsnorm_pipe.deinit();
         self.gate_up_pipe.deinit();
         self.swiglu_pipe.deinit();
+        self.gemv_logits_pipe.deinit();
         self.gemv_pipe.deinit();
     }
 
@@ -99,6 +106,12 @@ pub const GpuEngine = struct {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
         const workgroups: u32 = @intCast(m);
         self.gemv_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+    }
+
+    pub fn recordGemvLogits(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {
+        const pc = [_]u32{ @intCast(m), @intCast(k) };
+        const workgroups: u32 = @intCast(m);
+        self.gemv_logits_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
     }
 
     pub fn recordGateUpSwiGlu(self: *const GpuEngine, set: types.VkDescriptorSet, m: usize, k: usize) void {

@@ -41,14 +41,20 @@ pub fn forwardToken(
         if (quiescence_opt) |q| {
             if (!q.shouldExecute(layer_idx, clock, scratch.x, scratch.prev_x)) continue;
         }
+        @memcpy(scratch.prev_x, scratch.x);
         if (gpu_opt) |g| {
             forwardLayerGpu(self, l, ring, scratch, layer_idx, clock, H, g);
         } else {
             forwardAttentionCpu(self, l, ring, scratch, layer_idx, clock, H, tp);
             forwardMlpCpu(self, l, scratch, H, tp);
         }
+        if (l.layer_scalar) |s| {
+            for (scratch.x, scratch.prev_x) |*x_val, px| {
+                const update = x_val.* - px;
+                x_val.* = px + s * update;
+            }
+        }
         if (ple_dim > 0) ple.forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
-        if (l.layer_scalar) |s| for (scratch.x) |*x_val| { x_val.* *= s; };
     }
 
     kernels.rmsNorm(scratch.normed_x, scratch.x, self.final_norm, self.config.rms_norm_eps);
@@ -69,6 +75,7 @@ pub fn forwardToken(
 fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, kv_layer: usize, clock: usize) void {
     const active_count = ring.getActiveSlots(kv_layer, clock, scratch.active_slots);
     const gqa_group_size = self.config.num_attention_heads / l.num_kv_heads;
+    const inv_sqrt_dim = 1.0 / @sqrt(@as(f32, @floatFromInt(l.head_dim)));
 
     for (0..self.config.num_attention_heads) |h| {
         const kv_h = h / gqa_group_size;
@@ -78,7 +85,7 @@ fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuff
         for (0..active_count) |i| {
             const slot = scratch.active_slots[i];
             const slot_kv = ring.getSlotKV(kv_layer, slot, l.kv_dim);
-            head_scores[i] = kernels.dotF32(q_head, slot_kv.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim]);
+            head_scores[i] = kernels.dotF32(q_head, slot_kv.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim]) * inv_sqrt_dim;
         }
         kernels.softmax(head_scores);
         const out_head = scratch.attn_out[h * l.head_dim .. (h + 1) * l.head_dim];

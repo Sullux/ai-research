@@ -112,7 +112,7 @@ pub const Tokenizer = struct {
 
             var norm = std.ArrayList(u8).init(allocator);
             defer norm.deinit();
-            if (chunk.len > 0 and chunk[0] != ' ' and chunk[0] != '\n') try norm.appendSlice("\xe2\x96\x81");
+            if (cursor == chunk_end and chunk.len > 0 and chunk[0] != ' ' and chunk[0] != '\n' and !add_bos) try norm.appendSlice("\xe2\x96\x81");
             for (chunk) |byte| {
                 if (byte == ' ') try norm.appendSlice("\xe2\x96\x81") else try norm.append(byte);
             }
