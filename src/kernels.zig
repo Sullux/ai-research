@@ -135,7 +135,7 @@ pub fn applyRopePartial(vec: []f32, pos: usize, head_dim: usize, rotary_dim: usi
     for (0..num_heads) |h| {
         const offset = h * head_dim;
         for (0..half_rot) |i| {
-            const freq = 1.0 / std.math.pow(f32, theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(head_dim)));
+            const freq = 1.0 / std.math.pow(f32, theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(rotary_dim)));
             const angle = @as(f32, @floatFromInt(pos)) * freq;
             const cos_v = @cos(angle);
             const sin_v = @sin(angle);

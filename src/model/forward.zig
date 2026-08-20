@@ -121,8 +121,6 @@ pub fn forwardLayerGpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBu
         for (0..l.num_kv_heads) |kv_h| {
             const head_k = scratch.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             kernels.rmsNorm(head_k, head_k, l.k_norm, self.config.rms_norm_eps);
-            const head_v = scratch.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
-            kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
         }
         kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
         ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);
@@ -164,8 +162,6 @@ pub fn forwardAttentionCpu(self: *const Model, l: LayerWeights, ring: *DynamicRi
         for (0..l.num_kv_heads) |kv_h| {
             const head_k = scratch.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             kernels.rmsNorm(head_k, head_k, l.k_norm, self.config.rms_norm_eps);
-            const head_v = scratch.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
-            kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
         }
         kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
         ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);

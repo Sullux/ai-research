@@ -7,6 +7,11 @@ struct PushConstants {
 @group(0) @binding(2) var<storage, read_write> Act: array<f32>;
 var<push_constant> pc: PushConstants;
 
+fn gelu_tanh(x: f32) -> f32 {
+    let inner = 0.7978845608 * (x + 0.044715 * x * x * x);
+    return 0.5 * x * (1.0 + tanh(inner));
+}
+
 @compute @workgroup_size(256, 1, 1)
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>
@@ -17,6 +22,6 @@ fn main(
     }
     let g = Gate[idx];
     let u = Up[idx];
-    let swish = g / (1.0 + exp(-g));
-    Act[idx] = swish * u;
+    let act = gelu_tanh(g);
+    Act[idx] = act * u;
 }

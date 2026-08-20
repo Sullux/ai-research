@@ -12,6 +12,11 @@ var<push_constant> pc: PushConstants;
 var<workgroup> sdata_gate: array<f32, 32>;
 var<workgroup> sdata_up: array<f32, 32>;
 
+fn gelu_tanh(x: f32) -> f32 {
+    let inner = 0.7978845608 * (x + 0.044715 * x * x * x);
+    return 0.5 * x * (1.0 + tanh(inner));
+}
+
 @compute @workgroup_size(32, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
@@ -61,7 +66,7 @@ fn main(
             g_sum = g_sum + sdata_gate[i];
             u_sum = u_sum + sdata_up[i];
         }
-        let swish = g_sum / (1.0 + exp(-g_sum));
-        Y[row] = swish * u_sum;
+        let act = gelu_tanh(g_sum);
+        Y[row] = act * u_sum;
     }
 }
