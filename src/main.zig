@@ -78,7 +78,10 @@ pub fn main() !void {
 
     var gpu_ctx: ?gpu.context.GpuContext = if (gpu_enabled) gpu.context.GpuContext.init(allocator) catch null else null;
     defer if (gpu_ctx) |*gc| gc.deinit();
-    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode) catch null else null;
+    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode) catch |err| {
+        std.debug.print("GPU init error: {any}\n", .{err});
+        return err;
+    } else null;
     defer if (gpu_model_ctx) |*gmc| gmc.deinit();
     const gpu_ptr: ?*gpu.model_gpu.GpuModelContext = if (gpu_model_ctx) |*gmc| gmc else null;
     if (gpu_ctx) |gc| {

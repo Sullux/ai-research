@@ -44,6 +44,7 @@ pub const PFN_vkCmdDispatch = *const fn (types.VkCommandBuffer, u32, u32, u32) c
 pub const PFN_vkCreateFence = *const fn (types.VkDevice, *const types_dispatch.VkFenceCreateInfo, ?*const anyopaque, *types.VkFence) callconv(.C) types.VkResult;
 pub const PFN_vkDestroyFence = *const fn (types.VkDevice, types.VkFence, ?*const anyopaque) callconv(.C) void;
 pub const PFN_vkResetFences = *const fn (types.VkDevice, u32, [*]const types.VkFence) callconv(.C) types.VkResult;
+pub const PFN_vkGetFenceStatus = *const fn (types.VkDevice, types.VkFence) callconv(.C) types.VkResult;
 pub const PFN_vkWaitForFences = *const fn (types.VkDevice, u32, [*]const types.VkFence, u32, u64) callconv(.C) types.VkResult;
 pub const PFN_vkQueueSubmit = *const fn (types.VkQueue, u32, [*]const types_dispatch.VkSubmitInfo, types.VkFence) callconv(.C) types.VkResult;
 pub const PFN_vkQueueWaitIdle = *const fn (types.VkQueue) callconv(.C) types.VkResult;
@@ -93,6 +94,7 @@ pub const VulkanApi = struct {
     vkCreateFence: PFN_vkCreateFence,
     vkDestroyFence: PFN_vkDestroyFence,
     vkResetFences: PFN_vkResetFences,
+    vkGetFenceStatus: PFN_vkGetFenceStatus,
     vkWaitForFences: PFN_vkWaitForFences,
     vkQueueSubmit: PFN_vkQueueSubmit,
     vkQueueWaitIdle: PFN_vkQueueWaitIdle,
@@ -153,6 +155,7 @@ pub const VulkanApi = struct {
             .vkCreateFence = lib.lookup(PFN_vkCreateFence, "vkCreateFence") orelse return error.SymbolNotFound,
             .vkDestroyFence = lib.lookup(PFN_vkDestroyFence, "vkDestroyFence") orelse return error.SymbolNotFound,
             .vkResetFences = lib.lookup(PFN_vkResetFences, "vkResetFences") orelse return error.SymbolNotFound,
+            .vkGetFenceStatus = lib.lookup(PFN_vkGetFenceStatus, "vkGetFenceStatus") orelse return error.SymbolNotFound,
             .vkWaitForFences = lib.lookup(PFN_vkWaitForFences, "vkWaitForFences") orelse return error.SymbolNotFound,
             .vkQueueSubmit = lib.lookup(PFN_vkQueueSubmit, "vkQueueSubmit") orelse return error.SymbolNotFound,
             .vkQueueWaitIdle = lib.lookup(PFN_vkQueueWaitIdle, "vkQueueWaitIdle") orelse return error.SymbolNotFound,
