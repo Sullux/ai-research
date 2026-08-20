@@ -38,7 +38,12 @@ pub const GpuEngine = struct {
         var swiglu = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4);
         errdefer swiglu.deinit();
 
-        var gate_up = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, 4, 8);
+        const gate_up_spirv = switch (mode) {
+            .q4 => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV,
+            .q8 => &shaders.FUSED_GATE_UP_SWIGLU_Q8_SPIRV,
+            .none => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV,
+        };
+        var gate_up = try pipeline.ComputePipeline.init(ctx, gate_up_spirv, 4, 8);
         errdefer gate_up.deinit();
 
         var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 12);

@@ -8,6 +8,7 @@ shaders = [
     ("rmsnorm", "RMSNORM_SPIRV", "src/gpu/shaders_rmsnorm.zig"),
     ("add_rmsnorm", "ADD_RMSNORM_SPIRV", "src/gpu/shaders_add_rmsnorm.zig"),
     ("fused_mlp_q4", "FUSED_GATE_UP_SWIGLU_SPIRV", "src/gpu/shaders_fused_q4.zig"),
+    ("fused_mlp_q8", "FUSED_GATE_UP_SWIGLU_Q8_SPIRV", "src/gpu/shaders_fused_q8.zig"),
     ("fused_swiglu", "FUSED_SWIGLU_SPIRV", "src/gpu/shaders_fused.zig"),
     ("decode_attn", "DECODE_ATTENTION_SPIRV", "src/gpu/shaders_attn.zig"),
     ("qkv_prep", "QKV_PREP_SPIRV", "src/gpu/shaders_qkv_prep.zig"),
