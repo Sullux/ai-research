@@ -32,6 +32,7 @@ pub fn main() !void {
     var max_tokens: usize, var num_anchors: usize, var window_size: usize, var num_recall: usize = .{ 128, 32, 512, 96 };
     var memory_enabled = true;
     var quiescence_enabled = false;
+    var quiescence_threshold: f32 = 0.0;
     var gpu_enabled = false;
     var bench_mode = false;
     var quant_mode: quant.QuantMode = .none;
@@ -48,7 +49,8 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--window") and arg_idx + 1 < args.len) { window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--recall") and arg_idx + 1 < args.len) { num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) { storage_path = args[arg_idx + 1]; arg_idx += 1;
-        } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--quiescence-threshold") and arg_idx + 1 < args.len) { quiescence_threshold = std.fmt.parseFloat(f32, args[arg_idx + 1]) catch 0.001; quiescence_enabled = true; arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true; quiescence_threshold = 0.001;
         } else if (std.mem.eql(u8, arg, "--bench")) { bench_mode = true; gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--gpu")) { gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--q8")) { quant_mode = .q8; gpu_enabled = true;
@@ -79,7 +81,7 @@ pub fn main() !void {
         return err;
     } else null;
     defer if (gpu_ctx) |*gc| gc.deinit();
-    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode) catch |err| {
+    var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode, quiescence_threshold) catch |err| {
         std.debug.print("GPU init error: {any}\n", .{err});
         return err;
     } else null;
@@ -89,12 +91,9 @@ pub fn main() !void {
         const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4 => "Q4_0" };
         try stdout.print("GPU: {s} (UMA Compute, {s})\n", .{ gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)], mode_tag });
     }
-
-    if (bench_mode) {
-        if (gpu_ptr) |g| {
-            try bench.runGpuBenchmark(&m, config, g, stdout);
-            return;
-        }
+    if (bench_mode and gpu_ptr != null) {
+        try bench.runGpuBenchmark(&m, config, gpu_ptr.?, stdout);
+        return;
     }
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);

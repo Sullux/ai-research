@@ -1,8 +1,9 @@
 struct PushConstants {
     hidden_size: u32,
     threshold_sq: f32,
-    target_workgroups: u32,
-    arg_index: u32,
+    base_cmd_idx: u32,
+    num_cmds: u32,
+    targets: array<u32, 16>,
 };
 
 @group(0) @binding(0) var<storage, read> X_curr: array<f32>;
@@ -42,15 +43,20 @@ fn main(
 
     if (lane == 0u) {
         let mean_sq = (s_diff_sq[0] + s_diff_sq[1]) / f32(H);
-        let base = pc.arg_index * 3u;
-        if (mean_sq < pc.threshold_sq) {
-            Indirect_args[base + 0u] = 0u;
-            Indirect_args[base + 1u] = 0u;
-            Indirect_args[base + 2u] = 0u;
-        } else {
-            Indirect_args[base + 0u] = pc.target_workgroups;
-            Indirect_args[base + 1u] = 1u;
-            Indirect_args[base + 2u] = 1u;
+        let is_active = (mean_sq >= pc.threshold_sq) || (pc.threshold_sq <= 0.0);
+        var c = 0u;
+        while (c < pc.num_cmds) {
+            let offset = (pc.base_cmd_idx + c) * 3u;
+            if (is_active) {
+                Indirect_args[offset + 0u] = pc.targets[c];
+                Indirect_args[offset + 1u] = 1u;
+                Indirect_args[offset + 2u] = 1u;
+            } else {
+                Indirect_args[offset + 0u] = 0u;
+                Indirect_args[offset + 1u] = 0u;
+                Indirect_args[offset + 2u] = 0u;
+            }
+            c = c + 1u;
         }
     }
 }

@@ -133,6 +133,13 @@ pub const ComputePipeline = struct {
         self.ctx.api.vkCmdDispatch(cmd, gx, gy, gz);
     }
 
+    pub fn recordIndirect(self: *const ComputePipeline, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, pc: ?[]const u8, indirect_buf: types.VkBuffer, offset: u64) void {
+        self.ctx.api.vkCmdBindPipeline(cmd, 1, self.pipeline);
+        self.ctx.api.vkCmdBindDescriptorSets(cmd, 1, self.pipeline_layout, 0, 1, (&set)[0..1].ptr, 0, null);
+        if (pc) |p| self.ctx.api.vkCmdPushConstants(cmd, self.pipeline_layout, types.VK_SHADER_STAGE_COMPUTE_BIT, 0, @intCast(p.len), p.ptr);
+        self.ctx.api.vkCmdDispatchIndirect(cmd, indirect_buf, offset);
+    }
+
     pub fn dispatch(self: *const ComputePipeline, push_constants: ?[]const u8, gx: u32, gy: u32, gz: u32) !void {
         _ = self.ctx.api.vkResetFences(self.ctx.device, 1, (&self.fence)[0..1].ptr);
         const begin_info = types_dispatch.VkCommandBufferBeginInfo{};

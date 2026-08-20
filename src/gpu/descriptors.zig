@@ -21,6 +21,7 @@ pub const LayerDescriptorSets = struct {
     post_attn_norm: types.VkDescriptorSet,
     post_ffn_norm: types.VkDescriptorSet,
     post_ffn_add: types.VkDescriptorSet,
+    quiescence_gate: types.VkDescriptorSet,
 };
 
 pub const DescriptorManager = struct {
@@ -45,6 +46,7 @@ pub const DescriptorManager = struct {
             .post_attn_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
             .post_ffn_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
             .post_ffn_add = try self.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
+            .quiescence_gate = try self.allocateSet(engine.quiescence_pipe.desc_set_layout),
         };
     }
 

@@ -20,13 +20,13 @@ pub const GpuLayerWeights = struct {
     o_proj: buffer.GpuBuffer,
     gate_proj: buffer.GpuBuffer, up_proj: buffer.GpuBuffer, down_proj: buffer.GpuBuffer,
     pre_ffn_norm: buffer.GpuBuffer, post_attn_norm: buffer.GpuBuffer, post_ffn_norm: buffer.GpuBuffer,
-    buf_k_cache: buffer.GpuBuffer, buf_v_cache: buffer.GpuBuffer, layer_scalar: f32,
-    has_post_attn_norm: bool, has_post_ffn_norm: bool, desc: descriptors.LayerDescriptorSets,
+    buf_x_prev: buffer.GpuBuffer, buf_k_cache: buffer.GpuBuffer, buf_v_cache: buffer.GpuBuffer,
+    layer_scalar: f32, has_post_attn_norm: bool, has_post_ffn_norm: bool, desc: descriptors.LayerDescriptorSets,
 
     pub fn deinit(self: *GpuLayerWeights) void {
-        self.buf_v_cache.deinit(); self.buf_k_cache.deinit(); self.post_ffn_norm.deinit();
-        self.post_attn_norm.deinit(); self.pre_ffn_norm.deinit(); self.down_proj.deinit();
-        self.up_proj.deinit(); self.gate_proj.deinit(); self.o_proj.deinit();
+        self.buf_v_cache.deinit(); self.buf_k_cache.deinit(); self.buf_x_prev.deinit();
+        self.post_ffn_norm.deinit(); self.post_attn_norm.deinit(); self.pre_ffn_norm.deinit();
+        self.down_proj.deinit(); self.up_proj.deinit(); self.gate_proj.deinit(); self.o_proj.deinit();
         self.v_proj.deinit(); self.k_proj.deinit(); self.q_proj.deinit();
         self.k_norm.deinit(); self.q_norm.deinit(); self.input_norm.deinit();
     }
@@ -45,7 +45,7 @@ pub const GpuModelContext = struct {
     buf_attn_out: buffer.GpuBuffer, buf_active_slots: buffer.GpuBuffer,
     buf_gate: buffer.GpuBuffer, buf_up: buffer.GpuBuffer, buf_act: buffer.GpuBuffer,
     buf_mlp_out: buffer.GpuBuffer, buf_logits: buffer.GpuBuffer, buf_sampled_token: buffer.GpuBuffer,
-    buf_step_params: buffer.GpuBuffer,
+    buf_step_params: buffer.GpuBuffer, buf_indirect_cmds: buffer.GpuBuffer,
     cmd_buf_decode: types.VkCommandBuffer, cmd_buf_prefill: types.VkCommandBuffer,
 
     fn createWeightBuffer(ctx: *const context.GpuContext, src: []const tensor.bf16, rows: usize, cols: usize, mode: quant.QuantMode) !buffer.GpuBuffer {
@@ -72,11 +72,11 @@ pub const GpuModelContext = struct {
         return buf;
     }
 
-    pub fn init(allocator: std.mem.Allocator, ctx: *const context.GpuContext, m: *const model.Model, config: model_types.ModelConfig, mode: quant.QuantMode) !GpuModelContext {
+    pub fn init(allocator: std.mem.Allocator, ctx: *const context.GpuContext, m: *const model.Model, config: model_types.ModelConfig, mode: quant.QuantMode, quiescence_thresh: f32) !GpuModelContext {
         var engine = try kernels.GpuEngine.init(ctx, mode);
         errdefer engine.deinit();
 
-        const max_sets: u32 = @intCast(m.layers.len * 16 + 16);
+        const max_sets: u32 = @intCast(m.layers.len * 20 + 32);
         var desc_mgr = try descriptors.DescriptorManager.init(ctx, max_sets);
         errdefer desc_mgr.deinit();
 
@@ -103,6 +103,8 @@ pub const GpuModelContext = struct {
         const buf_logits = try buffer.GpuBuffer.init(ctx, V * 4, sb);
         const buf_sampled_token = try buffer.GpuBuffer.init(ctx, 4, sb);
         const buf_step_params = try buffer.GpuBuffer.init(ctx, 64, sb);
+        const ind_usage = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | types.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        const buf_indirect_cmds = try buffer.GpuBuffer.init(ctx, m.layers.len * 16 * 12, ind_usage);
 
         const cb_info = types_dispatch.VkCommandBufferAllocateInfo{ .commandPool = engine.cmd_pool, .commandBufferCount = 2 };
         var cmds: [2]types.VkCommandBuffer = .{ null, null };
@@ -127,6 +129,7 @@ pub const GpuModelContext = struct {
                 .pre_ffn_norm = try createNormBuffer(ctx, l.pre_feedforward_layernorm, H),
                 .post_attn_norm = try createNormBuffer(ctx, if (l.post_attention_layernorm) |p| p else &.{}, H),
                 .post_ffn_norm = try createNormBuffer(ctx, if (l.post_feedforward_layernorm) |p| p else &.{}, H),
+                .buf_x_prev = try buffer.GpuBuffer.init(ctx, H * 4, sb),
                 .buf_k_cache = try buffer.GpuBuffer.init(ctx, max_slots * max_kv * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
                 .buf_v_cache = try buffer.GpuBuffer.init(ctx, max_slots * max_kv * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
                 .layer_scalar = l.layer_scalar orelse 1.0,
@@ -150,6 +153,7 @@ pub const GpuModelContext = struct {
             desc_mgr.bindBuffers(w.desc.post_attn_norm, &.{ &buf_mlp_out, &w.post_attn_norm, &buf_mlp_out });
             desc_mgr.bindBuffers(w.desc.post_ffn_norm, &.{ &buf_mlp_out, &w.post_ffn_norm, &buf_mlp_out });
             desc_mgr.bindBuffers(w.desc.post_ffn_add, &.{ &buf_x, &buf_mlp_out, &w.input_norm, &buf_normed_x });
+            desc_mgr.bindBuffers(w.desc.quiescence_gate, &.{ &buf_x, &w.buf_x_prev, &buf_indirect_cmds });
             gpu_layers[i] = w;
         }
 
@@ -171,11 +175,12 @@ pub const GpuModelContext = struct {
             .buf_v = buf_v, .buf_attn_out = buf_attn_out, .buf_active_slots = buf_active_slots,
             .buf_gate = buf_gate, .buf_up = buf_up, .buf_act = buf_act, .buf_mlp_out = buf_mlp_out,
             .buf_logits = buf_logits, .buf_sampled_token = buf_sampled_token,
-            .buf_step_params = buf_step_params, .cmd_buf_decode = cmds[0], .cmd_buf_prefill = cmds[1],
+            .buf_step_params = buf_step_params, .buf_indirect_cmds = buf_indirect_cmds,
+            .cmd_buf_decode = cmds[0], .cmd_buf_prefill = cmds[1],
         };
         const model_dispatch = @import("model_dispatch.zig");
-        model_dispatch.recordForwardGraph(&self_ctx, &m.config, m.layers, cmds[0], true);
-        model_dispatch.recordForwardGraph(&self_ctx, &m.config, m.layers, cmds[1], false);
+        model_dispatch.recordForwardGraph(&self_ctx, &m.config, m.layers, cmds[0], true, quiescence_thresh);
+        model_dispatch.recordForwardGraph(&self_ctx, &m.config, m.layers, cmds[1], false, 0.0);
         return self_ctx;
     }
 
@@ -183,9 +188,9 @@ pub const GpuModelContext = struct {
         self.engine.deinit(); self.desc_mgr.deinit();
         for (self.layers) |*l| l.deinit();
         self.allocator.free(self.layers);
-        self.final_norm.deinit(); self.embed_tokens.deinit(); self.buf_step_params.deinit();
-        self.buf_sampled_token.deinit(); self.buf_logits.deinit(); self.buf_mlp_out.deinit();
-        self.buf_act.deinit(); self.buf_up.deinit(); self.buf_gate.deinit();
+        self.buf_indirect_cmds.deinit(); self.final_norm.deinit(); self.embed_tokens.deinit();
+        self.buf_step_params.deinit(); self.buf_sampled_token.deinit(); self.buf_logits.deinit();
+        self.buf_mlp_out.deinit(); self.buf_act.deinit(); self.buf_up.deinit(); self.buf_gate.deinit();
         self.buf_active_slots.deinit(); self.buf_attn_out.deinit(); self.buf_v.deinit();
         self.buf_k.deinit(); self.buf_q.deinit(); self.buf_normed_x.deinit(); self.buf_x.deinit();
     }
