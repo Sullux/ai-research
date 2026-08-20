@@ -4,14 +4,13 @@ import struct
 def make_spirv_header(id_bound, instructions):
     return [0x07230203, 0x00010300, 0x00000000, id_bound, 0x00000000] + instructions
 
-def generate_register_fused_q4():
+def generate_fast_fused_q4():
     """
-    100% GPU-Occupancy Fused Gate+Up+SwiGLU Q4_0 GEMV with Register-resident X:
+    Ultra-Fast Fused Gate+Up+SwiGLU Q4_0 GEMV on RDNA 3.5:
     Workgroup: (32, 1, 1) -> 1 Wave32 per row.
-    LDS: ONLY 1.2 KB for coalesced W (sw_gate[160] + sw_up[160]).
-    X is loaded directly into 32 local registers (reg_x[0..31]) via 8 128-bit vector loads per thread.
-    Inner loop is 100% register-to-register FMA instructions.
-    1-cycle hardware subgroup reduction via OpGroupNonUniformFAdd.
+    LDS: sw_gate[160] (640 B), sw_up[160] (640 B), sw_x[1024] (4 KB) = 5.3 KB LDS.
+    Cooperative 128-bit burst loads for weights and activations.
+    Subgroup 1-cycle reduction via OpGroupNonUniformFAdd.
     """
     instructions = []
     def emit(op, *args):
@@ -44,7 +43,6 @@ def generate_register_fused_q4():
     int_t = get_id()
     bool_t = get_id()
     uvec3_t = get_id()
-    v4float_t = get_id()
     
     ptr_input_uvec3_t = get_id()
     var_gid = get_id()
@@ -71,12 +69,18 @@ def generate_register_fused_q4():
     
     c_uint_32 = get_id()
     c_uint_160 = get_id()
+    c_uint_1024 = get_id()
     
     arr_uint_160_t = get_id()
     ptr_workgroup_arr_uint_160_t = get_id()
     var_sw_gate = get_id()
     var_sw_up = get_id()
     ptr_workgroup_uint_t = get_id()
+    
+    arr_float_1024_t = get_id()
+    ptr_workgroup_arr_float_1024_t = get_id()
+    var_sw_x = get_id()
+    ptr_workgroup_float_t = get_id()
     
     ptr_sb_uint_t = get_id()
     ptr_sb_float_t = get_id()
@@ -98,14 +102,15 @@ def generate_register_fused_q4():
     c_float_1 = get_id()
     c_float_8 = get_id()
     
-    c_uint_subgroup_scope = get_id()
     c_uint_barrier_scope = get_id()
     c_uint_barrier_semantics = get_id()
+    c_uint_subgroup_scope = get_id()
     
     glsl_ext = get_id()
     main_func = get_id()
-    
-    emit(17, 1)
+
+    # Capabilities & Extensions
+    emit(17, 0)
     emit(17, 61)
     emit(17, 63)
     emit(11, glsl_ext, "GLSL.std.450")
@@ -141,6 +146,7 @@ def generate_register_fused_q4():
     emit(71, var_gid, 11, 26)
     emit(71, var_lid, 11, 28)
     
+    # Types & Variables
     emit(19, void_t)
     emit(33, func_t, void_t)
     emit(21, float_t, 32)
@@ -148,7 +154,6 @@ def generate_register_fused_q4():
     emit(21, int_t, 32, 1)
     emit(20, bool_t)
     emit(23, uvec3_t, uint_t, 3)
-    emit(23, v4float_t, float_t, 4)
     
     emit(32, ptr_input_uvec3_t, 1, uvec3_t)
     emit(28, arr_uint_t, uint_t)
@@ -167,10 +172,15 @@ def generate_register_fused_q4():
     
     emit(43, uint_t, c_uint_32, 32)
     emit(43, uint_t, c_uint_160, 160)
+    emit(43, uint_t, c_uint_1024, 1024)
     
     emit(29, arr_uint_160_t, uint_t, c_uint_160)
     emit(32, ptr_workgroup_arr_uint_160_t, 4, arr_uint_160_t)
     emit(32, ptr_workgroup_uint_t, 4, uint_t)
+    
+    emit(29, arr_float_1024_t, float_t, c_uint_1024)
+    emit(32, ptr_workgroup_arr_float_1024_t, 4, arr_float_1024_t)
+    emit(32, ptr_workgroup_float_t, 4, float_t)
     
     emit(32, ptr_sb_uint_t, 12, uint_t)
     emit(32, ptr_sb_float_t, 12, float_t)
@@ -187,15 +197,17 @@ def generate_register_fused_q4():
     emit(43, uint_t, c_uint_64, 64)
     emit(43, uint_t, c_uint_96, 96)
     emit(43, uint_t, c_uint_128, 128)
+    
     emit(43, float_t, c_float_0, 0.0)
     emit(43, float_t, c_float_1, 1.0)
     emit(43, float_t, c_float_8, 8.0)
-    emit(43, uint_t, c_uint_subgroup_scope, 3)
-    emit(43, uint_t, c_uint_barrier_scope, 2)
-    emit(43, uint_t, c_uint_barrier_semantics, 0x108)
     
-    c_offsets = [get_id() for _ in range(8)]
-    for i, cid in enumerate(c_offsets):
+    emit(43, uint_t, c_uint_barrier_scope, 2)
+    emit(43, uint_t, c_uint_barrier_semantics, 0x100 | 0x40 | 0x80)
+    emit(43, uint_t, c_uint_subgroup_scope, 3)
+    
+    c_offsets_4 = [get_id() for _ in range(8)]
+    for i, cid in enumerate(c_offsets_4):
         emit(43, uint_t, cid, i * 4)
         
     c_count_4 = get_id()
@@ -210,6 +222,7 @@ def generate_register_fused_q4():
     emit(59, ptr_pc_struct_t, var_pc, 9)
     emit(59, ptr_workgroup_arr_uint_160_t, var_sw_gate, 4)
     emit(59, ptr_workgroup_arr_uint_160_t, var_sw_up, 4)
+    emit(59, ptr_workgroup_arr_float_1024_t, var_sw_x, 4)
     
     emit(54, void_t, main_func, 0, func_t)
     label_entry = get_id()
@@ -308,27 +321,41 @@ def generate_register_fused_q4():
         emit(65, ptr_workgroup_uint_t, sw_up_ptr, var_sw_up, sw_store_idx)
         emit(62, sw_up_ptr, up_w_val)
         
-    # 2. Thread 'lane' loads its 32 floats of X into registers
-    blk_global = get_id()
-    emit(128, uint_t, blk_global, phi_chunk, lane)
-    blk_k_base = get_id()
-    emit(137, uint_t, blk_k_base, blk_global, c_uint_5_shift)
+    # 2. 32 threads load 1024 elements of x cooperatively into sw_x (32 bursts)
+    c_uint_10_shift = get_id()
+    emit(43, uint_t, c_uint_10_shift, 10) # 1024 elements per chunk (32 blocks * 32)
+    c_uint_5_shift_elem = get_id()
+    emit(43, uint_t, c_uint_5_shift_elem, 5)
+    wave_x_base = get_id()
+    emit(137, uint_t, wave_x_base, phi_chunk, c_uint_5_shift_elem)
     
-    reg_x_vals = []
-    for elem_i in range(32):
-        c_ei = get_id()
-        emit(43, uint_t, c_ei, elem_i)
-        gx_idx = get_id()
-        emit(128, uint_t, gx_idx, blk_k_base, c_ei)
+    for burst in range(32):
+        c_burst_offset = get_id()
+        emit(43, uint_t, c_burst_offset, burst * 32)
+        sw_x_idx = get_id()
+        emit(128, uint_t, sw_x_idx, lane, c_burst_offset)
+        glob_x_idx = get_id()
+        emit(128, uint_t, glob_x_idx, wave_x_base, sw_x_idx)
+        
+        cond_x_in_range = get_id()
+        emit(170, bool_t, cond_x_in_range, glob_x_idx, val_k)
+        safe_gx_idx = get_id()
+        emit(169, uint_t, safe_gx_idx, cond_x_in_range, glob_x_idx, c_uint_0)
+        
         gx_ptr = get_id()
-        emit(65, ptr_sb_float_t, gx_ptr, var_x, c_uint_0, gx_idx)
+        emit(65, ptr_sb_float_t, gx_ptr, var_x, c_uint_0, safe_gx_idx)
+        gx_val_raw = get_id()
+        emit(61, float_t, gx_val_raw, gx_ptr)
         gx_val = get_id()
-        emit(61, float_t, gx_val, gx_ptr)
-        reg_x_vals.append(gx_val)
+        emit(169, float_t, gx_val, cond_x_in_range, gx_val_raw, c_float_0)
+        
+        sw_x_ptr = get_id()
+        emit(65, ptr_workgroup_float_t, sw_x_ptr, var_sw_x, sw_x_idx)
+        emit(62, sw_x_ptr, gx_val)
         
     emit(224, c_uint_barrier_scope, c_uint_barrier_scope, c_uint_barrier_semantics)
     
-    # 3. Pure Register FMA Inner Loop
+    # 3. Inner Loop Computation
     gate_d_ptr = get_id()
     emit(65, ptr_workgroup_uint_t, gate_d_ptr, var_sw_gate, lane_sw_base)
     gate_d_u32 = get_id()
@@ -343,44 +370,52 @@ def generate_register_fused_q4():
     up_d_f = get_id()
     emit(124, float_t, up_d_f, up_d_u32)
     
-    gate_acc_id = get_id()
-    emit(43, float_t, gate_acc_id, 0.0)
-    up_acc_id = get_id()
-    emit(43, float_t, up_acc_id, 0.0)
+    gate_acc_id = c_float_0
+    up_acc_id = c_float_0
+    
+    lane_elem_base = get_id()
+    emit(137, uint_t, lane_elem_base, lane, c_uint_5_shift_elem)
     
     for word_idx in range(4):
-        sw_word_idx = get_id()
-        c_w_idx = get_id()
-        emit(43, uint_t, c_w_idx, word_idx + 1)
-        emit(128, uint_t, sw_word_idx, lane_sw_base, c_w_idx)
+        c_w_off = get_id()
+        emit(43, uint_t, c_w_off, word_idx + 1)
         
-        sw_gate_q_ptr = get_id()
-        emit(65, ptr_workgroup_uint_t, sw_gate_q_ptr, var_sw_gate, sw_word_idx)
-        gate_q_val = get_id()
-        emit(61, uint_t, gate_q_val, sw_gate_q_ptr)
+        g_w_ptr_idx = get_id()
+        emit(128, uint_t, g_w_ptr_idx, lane_sw_base, c_w_off)
+        g_w_ptr = get_id()
+        emit(65, ptr_workgroup_uint_t, g_w_ptr, var_sw_gate, g_w_ptr_idx)
+        g_w_val = get_id()
+        emit(61, uint_t, g_w_val, g_w_ptr)
         
-        sw_up_q_ptr = get_id()
-        emit(65, ptr_workgroup_uint_t, sw_up_q_ptr, var_sw_up, sw_word_idx)
-        up_q_val = get_id()
-        emit(61, uint_t, up_q_val, sw_up_q_ptr)
+        u_w_ptr = get_id()
+        emit(65, ptr_workgroup_uint_t, u_w_ptr, var_sw_up, g_w_ptr_idx)
+        u_w_val = get_id()
+        emit(61, uint_t, u_w_val, u_w_ptr)
         
         for nib_idx in range(8):
             g_nib = get_id()
-            emit(201, uint_t, g_nib, gate_q_val, c_offsets[nib_idx], c_count_4)
+            emit(201, uint_t, g_nib, g_w_val, c_offsets_4[nib_idx], c_count_4)
             g_nib_f = get_id()
-            emit(111, float_t, g_nib_f, g_nib)
+            emit(124, float_t, g_nib_f, g_nib)
             g_unbiased = get_id()
             emit(131, float_t, g_unbiased, g_nib_f, c_float_8)
             
             u_nib = get_id()
-            emit(201, uint_t, u_nib, up_q_val, c_offsets[nib_idx], c_count_4)
+            emit(201, uint_t, u_nib, u_w_val, c_offsets_4[nib_idx], c_count_4)
             u_nib_f = get_id()
-            emit(111, float_t, u_nib_f, u_nib)
+            emit(124, float_t, u_nib_f, u_nib)
             u_unbiased = get_id()
             emit(131, float_t, u_unbiased, u_nib_f, c_float_8)
             
-            # Read from register!
-            x_val = reg_x_vals[word_idx * 8 + nib_idx]
+            c_elem_in_block = get_id()
+            emit(43, uint_t, c_elem_in_block, word_idx * 8 + nib_idx)
+            x_elem_idx = get_id()
+            emit(128, uint_t, x_elem_idx, lane_elem_base, c_elem_in_block)
+            
+            sw_x_elem_ptr = get_id()
+            emit(65, ptr_workgroup_float_t, sw_x_elem_ptr, var_sw_x, x_elem_idx)
+            x_val = get_id()
+            emit(61, float_t, x_val, sw_x_elem_ptr)
             
             g_prod = get_id()
             emit(133, float_t, g_prod, g_unbiased, x_val)
@@ -470,14 +505,14 @@ def generate_register_fused_q4():
     return make_spirv_header(id_counter, instructions)
 
 if __name__ == '__main__':
-    code = generate_register_fused_q4()
+    code = generate_fast_fused_q4()
     with open("src/gpu/shaders_fused_q4.zig", "w") as f:
         f.write('pub const FUSED_GATE_UP_SWIGLU_Q4_SPIRV = [_]u32{\n')
         for i, word in enumerate(code):
             f.write(f' 0x{word:08x},')
-            if (i + 1) % 24 == 0:
+            if (i + 1) % 32 == 0:
                 f.write('\n')
-        if len(code) % 24 != 0:
+        if len(code) % 32 != 0:
             f.write('\n')
         f.write('};\n')
-    print(f"Generated register-resident fused gate+up+swiglu Q4 SPIR-V: {len(code)} words ({len(code)*4} bytes)")
+    print(f"Generated and wrote Fast Fused Gate+Up+SwiGLU Q4 SPIR-V: {len(code)} words ({len(code)*4} bytes)")

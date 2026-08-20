@@ -13,6 +13,7 @@ pub const GpuEngine = struct {
     gemv_pipe: pipeline.ComputePipeline,
     swiglu_pipe: pipeline.ComputePipeline,
     gate_up_pipe: pipeline.ComputePipeline,
+    add_rmsnorm_pipe: pipeline.ComputePipeline,
     cmd_pool: types.VkCommandPool,
     cmd_buf: types.VkCommandBuffer,
     fence: types.VkFence,
@@ -31,6 +32,9 @@ pub const GpuEngine = struct {
 
         var gate_up = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, 4, 8);
         errdefer gate_up.deinit();
+
+        var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 8);
+        errdefer add_rms.deinit();
 
         const cp_info = types_dispatch.VkCommandPoolCreateInfo{ .queueFamilyIndex = ctx.queue_family_index };
         var pool: types.VkCommandPool = null;
@@ -51,6 +55,7 @@ pub const GpuEngine = struct {
             .gemv_pipe = gemv,
             .swiglu_pipe = swiglu,
             .gate_up_pipe = gate_up,
+            .add_rmsnorm_pipe = add_rms,
             .cmd_pool = pool,
             .cmd_buf = cmd,
             .fence = fence,
@@ -60,6 +65,7 @@ pub const GpuEngine = struct {
     pub fn deinit(self: *GpuEngine) void {
         self.ctx.api.vkDestroyFence(self.ctx.device, self.fence, null);
         self.ctx.api.vkDestroyCommandPool(self.ctx.device, self.cmd_pool, null);
+        self.add_rmsnorm_pipe.deinit();
         self.gate_up_pipe.deinit();
         self.swiglu_pipe.deinit();
         self.gemv_pipe.deinit();
@@ -87,6 +93,11 @@ pub const GpuEngine = struct {
         const pc = [_]u32{@intCast(dim)};
         const workgroups: u32 = @intCast((dim + 63) / 64);
         self.swiglu_pipe.record(self.cmd_buf, set, std.mem.sliceAsBytes(&pc), workgroups, 1, 1);
+    }
+
+    pub fn recordAddRmsNorm(self: *const GpuEngine, set: types.VkDescriptorSet, H: usize, eps: f32) void {
+        const pc = extern struct { h: u32, eps: f32 }{ .h = @intCast(H), .eps = eps };
+        self.add_rmsnorm_pipe.record(self.cmd_buf, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
 
     pub fn recordBarrier(self: *const GpuEngine, buf: *const buffer.GpuBuffer) void {

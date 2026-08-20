@@ -14,6 +14,8 @@ pub const LayerDescriptorSets = struct {
     swiglu: types.VkDescriptorSet,
     down_proj: types.VkDescriptorSet,
     gate_up_swiglu: types.VkDescriptorSet,
+    pre_ffn_norm: types.VkDescriptorSet,
+    post_attn_norm: types.VkDescriptorSet,
 };
 
 pub const DescriptorManager = struct {

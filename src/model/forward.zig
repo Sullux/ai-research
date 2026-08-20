@@ -1,19 +1,20 @@
 const std = @import("std");
 pub const tensor = @import("../tensor.zig");
+pub const bf16 = tensor.bf16;
+pub const model = @import("../model.zig");
+pub const Model = model.Model;
+pub const LayerWeights = model.LayerWeights;
+pub const ForwardScratch = model.ForwardScratch;
 pub const kernels = @import("../kernels.zig");
 pub const memory = @import("../memory.zig");
 pub const memory_inject = @import("memory_inject.zig");
-pub const types = @import("types.zig");
-pub const loader = @import("loader.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
+pub const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 pub const quiescence = @import("../quiescence.zig");
+pub const QuiescenceTracker = quiescence.QuiescenceTracker;
 pub const gpu = @import("../gpu.zig");
-
-const Model = loader.Model;
-const LayerWeights = types.LayerWeights;
-const ForwardScratch = types.ForwardScratch;
-const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
-const GpuModelContext = gpu.model_gpu.GpuModelContext;
+pub const GpuModelContext = gpu.model_gpu.GpuModelContext;
+pub const ple = @import("ple.zig");
 
 pub fn forwardToken(
     self: *const Model,
@@ -34,15 +35,19 @@ pub fn forwardToken(
     const emb_offset = @as(usize, token_id) * H;
     for (scratch.x, self.embed_tokens[emb_offset .. emb_offset + H]) |*out, e| out.* = e.toF32() * embed_scale;
 
-    if (ple_dim > 0) preparePLE(self, scratch, token_id, H, ple_dim, tp);
+    if (ple_dim > 0) ple.preparePLE(self, scratch, token_id, H, ple_dim, tp);
 
     for (self.layers, 0..) |l, layer_idx| {
         if (quiescence_opt) |q| {
             if (!q.shouldExecute(layer_idx, clock, scratch.x, scratch.prev_x)) continue;
         }
-        forwardAttention(self, l, ring, scratch, layer_idx, clock, H, tp, gpu_opt);
-        forwardMLP(self, l, scratch, layer_idx, H, tp, gpu_opt);
-        if (ple_dim > 0) forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
+        if (gpu_opt) |g| {
+            forwardLayerGpu(self, l, ring, scratch, layer_idx, clock, H, g);
+        } else {
+            forwardAttentionCpu(self, l, ring, scratch, layer_idx, clock, H, tp);
+            forwardMlpCpu(self, l, scratch, H, tp);
+        }
+        if (ple_dim > 0) ple.forwardPLE(self, l, scratch, layer_idx, ple_dim, H);
         if (l.layer_scalar) |s| for (scratch.x) |*x_val| { x_val.* *= s; };
     }
 
@@ -61,73 +66,7 @@ pub fn forwardToken(
     if (memory_opt) |mem| memory_inject.integrateMemory(self, mem, ring, scratch, clock, H, tp);
 }
 
-fn preparePLE(self: *const Model, scratch: *ForwardScratch, token_id: u32, H: usize, ple_dim: usize, tp: ?*std.Thread.Pool) void {
-    const ple_table = self.embed_tokens_per_layer orelse return;
-    const total_ple_dim = self.layers.len * ple_dim;
-    const ple_scale = @sqrt(@as(f32, @floatFromInt(ple_dim)));
-    const inv_sqrt_2: f32 = 0.70710678118;
-
-    if (self.per_layer_model_projection) |plmp| {
-        if (tp) |pool| kernels.gemvParallel(scratch.ple_context, scratch.x, plmp, total_ple_dim, H, pool) else kernels.gemv(scratch.ple_context, scratch.x, plmp, total_ple_dim, H);
-        const proj_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(H)));
-        for (scratch.ple_context) |*v| v.* *= proj_scale;
-
-        if (self.per_layer_projection_norm) |plpn| {
-            for (0..self.layers.len) |l| {
-                const layer_ctx = scratch.ple_context[l * ple_dim .. (l + 1) * ple_dim];
-                kernels.rmsNorm(layer_ctx, layer_ctx, plpn, self.config.rms_norm_eps);
-            }
-        }
-        const tok_ple_offset = @as(usize, token_id) * total_ple_dim;
-        const tok_ple_row = ple_table[tok_ple_offset .. tok_ple_offset + total_ple_dim];
-        for (scratch.ple_context, tok_ple_row) |*ctx, tok_p| ctx.* = (ctx.* + tok_p.toF32() * ple_scale) * inv_sqrt_2;
-    }
-}
-
-fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool, gpu_opt: ?*GpuModelContext) void {
-    kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
-
-    const first_kv_shared_idx = self.config.num_hidden_layers - self.config.num_kv_shared_layers;
-    const is_shared = (self.config.num_kv_shared_layers > 0 and layer_idx >= first_kv_shared_idx);
-    const kv_layer = if (is_shared) (if (l.layer_type == .full_attention) @as(usize, 14) else @as(usize, 13)) else layer_idx;
-
-    if (gpu_opt) |g| {
-        _ = gpu.model_dispatch.gpuDispatchQkv(g, layer_idx, scratch.normed_x, scratch.q[0..l.q_dim], scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim], l.q_dim, l.kv_dim, H);
-    } else {
-        if (tp) |pool| {
-            kernels.gemvParallel(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H, pool);
-            if (!is_shared) {
-                kernels.gemvParallel(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H, pool);
-                if (!l.k_eq_v and l.v_proj.len > 0) kernels.gemvParallel(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H, pool);
-            }
-        } else {
-            kernels.gemv(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H);
-            if (!is_shared) {
-                kernels.gemv(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H);
-                if (!l.k_eq_v and l.v_proj.len > 0) kernels.gemv(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H);
-            }
-        }
-    }
-    if (l.k_eq_v or l.v_proj.len == 0) @memcpy(scratch.v[0..l.kv_dim], scratch.k[0..l.kv_dim]);
-
-    for (0..self.config.num_attention_heads) |h| {
-        const head_q = scratch.q[h * l.head_dim .. (h + 1) * l.head_dim];
-        kernels.rmsNorm(head_q, head_q, l.q_norm, self.config.rms_norm_eps);
-    }
-    const theta = if (l.layer_type == .full_attention) self.config.rope_theta_full else self.config.rope_theta;
-    kernels.applyRopePartial(scratch.q[0..l.q_dim], clock, l.head_dim, l.rotary_dim, theta);
-
-    if (!is_shared) {
-        for (0..l.num_kv_heads) |kv_h| {
-            const head_k = scratch.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
-            kernels.rmsNorm(head_k, head_k, l.k_norm, self.config.rms_norm_eps);
-            const head_v = scratch.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
-            kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
-        }
-        kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
-        ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);
-    }
-
+fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, kv_layer: usize, clock: usize) void {
     const active_count = ring.getActiveSlots(kv_layer, clock, scratch.active_slots);
     const gqa_group_size = self.config.num_attention_heads / l.num_kv_heads;
 
@@ -153,10 +92,81 @@ fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffe
             for (out_head, v_head) |*o, v_val| o.* += weight * v_val;
         }
     }
+}
 
-    if (gpu_opt) |g| {
-        _ = gpu.model_dispatch.gpuDispatchOProj(g, layer_idx, scratch.attn_out[0..l.q_dim], scratch.mlp_out, H, l.q_dim);
-    } else if (tp) |pool| {
+fn forwardLayerGpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, g: *GpuModelContext) void {
+    kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
+    const first_kv_shared = self.config.num_hidden_layers - self.config.num_kv_shared_layers;
+    const is_shared = (self.config.num_kv_shared_layers > 0 and layer_idx >= first_kv_shared);
+    const kv_layer = if (is_shared) (if (l.layer_type == .full_attention) @as(usize, 14) else @as(usize, 13)) else layer_idx;
+
+    _ = gpu.model_dispatch.gpuDispatchQkv(g, layer_idx, scratch.normed_x, scratch.q[0..l.q_dim], scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim], l.q_dim, l.kv_dim, H);
+    if (l.k_eq_v or l.v_proj.len == 0) @memcpy(scratch.v[0..l.kv_dim], scratch.k[0..l.kv_dim]);
+
+    for (0..self.config.num_attention_heads) |h| {
+        const head_q = scratch.q[h * l.head_dim .. (h + 1) * l.head_dim];
+        kernels.rmsNorm(head_q, head_q, l.q_norm, self.config.rms_norm_eps);
+    }
+    const theta = if (l.layer_type == .full_attention) self.config.rope_theta_full else self.config.rope_theta;
+    kernels.applyRopePartial(scratch.q[0..l.q_dim], clock, l.head_dim, l.rotary_dim, theta);
+
+    if (!is_shared) {
+        for (0..l.num_kv_heads) |kv_h| {
+            const head_k = scratch.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
+            kernels.rmsNorm(head_k, head_k, l.k_norm, self.config.rms_norm_eps);
+            const head_v = scratch.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
+            kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
+        }
+        kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
+        ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);
+    }
+
+    runAttentionHeads(self, l, ring, scratch, kv_layer, clock);
+    _ = gpu.model_dispatch.gpuDispatchLayerFFN(g, layer_idx, scratch.attn_out[0..l.q_dim], scratch.x, H, l.q_dim, l.intermediate_dim, self.config.rms_norm_eps);
+}
+
+fn forwardAttentionCpu(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, layer_idx: usize, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
+    kernels.rmsNorm(scratch.normed_x, scratch.x, l.input_layernorm, self.config.rms_norm_eps);
+    const first_kv_shared = self.config.num_hidden_layers - self.config.num_kv_shared_layers;
+    const is_shared = (self.config.num_kv_shared_layers > 0 and layer_idx >= first_kv_shared);
+    const kv_layer = if (is_shared) (if (l.layer_type == .full_attention) @as(usize, 14) else @as(usize, 13)) else layer_idx;
+
+    if (tp) |pool| {
+        kernels.gemvParallel(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H, pool);
+        if (!is_shared) {
+            kernels.gemvParallel(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H, pool);
+            if (!l.k_eq_v and l.v_proj.len > 0) kernels.gemvParallel(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H, pool);
+        }
+    } else {
+        kernels.gemv(scratch.q[0..l.q_dim], scratch.normed_x, l.q_proj, l.q_dim, H);
+        if (!is_shared) {
+            kernels.gemv(scratch.k[0..l.kv_dim], scratch.normed_x, l.k_proj, l.kv_dim, H);
+            if (!l.k_eq_v and l.v_proj.len > 0) kernels.gemv(scratch.v[0..l.kv_dim], scratch.normed_x, l.v_proj, l.kv_dim, H);
+        }
+    }
+    if (l.k_eq_v or l.v_proj.len == 0) @memcpy(scratch.v[0..l.kv_dim], scratch.k[0..l.kv_dim]);
+
+    for (0..self.config.num_attention_heads) |h| {
+        const head_q = scratch.q[h * l.head_dim .. (h + 1) * l.head_dim];
+        kernels.rmsNorm(head_q, head_q, l.q_norm, self.config.rms_norm_eps);
+    }
+    const theta = if (l.layer_type == .full_attention) self.config.rope_theta_full else self.config.rope_theta;
+    kernels.applyRopePartial(scratch.q[0..l.q_dim], clock, l.head_dim, l.rotary_dim, theta);
+
+    if (!is_shared) {
+        for (0..l.num_kv_heads) |kv_h| {
+            const head_k = scratch.k[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
+            kernels.rmsNorm(head_k, head_k, l.k_norm, self.config.rms_norm_eps);
+            const head_v = scratch.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
+            kernels.unitRmsNorm(head_v, head_v, self.config.rms_norm_eps);
+        }
+        kernels.applyRopePartial(scratch.k[0..l.kv_dim], clock, l.head_dim, l.rotary_dim, theta);
+        ring.writeKV(kv_layer, clock, scratch.k[0..l.kv_dim], scratch.v[0..l.kv_dim]);
+    }
+
+    runAttentionHeads(self, l, ring, scratch, kv_layer, clock);
+
+    if (tp) |pool| {
         kernels.gemvParallel(scratch.mlp_out, scratch.attn_out[0..l.q_dim], l.o_proj, H, l.q_dim, pool);
     } else {
         kernels.gemv(scratch.mlp_out, scratch.attn_out[0..l.q_dim], l.o_proj, H, l.q_dim);
@@ -165,25 +175,9 @@ fn forwardAttention(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffe
     for (scratch.x, scratch.mlp_out) |*x_val, attn_v| x_val.* += attn_v;
 }
 
-fn forwardMLP(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, layer_idx: usize, H: usize, tp: ?*std.Thread.Pool, gpu_opt: ?*GpuModelContext) void {
+fn forwardMlpCpu(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, H: usize, tp: ?*std.Thread.Pool) void {
     kernels.rmsNorm(scratch.normed_x, scratch.x, l.pre_feedforward_layernorm, self.config.rms_norm_eps);
-    if (gpu_opt) |g| {
-        _ = gpu.model_dispatch.gpuDispatchMlp(g, layer_idx, scratch.normed_x, scratch.mlp_out, H, l.intermediate_dim);
-    } else {
-        kernels.gatedMlp(scratch.mlp_out, scratch.normed_x, l.gate_proj, l.up_proj, l.down_proj, H, l.intermediate_dim, scratch.mlp_gate_up, tp);
-    }
+    kernels.gatedMlp(scratch.mlp_out, scratch.normed_x, l.gate_proj, l.up_proj, l.down_proj, H, l.intermediate_dim, scratch.mlp_gate_up, tp);
     if (l.post_feedforward_layernorm) |pfl| kernels.rmsNorm(scratch.mlp_out, scratch.mlp_out, pfl, self.config.rms_norm_eps);
     for (scratch.x, scratch.mlp_out) |*x_val, ffn_v| x_val.* += ffn_v;
-}
-
-fn forwardPLE(self: *const Model, l: LayerWeights, scratch: *ForwardScratch, layer_idx: usize, ple_dim: usize, H: usize) void {
-    if (self.embed_tokens_per_layer == null) return;
-    if (l.per_layer_input_gate == null or l.per_layer_projection == null or l.post_per_layer_input_norm == null) return;
-
-    kernels.gemv(scratch.ple_buf_1, scratch.x, l.per_layer_input_gate.?, ple_dim, H);
-    const layer_ple_ctx = scratch.ple_context[layer_idx * ple_dim .. (layer_idx + 1) * ple_dim];
-    for (scratch.ple_buf_1, layer_ple_ctx) |*g, ctx_val| g.* = kernels.geluTanh(g.*) * ctx_val;
-    kernels.gemv(scratch.ple_buf_2, scratch.ple_buf_1, l.per_layer_projection.?, H, ple_dim);
-    kernels.rmsNorm(scratch.ple_buf_2, scratch.ple_buf_2, l.post_per_layer_input_norm.?, self.config.rms_norm_eps);
-    for (scratch.x, scratch.ple_buf_2) |*x_val, p_val| x_val.* += p_val;
 }

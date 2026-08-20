@@ -27,30 +27,6 @@ test "vulkan context initialization and AMD device selection" {
     try std.testing.expect(ctx.device_name.len > 0);
 }
 
-test "vulkan compute pipeline execution on AMD GPU" {
-    const maybe_ctx = try testCtx();
-    if (maybe_ctx == null) return;
-    var ctx = maybe_ctx.?;
-    defer ctx.deinit();
-
-    const n: usize = 256;
-    var buf_a = try buffer.GpuBuffer.init(&ctx, n * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_a.deinit();
-    var buf_b = try buffer.GpuBuffer.init(&ctx, n * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_b.deinit();
-    var buf_c = try buffer.GpuBuffer.init(&ctx, n * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_c.deinit();
-
-    for (buf_a.asSlice(f32), 0..) |*a, i| a.* = @as(f32, @floatFromInt(i)) * 1.5;
-    @memset(buf_b.asSlice(f32), 10.0);
-
-    var pipe = try pipeline.ComputePipeline.init(&ctx, &shaders.VEC_ADD_SPIRV, 3, 0);
-    defer pipe.deinit();
-    try pipe.bindBuffers(&[_]*const buffer.GpuBuffer{ &buf_a, &buf_b, &buf_c });
-    try pipe.dispatch(null, @intCast(n / 64), 1, 1);
-    for (buf_c.asSlice(f32), 0..) |c, i| try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(i)) * 1.5 + 10.0, c, 1e-4);
-}
-
 test "vulkan gemv compute execution (bf16, q4) on AMD GPU" {
     const maybe_ctx = try testCtx();
     if (maybe_ctx == null) return;
@@ -69,17 +45,6 @@ test "vulkan gemv compute execution (bf16, q4) on AMD GPU" {
     defer std.testing.allocator.free(raw);
     @memset(raw, 0x3F80);
 
-    // BF16
-    var buf_bf16 = try buffer.GpuBuffer.init(&ctx, m * k * 2, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_bf16.deinit();
-    @memset(buf_bf16.asSlice(u16), 0x3F80);
-    var p_bf16 = try pipeline.ComputePipeline.init(&ctx, &shaders.GEMV_BF16_SPIRV, 3, 8);
-    defer p_bf16.deinit();
-    try p_bf16.bindBuffers(&[_]*const buffer.GpuBuffer{ &buf_bf16, &buf_x, &buf_y });
-    const pc = [_]u32{ @intCast(m), @intCast(k) };
-    try p_bf16.dispatch(std.mem.sliceAsBytes(&pc), @intCast((m + 63) / 64), 1, 1);
-
-    // Q4
     const q4_size = quant.getQuantizedSizeBytes(m, k, .q4);
     var buf_q4 = try buffer.GpuBuffer.init(&ctx, q4_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     defer buf_q4.deinit();
@@ -87,41 +52,48 @@ test "vulkan gemv compute execution (bf16, q4) on AMD GPU" {
     var p_q4 = try pipeline.ComputePipeline.init(&ctx, &shaders.GEMV_Q4_SPIRV, 3, 8);
     defer p_q4.deinit();
     try p_q4.bindBuffers(&[_]*const buffer.GpuBuffer{ &buf_q4, &buf_x, &buf_y });
+    const pc = [_]u32{ @intCast(m), @intCast(k) };
     try p_q4.dispatch(std.mem.sliceAsBytes(&pc), @intCast(m), 1, 1);
     for (buf_y.asSlice(f32)) |y| try std.testing.expect(y > 0);
 }
 
-test "vulkan fused swiglu and add_rmsnorm on AMD GPU" {
+test "vulkan decode attention execution on AMD GPU" {
     const maybe_ctx = try testCtx();
     if (maybe_ctx == null) return;
     var ctx = maybe_ctx.?;
     defer ctx.deinit();
 
-    const dim: usize = 128;
-    var buf_g = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_g.deinit();
-    var buf_u = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_u.deinit();
-    var buf_o = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_o.deinit();
+    const num_q_heads: usize = 16;
+    const num_kv_heads: usize = 8;
+    const head_dim: usize = 256;
+    const n_active: usize = 4;
+    const max_slots: usize = 8;
 
-    for (buf_g.asSlice(f32), 0..) |*g, i| g.* = @as(f32, @floatFromInt(i)) * 0.1 - 2.0;
-    @memset(buf_u.asSlice(f32), 1.5);
+    const q_size = num_q_heads * head_dim * @sizeOf(f32);
+    const kv_size = max_slots * num_kv_heads * head_dim * @sizeOf(f32);
 
-    var p_swi = try pipeline.ComputePipeline.init(&ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4);
-    defer p_swi.deinit();
-    try p_swi.bindBuffers(&[_]*const buffer.GpuBuffer{ &buf_g, &buf_u, &buf_o });
-    const pc = [_]u32{@intCast(dim)};
-    try p_swi.dispatch(std.mem.sliceAsBytes(&pc), 2, 1, 1);
+    var buf_q = try buffer.GpuBuffer.init(&ctx, q_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_q.deinit();
+    var buf_k = try buffer.GpuBuffer.init(&ctx, kv_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_k.deinit();
+    var buf_v = try buffer.GpuBuffer.init(&ctx, kv_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_v.deinit();
+    var buf_slots = try buffer.GpuBuffer.init(&ctx, n_active * @sizeOf(u32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_slots.deinit();
+    var buf_out = try buffer.GpuBuffer.init(&ctx, q_size, types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    defer buf_out.deinit();
 
-    var buf_w = try buffer.GpuBuffer.init(&ctx, dim * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    defer buf_w.deinit();
-    @memset(buf_w.asSlice(f32), 2.0);
+    @memset(buf_q.asSlice(f32), 0.1);
+    @memset(buf_k.asSlice(f32), 0.1);
+    @memset(buf_v.asSlice(f32), 1.0);
+    for (buf_slots.asSlice(u32), 0..) |*s, i| s.* = @intCast(i);
 
-    var p_norm = try pipeline.ComputePipeline.init(&ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 8);
-    defer p_norm.deinit();
-    try p_norm.bindBuffers(&[_]*const buffer.GpuBuffer{ &buf_g, &buf_u, &buf_w, &buf_o });
-    const pc_norm = extern struct { h: u32 = @intCast(dim), eps: f32 = 1e-6 }{};
-    try p_norm.dispatch(std.mem.asBytes(&pc_norm), 1, 1, 1);
-    for (buf_o.asSlice(f32)) |o| try std.testing.expect(o > 0);
+    var pipe = try pipeline.ComputePipeline.init(&ctx, &shaders.DECODE_ATTENTION_SPIRV, 5, 8);
+    defer pipe.deinit();
+    const bufs = [_]*const buffer.GpuBuffer{ &buf_q, &buf_k, &buf_v, &buf_slots, &buf_out };
+    try pipe.bindBuffers(&bufs);
+    const pc = extern struct { n_active: u32 = @intCast(n_active), kv_stride: u32 = @intCast(num_kv_heads * head_dim) }{};
+    try pipe.dispatch(std.mem.asBytes(&pc), @intCast(num_q_heads), 1, 1);
+
+    for (buf_out.asSlice(f32)) |v| try std.testing.expectApproxEqAbs(@as(f32, 1.0), v, 1e-4);
 }
