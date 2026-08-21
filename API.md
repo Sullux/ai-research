@@ -8,12 +8,12 @@ The Streaming Hierarchical Inference Engine provides a native, low-overhead bina
 ./zig-out/bin/infer --serve [OPTIONS]
 ```
 
-### Protocol Characteristics:
-* **Transport:** Standard POSIX anonymous pipes (STDIN / STDOUT).
+### Core Design Principles:
+* **Pure Opcode Protocol (Zero Header Flags):** Every event, channel stream, and boundary condition is represented by a discrete opcode. Host dispatch is a simple, direct `switch (frame.opcode)` with zero bitmask checks.
+* **Transport:** Standard POSIX anonymous pipes (STDIN / STDOUT). Lifecycle is bound directly to the parent process.
 * **Byte Ordering:** Little-Endian for all multi-byte integers and IEEE 754 floating-point values.
-* **Framing:** Fixed 16-byte message envelope followed by a variable-length payload.
-* **Full-Duplex:** Host $\to$ Engine (Inbound) and Engine $\to$ Host (Outbound) frames operate concurrently and asynchronously without blocking or half-duplex turn-taking locks.
-* **Zero Parsing Overhead:** Direct binary struct mapping in C / Zig / Node.js Buffers without JSON stringification overhead on hot paths.
+* **Fixed 16-Byte Envelope:** Every frame begins with a uniform 16-byte header followed by an optional payload.
+* **Full-Duplex:** Host $\to$ Engine (Inbound) and Engine $\to$ Host (Outbound) frames operate concurrently and asynchronously without turn-taking locks.
 
 ---
 
@@ -29,7 +29,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |          Version (1)          |           Msg ID              |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|            Opcode             |            Flags              |
+|            Opcode             |          Reserved (0)         |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                         Payload Length                        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -44,20 +44,10 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | :--- | :--- | :--- | :--- |
 | `0..3` | **`magic`** | `u32` | Protocol magic constant: `0x53554C58` (ASCII `'SULX'`). |
 | `4..5` | **`version`** | `u16` | Protocol version (`0x0001`). |
-| `6..7` | **`msg_id`** | `u16` | Host-assigned message / correlation ID for request-response pairing. |
-| `8..9` | **`opcode`** | `u16` | Message operation code (see catalog below). |
-| `10..11`| **`flags`** | `u16` | Bitfield flags (e.g. streaming continuation, turn boundaries). |
+| `6..7` | **`msg_id`** | `u16` | Correlation ID for matching requests and responses (or `0` for unsolicited events). |
+| `8..9` | **`opcode`** | `u16` | Operation code specifying the exact message type and payload structure. |
+| `10..11`| **`reserved`** | `u16` | Reserved for 32-bit alignment padding (set to `0x0000`). |
 | `12..15`| **`payload_len`**| `u32` | Length in bytes of the payload immediately following the header ($0 \le N \le 67,108,864$). |
-
-### Standard Header Flags (`flags` Bitfield):
-
-| Bit | Name | Value | Description |
-| :--- | :--- | :--- | :--- |
-| 0 | `FLAG_END_OF_TURN` | `0x0001` | Signals the completion of a conversational or reasoning turn (`<turn|>`). |
-| 1 | `FLAG_INTERRUPTED` | `0x0002` | Marks the message or episode as suspended/interrupted. |
-| 2 | `FLAG_STREAM_CHUNK` | `0x0004` | Intermediate chunk in a multi-packet streaming transmission. |
-| 3 | `FLAG_REPLAY` | `0x0008` | Identifies payload as explicitly recalled memory replay. |
-| 4 | `FLAG_THINKING` | `0x0010` | Identifies emitted token as internal reasoning channel (`<channel>thought`). |
 
 ---
 
@@ -67,14 +57,14 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 
 | Opcode | Name | Description |
 | :--- | :--- | :--- |
-| `0x0001` | **`OP_STREAM_INPUT`** | Stream raw text or pre-tokenized token blocks into the primary Layer 0 input pipeline. |
-| `0x0002` | **`OP_ABORT`** | Administrative emergency brake: halts generation immediately; preserves staging state as `is_interrupted`. |
+| `0x0001` | **`OP_STREAM_INPUT`** | Stream UTF-8 text or raw token IDs into the primary Layer 0 input pipeline. |
+| `0x0002` | **`OP_ABORT`** | Administrative emergency brake: halts decoding immediately; preserves active state as `is_interrupted`. |
 | `0x0003` | **`OP_MEM_QUERY`** | Explicit memory search (`keywords`, `fulltext`, temporal range, or pagination cursor). |
-| `0x0004` | **`OP_SET_CONFIG`** | Configure per-turn parameters (thinking budget, temperature, top-k, quiescence threshold, stop tokens). |
-| `0x0005` | **`OP_TOOL_RETURN`** | Return tool execution output back to the model following an `OP_TOOL_CALL`. |
-| `0x0006` | **`OP_MEM_COMMIT`** | Force immediate consolidation of the active staging buffer into persistent long-term storage. |
-| `0x000E` | **`OP_PING`** | Keepalive / round-trip health check. |
-| `0x000F` | **`OP_SHUTDOWN`** | Gracefully flush persistent diff stores, release GPU resources, and terminate the process. |
+| `0x0004` | **`OP_SET_CONFIG`** | Configure runtime parameters (thinking budget, temperature, quiescence threshold, stop tokens). |
+| `0x0005` | **`OP_TOOL_RETURN`** | Return tool execution result back into the model stream. |
+| `0x0006` | **`OP_MEM_COMMIT`** | Force immediate consolidation of staging buffer to NVMe storage. |
+| `0x000E` | **`OP_PING`** | Keepalive / round-trip latency probe. |
+| `0x000F` | **`OP_SHUTDOWN`** | Gracefully flush stores, release GPU memory, and exit. |
 
 ---
 
@@ -82,10 +72,12 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 
 | Opcode | Name | Description |
 | :--- | :--- | :--- |
-| `0x0101` | **`OP_STREAM_TOKEN`** | Real-time generated token with token ID, chronological clock $t$, layer quiescence bitmask, and UTF-8 text. |
-| `0x0102` | **`OP_MEM_RESPONSE`** | Results of an `OP_MEM_QUERY` returning matched episode metadata, timestamps, and scores. |
-| `0x0103` | **`OP_TOOL_CALL`** | Model-generated tool call request (tool name + JSON arguments). |
-| `0x0104` | **`OP_STATUS`** | Live engine telemetry (tok/s, active vs quiescent layer breakdown, ring buffer slot usage, VRAM/UMA). |
+| `0x0101` | **`OP_STREAM_CONTENT`** | Generated conversational / assistant text token. |
+| `0x0102` | **`OP_STREAM_THOUGHT`** | Internal reasoning / thought channel token (`<channel>thought`). |
+| `0x0103` | **`OP_TURN_COMPLETE`** | Signals end of turn (`<turn|>`), returning token count, duration, and average tok/s. |
+| `0x0104` | **`OP_TOOL_CALL`** | Model-generated tool call request (tool name + JSON arguments). |
+| `0x0105` | **`OP_MEM_RESPONSE`** | Results of an `OP_MEM_QUERY` returning matched episode records and metadata. |
+| `0x0106` | **`OP_STATUS`** | Live engine telemetry (tok/s, active vs quiescent layer breakdown, ring slots, VRAM). |
 | `0x010E` | **`OP_PONG`** | Reply to `OP_PING`. |
 | `0x01FF` | **`OP_ERROR`** | Structured error notification. |
 
@@ -107,15 +99,15 @@ Appends text or pre-tokenized tokens into the continuous Layer 0 ring buffer.
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 * **`Mode` (`u8`):**
-  * `0x00`: Raw UTF-8 string (engine runs tokenizer).
+  * `0x00`: Raw UTF-8 string (engine tokenizes).
   * `0x01`: Array of 32-bit Token IDs (`[Token Count]u32`).
 * **`Token Count` (`u16`):** Number of token IDs if `Mode == 0x01`, otherwise 0.
 * **`Stream Data`:** UTF-8 bytes or binary `[Token Count]u32` array.
 
 ---
 
-### 4.2. `OP_STREAM_TOKEN` (`0x0101`) — Outbound
-Emitted synchronously for every autoregressively decoded token ($N=1$).
+### 4.2. `OP_STREAM_CONTENT` (`0x0101`) & `OP_STREAM_THOUGHT` (`0x0102`) — Outbound
+Emitted for every decoded token. Identical layout, distinguished by opcode.
 
 ```
  0                   1                   2                   3
@@ -137,14 +129,38 @@ Emitted synchronously for every autoregressively decoded token ($N=1$).
 ```
 * **`Token ID` (`u32`):** Vocabulary token ID (0..262143).
 * **`Clock (t)` (`u64`):** Monotonic token timestamp in the continuous stream.
-* **`Active Layer Bitmask` (`u64`):** Bitmask indicating which layers executed densely vs which were skipped due to quiescence (Bit $i = 1$ indicates Layer $i$ executed; Bit $i = 0$ indicates Layer $i$ was bypassed).
+* **`Active Layer Bitmask` (`u64`):** Bitmask indicating dense execution vs. quiescent skip per layer (Bit $i = 1$ indicates Layer $i$ executed).
 * **`Text Length` (`u16`):** Length in bytes of the decoded UTF-8 string slice.
-* **`UTF-8 Token Slice`:** Exact decoded text characters for this token.
+* **`UTF-8 Token Slice`:** Exact decoded characters for this token.
 
 ---
 
-### 4.3. `OP_SET_CONFIG` (`0x0004`) — Inbound
-Sets granular per-turn decode parameters and thinking channel controls.
+### 4.3. `OP_TURN_COMPLETE` (`0x0103`) — Outbound
+Emitted when generation halts at a turn boundary (`<turn|>`), max tokens, or after `OP_ABORT`.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Generated Tokens                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Elapsed Time (ms)                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Average Tokens / Second                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   Stop Reason |                   Reserved                    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+* **`Stop Reason` (`u8`):**
+  * `0x00`: End of Turn token (`<turn|>`).
+  * `0x01`: Max tokens limit reached.
+  * `0x02`: Administrative abort (`OP_ABORT`).
+  * `0x03`: Tool call requested.
+
+---
+
+### 4.4. `OP_SET_CONFIG` (`0x0004`) — Inbound
+Sets per-turn decode parameters and thinking channel controls.
 
 ```
  0                   1                   2                   3
@@ -163,15 +179,10 @@ Sets granular per-turn decode parameters and thinking channel controls.
 |                     Stop Token IDs ([Count]u32)...            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
-* **`Thinking Budget` (`u32`):** Maximum tokens allowed in `<channel>thought` before forcing output response (0 = disabled thinking).
-* **`Temperature` (`f32`):** Sampling temperature ($0.0 = \text{greedy argmax}$).
-* **`Top-P` (`f32`):** Nucleus sampling threshold.
-* **`Quiescence Threshold` (`f32`):** Velocity gating threshold ($0.0 = \text{100\% dense execution}$).
-* **`Stop Token IDs`:** List of `u32` tokens triggering immediate end-of-turn.
 
 ---
 
-### 4.4. `OP_MEM_QUERY` (`0x0003`) — Inbound
+### 4.5. `OP_MEM_QUERY` (`0x0003`) — Inbound
 Initiates an explicit memory query across the long-term `DiffArchive`.
 
 ```
@@ -199,14 +210,10 @@ Initiates an explicit memory query across the long-term `DiffArchive`.
   * `0x01`: `fulltext` (1-pass contextual prefill, $1\text{ ms}$).
   * `0x02`: `temporal_walk` (Chronological walk from `Target Timestamp`).
   * `0x03`: `pinned` (Retrieve system task anchors).
-* **`Top K` (`u8`):** Maximum memory episodes to return.
-* **`Cursor ID` (`u16`):** Continuation token for paginating through deeper results.
-* **`Target Timestamp` (`u64`):** Anchor timestamp for chronological walks.
-* **`Weights` (`f32`):** Linear coefficients for composite salience scoring.
 
 ---
 
-### 4.5. `OP_MEM_RESPONSE` (`0x0102`) — Outbound
+### 4.6. `OP_MEM_RESPONSE` (`0x0105`) — Outbound
 Returns matched episodic memories and metadata.
 
 ```
@@ -222,12 +229,12 @@ Returns matched episodic memories and metadata.
 
 #### Memory Record Layout (24 bytes + variable summary string):
 ```
-| Timestamp (u64) | Salience Score (f32) | Access Count (u32) | Flags (u16) | Text Len (u16) | Summary Text... |
+| Timestamp (u64) | Salience Score (f32) | Access Count (u32) | IsInterrupted (u8) | Res (u8) | Text Len (u16) | Summary Text... |
 ```
 
 ---
 
-### 4.6. `OP_TOOL_CALL` (`0x0103`) — Outbound
+### 4.7. `OP_TOOL_CALL` (`0x0104`) — Outbound
 Emitted when the model generates a structured tool execution call.
 
 ```
@@ -244,7 +251,7 @@ Emitted when the model generates a structured tool execution call.
 
 ---
 
-### 4.7. `OP_TOOL_RETURN` (`0x0005`) — Inbound
+### 4.8. `OP_TOOL_RETURN` (`0x0005`) — Inbound
 Host provides the result of a tool execution back to the model.
 
 ```
@@ -260,7 +267,7 @@ Host provides the result of a tool execution back to the model.
 
 ---
 
-### 4.8. `OP_STATUS` (`0x0104`) — Outbound Telemetry
+### 4.9. `OP_STATUS` (`0x0106`) — Outbound Telemetry
 Periodic telemetry frame reporting engine performance and resource states.
 
 ```
@@ -281,39 +288,53 @@ Periodic telemetry frame reporting engine performance and resource states.
 
 ---
 
-## 5. Interaction Patterns & State Machine
+## 5. Interaction Patterns & Node.js Dispatch Example
 
-### Scenario A: Continuous Chat Turn with Thinking Channel
+### Clean Host Dispatch Model (Node.js `@sullux/tui`)
+
+```typescript
+function onFrame(header: Header, payload: Buffer) {
+  switch (header.opcode) {
+    case OP_STREAM_THOUGHT:
+      tui.appendThinking(payload.toString('utf-8', 26));
+      break;
+
+    case OP_STREAM_CONTENT:
+      tui.appendContent(payload.toString('utf-8', 26));
+      break;
+
+    case OP_TURN_COMPLETE:
+      const totalTokens = payload.readUInt32LE(0);
+      const elapsedMs = payload.readUInt32LE(4);
+      const tokSec = payload.readFloatLE(8);
+      tui.setStatus(`${totalTokens} tokens in ${elapsedMs}ms (${tokSec.toFixed(1)} tok/s)`);
+      break;
+
+    case OP_TOOL_CALL:
+      handleToolCall(header.msgId, payload);
+      break;
+
+    case OP_STATUS:
+      updateTelemetry(payload);
+      break;
+
+    case OP_ERROR:
+      tui.showError(payload.toString('utf-8'));
+      break;
+  }
+}
+```
+
+### Full Conversational Lifecycle
+
 ```
 Host (Node.js TUI)                       Engine (Zig --serve)
        │                                         │
        ├─── OP_SET_CONFIG (ThinkingBudget=512) ──►│
-       ├─── OP_STREAM_INPUT ("Write a parser") ──►│
+       ├─── OP_STREAM_INPUT ("Solve 123 * 45") ──►│
        │                                         ├── (Prefill & Decode)
-       │◄── OP_STREAM_TOKEN (FLAG_THINKING) ─────┤
-       │◄── OP_STREAM_TOKEN (FLAG_THINKING) ─────┤
-       │◄── OP_STREAM_TOKEN (Normal output) ─────┤
-       │◄── OP_STREAM_TOKEN (FLAG_END_OF_TURN) ──┤
-```
-
-### Scenario B: Model-Directed Memory Query Tool Call
-```
-Host (Node.js TUI)                       Engine (Zig --serve)
-       │                                         │
-       │◄── OP_TOOL_CALL ("memory_query") ───────┤
-       ├─── OP_MEM_QUERY (mode=keywords) ────────►│
-       │◄── OP_MEM_RESPONSE (3 matches) ─────────┤
-       ├─── OP_TOOL_RETURN (payload=recalled) ───►│ (Streamed into Layer 0)
-       │◄── OP_STREAM_TOKEN ("Based on...") ─────┤
-```
-
-### Scenario C: Administrative Abort (`OP_ABORT`)
-```
-Host (Node.js TUI)                       Engine (Zig --serve)
-       │                                         │
-       │◄── OP_STREAM_TOKEN (Token 41) ──────────┤
-       │◄── OP_STREAM_TOKEN (Token 42) ──────────┤
-       ├─── OP_ABORT ───────────────────────────►│ (Stops decode instantly)
-       │                                         ├── (Commits episode: is_interrupted=true)
-       │◄── OP_STATUS (state=idle) ──────────────┤
+       │◄── OP_STREAM_THOUGHT ("Let's compute") ─┤
+       │◄── OP_STREAM_CONTENT ("The answer is ") ┤
+       │◄── OP_STREAM_CONTENT ("5,535.") ────────┤
+       │◄── OP_TURN_COMPLETE (38 tok, 18.2 t/s) ─┤
 ```
