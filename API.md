@@ -10,7 +10,9 @@ The Streaming Hierarchical Inference Engine provides a native, low-overhead bina
 
 ### Core Design Principles:
 * **Pure Opcode Protocol (Zero Header Flags):** Every event, channel stream, and boundary condition is represented by a discrete opcode. Host dispatch is a simple, direct `switch (frame.opcode)` with zero bitmask checks.
-* **Transport:** Standard POSIX anonymous pipes (STDIN / STDOUT). Lifecycle is bound directly to the parent process.
+* **Native Multimodal Streaming:** Supports text, discrete tokens, continuous soft embeddings, raw/encoded images, audio waveforms, and video frames.
+* **Stream-Injection Memory Model:** Memory queries act as in-engine stream injection side-effects; the host receives lightweight telemetry badges rather than raw vector records.
+* **Transport:** Standard POSIX anonymous pipes (STDIN / STDOUT) with lifecycle bound directly to the parent process.
 * **Byte Ordering:** Little-Endian for all multi-byte integers and IEEE 754 floating-point values.
 * **Fixed 16-Byte Envelope:** Every frame begins with a uniform 16-byte header followed by an optional payload.
 * **Full-Duplex:** Host $\to$ Engine (Inbound) and Engine $\to$ Host (Outbound) frames operate concurrently and asynchronously without turn-taking locks.
@@ -57,7 +59,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 
 | Opcode | Name | Description |
 | :--- | :--- | :--- |
-| `0x0001` | **`OP_STREAM_INPUT`** | Stream UTF-8 text or raw token IDs into the primary Layer 0 input pipeline. |
+| `0x0001` | **`OP_STREAM_INPUT`** | Stream text, tokens, continuous soft vectors, audio PCM, images, or video frames into Layer 0. |
 | `0x0002` | **`OP_ABORT`** | Administrative emergency brake: halts decoding immediately; preserves active state as `is_interrupted`. |
 | `0x0003` | **`OP_MEM_QUERY`** | Explicit memory search (`keywords`, `fulltext`, temporal range, or pagination cursor). |
 | `0x0004` | **`OP_SET_CONFIG`** | Configure runtime parameters (thinking budget, temperature, quiescence threshold, stop tokens). |
@@ -72,11 +74,11 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 
 | Opcode | Name | Description |
 | :--- | :--- | :--- |
-| `0x0101` | **`OP_STREAM_CONTENT`** | Generated conversational / assistant text token. |
+| `0x0101` | **`OP_STREAM_CONTENT`** | Generated conversational / assistant text token or discrete multimedia output token. |
 | `0x0102` | **`OP_STREAM_THOUGHT`** | Internal reasoning / thought channel token (`<channel>thought`). |
 | `0x0103` | **`OP_TURN_COMPLETE`** | Signals end of turn (`<turn|>`), returning token count, duration, and average tok/s. |
 | `0x0104` | **`OP_TOOL_CALL`** | Model-generated tool call request (tool name + JSON arguments). |
-| `0x0105` | **`OP_MEM_RESPONSE`** | Results of an `OP_MEM_QUERY` returning matched episode records and metadata. |
+| `0x0105` | **`OP_MEM_RESPONSE`** | Results of an `OP_MEM_QUERY` returning injected episode counts, timestamps, and cursor. |
 | `0x0106` | **`OP_STATUS`** | Live engine telemetry (tok/s, active vs quiescent layer breakdown, ring slots, VRAM). |
 | `0x010E` | **`OP_PONG`** | Reply to `OP_PING`. |
 | `0x01FF` | **`OP_ERROR`** | Structured error notification. |
@@ -85,29 +87,38 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 
 ## 4. Payload Specifications
 
-### 4.1. `OP_STREAM_INPUT` (`0x0001`) — Inbound
-Appends text or pre-tokenized tokens into the continuous Layer 0 ring buffer.
+### 4.1. `OP_STREAM_INPUT` (`0x0001`) — Inbound Multimodal Stream
+Ingests text, tokens, soft vectors, audio PCM, images, or video frames into the continuous Layer 0 ring buffer.
 
 ```
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|     Mode      |    Reserved   |         Token Count           |
+|     Mode      |   Sub-Format  |            Param 1            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                     Text / Token Stream Data                  |
+|            Param 2            |            Param 3            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Stream Payload Data...                    |
 |                              (...)                            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
-* **`Mode` (`u8`):**
-  * `0x00`: Raw UTF-8 string (engine tokenizes).
-  * `0x01`: Array of 32-bit Token IDs (`[Token Count]u32`).
-* **`Token Count` (`u16`):** Number of token IDs if `Mode == 0x01`, otherwise 0.
-* **`Stream Data`:** UTF-8 bytes or binary `[Token Count]u32` array.
+
+#### Multimodal Mode Matrix:
+
+| `Mode` | Modality | `Sub-Format` | `Param 1` | `Param 2` | `Param 3` | Payload Structure |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `0x00` | **Text** | `0` | `0` | `0` | `0` | Raw UTF-8 bytes (engine tokenizes). |
+| `0x01` | **Tokens** | `0` | Token Count (`u16`) | `0` | `0` | `[Token Count]u32` array. |
+| `0x02` | **Soft Vectors** | `0` | Vector Dim ($H$) | Vector Count | `0` | `[Count * Dim]f32` (SigLIP / Audio latents). |
+| `0x03` | **Audio PCM** | Format (`0`=S16LE, `1`=F32) | Channels (`1`/`2`) | Sample Rate ($Hz$) | `0` | Raw PCM audio samples. |
+| `0x04` | **Raw Image** | Format (`0`=RGB24, `1`=RGBA) | Width ($px$) | Height ($px$) | `0` | Raw pixel bitmap bytes. |
+| `0x05` | **Encoded Image**| Format (`0`=JPEG, `1`=PNG) | `0` | `0` | `0` | Compressed image file bytes. |
+| `0x06` | **Video Frame** | Format (`0`=RGB24, `1`=JPEG) | Width ($px$) | Height ($px$) | Frame Index | Raw or compressed frame payload. |
 
 ---
 
 ### 4.2. `OP_STREAM_CONTENT` (`0x0101`) & `OP_STREAM_THOUGHT` (`0x0102`) — Outbound
-Emitted for every decoded token. Identical layout, distinguished by opcode.
+Emitted synchronously for every autoregressively decoded token ($N=1$).
 
 ```
  0                   1                   2                   3
@@ -122,16 +133,22 @@ Emitted for every decoded token. Identical layout, distinguished by opcode.
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                   Active Layer Bitmask (32..63)               |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|          Text Length          |      UTF-8 Token Slice...     |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|   Token Type  |    Reserved   |          Text Length          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     UTF-8 Token Slice...                      |
 |                              (...)                            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 * **`Token ID` (`u32`):** Vocabulary token ID (0..262143).
 * **`Clock (t)` (`u64`):** Monotonic token timestamp in the continuous stream.
 * **`Active Layer Bitmask` (`u64`):** Bitmask indicating dense execution vs. quiescent skip per layer (Bit $i = 1$ indicates Layer $i$ executed).
+* **`Token Type` (`u8`):**
+  * `0x00`: Text token (UTF-8 slice is populated).
+  * `0x01`: Audio codec token.
+  * `0x02`: Image generation token.
+  * `0x03`: Structural / Control marker (`<turn|>`, `<channel>`).
 * **`Text Length` (`u16`):** Length in bytes of the decoded UTF-8 string slice.
-* **`UTF-8 Token Slice`:** Exact decoded characters for this token.
+* **`UTF-8 Token Slice`:** Decoded characters for this token.
 
 ---
 
@@ -183,7 +200,7 @@ Sets per-turn decode parameters and thinking channel controls.
 ---
 
 ### 4.5. `OP_MEM_QUERY` (`0x0003`) — Inbound
-Initiates an explicit memory query across the long-term `DiffArchive`.
+Initiates an explicit memory search across the long-term `DiffArchive`. Found memories are injected directly into the primary stream as foreground mental replay.
 
 ```
  0                   1                   2                   3
@@ -213,24 +230,25 @@ Initiates an explicit memory query across the long-term `DiffArchive`.
 
 ---
 
-### 4.6. `OP_MEM_RESPONSE` (`0x0105`) — Outbound
-Returns matched episodic memories and metadata.
+### 4.6. `OP_MEM_RESPONSE` (`0x0105`) — Outbound Telemetry Acknowledgment
+Returns lightweight memory injection telemetry to the host application (zero raw vectors sent over the wire).
 
 ```
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  Result Count |    Reserved   |         Next Cursor ID        |
+| Injected Count|     Status    |         Next Cursor ID        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                 Array of [Result Count] Memory Records        |
-|                              (...)                            |
+|                     Total Injected Tokens                     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|           Array of [Injected Count] Timestamps (u64)...       |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
-
-#### Memory Record Layout (24 bytes + variable summary string):
-```
-| Timestamp (u64) | Salience Score (f32) | Access Count (u32) | IsInterrupted (u8) | Res (u8) | Text Len (u16) | Summary Text... |
-```
+* **`Injected Count` (`u8`):** Number of historical episodes injected into the context.
+* **`Status` (`u8`):** `0x00 = OK`, `0x01 = NoMatchesFound`, `0x02 = ArchiveEmpty`.
+* **`Next Cursor ID` (`u16`):** Continuation token for deeper paginated search.
+* **`Total Injected Tokens` (`u32`):** Total token volume injected into Layer 0.
+* **`Timestamps` (`[Injected Count]u64`):** Monotonic clocks of injected episodes (for UI badges).
 
 ---
 
@@ -296,11 +314,16 @@ Periodic telemetry frame reporting engine performance and resource states.
 function onFrame(header: Header, payload: Buffer) {
   switch (header.opcode) {
     case OP_STREAM_THOUGHT:
-      tui.appendThinking(payload.toString('utf-8', 26));
+      tui.appendThinking(payload.toString('utf-8', 28));
       break;
 
     case OP_STREAM_CONTENT:
-      tui.appendContent(payload.toString('utf-8', 26));
+      const tokenType = payload.readUInt8(24);
+      if (tokenType === 0) { // Text
+        tui.appendContent(payload.toString('utf-8', 28));
+      } else if (tokenType === 1) { // Audio Codec
+        audioVocoder.push(payload.readUInt32LE(0));
+      }
       break;
 
     case OP_TURN_COMPLETE:
@@ -308,6 +331,12 @@ function onFrame(header: Header, payload: Buffer) {
       const elapsedMs = payload.readUInt32LE(4);
       const tokSec = payload.readFloatLE(8);
       tui.setStatus(`${totalTokens} tokens in ${elapsedMs}ms (${tokSec.toFixed(1)} tok/s)`);
+      break;
+
+    case OP_MEM_RESPONSE:
+      const count = payload.readUInt8(0);
+      const totalTokens = payload.readUInt32LE(4);
+      tui.showMemoryBadge(`Injected ${count} memories (${totalTokens} tokens)`);
       break;
 
     case OP_TOOL_CALL:
@@ -323,18 +352,4 @@ function onFrame(header: Header, payload: Buffer) {
       break;
   }
 }
-```
-
-### Full Conversational Lifecycle
-
-```
-Host (Node.js TUI)                       Engine (Zig --serve)
-       │                                         │
-       ├─── OP_SET_CONFIG (ThinkingBudget=512) ──►│
-       ├─── OP_STREAM_INPUT ("Solve 123 * 45") ──►│
-       │                                         ├── (Prefill & Decode)
-       │◄── OP_STREAM_THOUGHT ("Let's compute") ─┤
-       │◄── OP_STREAM_CONTENT ("The answer is ") ┤
-       │◄── OP_STREAM_CONTENT ("5,535.") ────────┤
-       │◄── OP_TURN_COMPLETE (38 tok, 18.2 t/s) ─┤
 ```
