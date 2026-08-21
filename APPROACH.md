@@ -78,6 +78,7 @@ $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdo
 * **Zero Tokenization / Text Overhead:** Recall operates directly in the native 4,096-D vector space in milliseconds (<2ms for 10,000 diffs).
 * **Revisited Concepts Stay Active:** Important topics that are periodically referenced appear in recent layer diffs, naturally remaining in the high-layer injected context.
 * **Historical Retrieval:** Deep historical diff archives can be rehydrated back into the injected context buffer using fast vector quantization (VQ) centroid clustering.
+* *For complete details on the dual-process memory architecture, 6-second debounce consolidation window, non-destructive interruption handling, and explicit foreground replay, see [MEMORY.md](MEMORY.md).*
 
 ### 6. The Principles of Cost, Reward, and Intentional Plasticity
 Biological intelligence is fundamentally an energy-minimizing prediction engine. Humans conserve metabolic energy by default: we remember something when the cost of forgetting exceeds the cost of storage, and we physically learn (modify neural synaptic wiring) only when the cost of continually re-processing an idea in working memory exceeds the cost of permanent synaptic consolidation.
