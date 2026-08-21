@@ -60,18 +60,27 @@ The engine introduces an in-memory **Consolidation Staging Buffer** operating as
 
 ---
 
-## 3. Non-Destructive Interruption: Preserving Suspended Threads
+## 3. Non-Destructive Interruption: Emergence vs. Administrative Abort
 
 ### The Cognitive Reality
-In standard stateless LLM APIs, an interruption is treated as a hard abort: the generation is severed, the partial output is discarded, and the next turn starts anew.
+In standard stateless LLM APIs, an interruption is treated as a destructive network cancel: generation is severed, the partial output is discarded, and the next turn starts anew.
 
-In human cognition, being interrupted mid-thought (e.g., answering a question while typing an email) does **not** erase the thought. The half-formed reasoning trajectory is retained in working memory as an open, suspended cognitive thread.
+In human cognition, being interrupted mid-thought (e.g., answering a verbal question while writing code) does **not** erase the thought. The half-formed reasoning trajectory is retained in working memory as an open, suspended cognitive thread.
 
-### Non-Destructive Interruption Flow
-When an interrupt signal (`OP_INTERRUPT`) arrives:
-1. **Token generation halts immediately.**
-2. **The uncommitted staging buffer and active KV slots are NOT discarded.**
-3. The active episode is committed to the `DiffArchive` tagged with `is_interrupted = true`:
+### Two Levels of Interruption
+
+#### 1. Emergent Conversational Interruption (Continuous Streaming Ingestion)
+In a true full-duplex streaming architecture, natural conversational interruption is **not an out-of-band control packet**. It is an emergent model behavior driven directly by continuous input:
+- As the model generates output, input (microphone audio codec latents, keystrokes, sensor events) streams continuously into Layer 0 via `OP_STREAM_INPUT`.
+- **Hierarchical Quiescence as a Noise Sieve:** Ambient acoustic noise (clothing rustle, keyboard clicks, distant chatter) produces near-zero semantic delta ($\|\Delta_{\text{state}}\| < \tau$) at Layer 15. The upper association layers (32–47) actively decoding the response remain undisturbed.
+- **Salient Speech Triggers Natural Re-Routing:** When meaningful speech arrives (*"Wait, include an `isMissing` boolean..."*), lower layers emit a significant delta. Upper layers wake up, cross-attend to the new input in the ring buffer, and the output logits naturally pivot in real time (*"Got it, adding `isMissing: bool`..."*).
+
+#### 2. Administrative Emergency Brake (`OP_ABORT`)
+When the host application or human user explicitly triggers an immediate stop (e.g. hitting `Ctrl+C` or a UI stop button):
+1. The host sends `OP_ABORT` over the binary protocol.
+2. Token decoding halts immediately.
+3. **The uncommitted staging buffer and active KV slots are NOT discarded.**
+4. The active episode is committed to the `DiffArchive` tagged with `is_interrupted = true`:
    ```zig
    pub const MemoryMeta = struct {
        timestamp: u64,
@@ -82,9 +91,7 @@ When an interrupt signal (`OP_INTERRUPT`) arrives:
        is_interrupted: bool = true,
    };
    ```
-4. The interrupting input stream is appended directly to the continuous token clock $t_{\text{now}} = t_{\text{interrupt}} + 1$.
-5. The model perceives the new input with the active, half-formed thought still present in its sliding attention window, allowing natural conversational bridging (*"Regarding your question... and as I was saying earlier, [previous point] applies."*).
-6. Even after long conversational detours, the suspended state can be recalled via associative resonance to resume the original train of thought.
+5. When subsequent input arrives, the model's attention mechanism still perceives the suspended thought in its sliding window, enabling seamless resumption or retrospection.
 
 ---
 

@@ -28,7 +28,7 @@ This document records the strategic order of operations for completing the Strea
 - [ ] Catalog protocol opcodes:
   - `OP_STREAM_INPUT`: Streaming input text / token blocks into primary Layer 0 pipeline.
   - `OP_STREAM_TOKEN`: Real-time output token emitted by the engine (with token ID, UTF-8 text, clock $t$).
-  - `OP_INTERRUPT`: Non-destructive halt of generation; preserves uncommitted staging buffer and tags episode `is_interrupted`.
+  - `OP_ABORT`: Administrative emergency brake / halt of generation; preserves uncommitted staging buffer and tags episode `is_interrupted`.
   - `OP_MEM_QUERY`: Explicit memory query (`keywords`, `fulltext`, temporal anchor, continuation cursor).
   - `OP_MEM_RESPONSE`: Result packet returning matched memory metadata and token lengths.
   - `OP_CONFIG`: Granular per-turn parameters (thinking budget/temperature, stop tokens, quiescence threshold).
@@ -43,7 +43,7 @@ This document records the strategic order of operations for completing the Strea
 ## 3. Engine Binary Protocol & Real-Time Memory Implementation (Zig)
 - [ ] Implement `--serve` binary transport loop in Zig (`src/protocol.zig`, `src/main.zig`).
 - [ ] Implement Hippocampal debounce consolidation staging buffer in `src/memory.zig`.
-- [ ] Connect `OP_INTERRUPT` to tag active episodes and preserve working context without discarding state.
+- [ ] Connect `OP_ABORT` to tag active episodes and preserve working context without discarding state.
 - [ ] Wire `OP_MEM_QUERY` handling:
   - `keywords`: Direct unquantized embedding lookup from `embed_tokens`.
   - `fulltext`: 1-pass short forward prefill pass through model layers.
