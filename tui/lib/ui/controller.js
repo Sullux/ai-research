@@ -1,11 +1,16 @@
+const fs = require('fs')
+const path = require('path')
+
 let store = null
 let client = null
 let session = null
+let isFirstTurn = true
 
 const init = (s, c, sess) => {
   store = s
   client = c
   session = sess
+  isFirstTurn = true
 }
 
 const getThoughts = () => store?.state.thoughts || '(Thinking scratchpad)'
@@ -14,13 +19,23 @@ const getTerminal = () => session?.buffer.screenText() || ''
 const getStatus = () => store?.state.status || 'Status: Ready'
 const getInput = () => `> ${store?.state.input || ''}█`
 
+const formattedTurn = (text) => {
+  if (isFirstTurn) {
+    isFirstTurn = false
+    const kernelPath = path.resolve(__dirname, '../../PROMPT_KERNEL.md')
+    const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : ''
+    return `<|turn>system\n${kernel}\n<turn|>\n<|turn>user\n${text}\n<turn|>\n<|turn>model\n`
+  }
+  return `<|turn>user\n${text}\n<turn|>\n<|turn>model\n`
+}
+
 const submitPrompt = () => {
   const text = store?.state.input?.trim()
   if (!text || !client) return
   store.appendDialogue(`\n> ${text}\n`)
   store.setInput('')
   store.setGenerating(true)
-  client.sendInput(text)
+  client.sendInput(formattedTurn(text))
 }
 
 const abortGeneration = () => {

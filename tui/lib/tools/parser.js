@@ -1,4 +1,4 @@
-const TOOL_CALL_START = '<|tool_call|>'
+const TOOL_CALL_START = '<|tool_call>'
 const TOOL_CALL_END = '<tool_call|>'
 
 const parseToolCall = (str) => {
@@ -45,7 +45,7 @@ const toolParserFactory = () => (registry, client) => {
     streamAccumulator = streamAccumulator.slice(endIdx + TOOL_CALL_END.length)
 
     const result = await registry.execute(parsed.name, parsed.args)
-    const responsePayload = `\n<|tool_response|>${JSON.stringify(result)}<tool_response|>\n`
+    const responsePayload = `\n<|tool_response>response:${parsed.name}${JSON.stringify(result)}<tool_response|>\n`
     client.sendInput(responsePayload)
   }
 

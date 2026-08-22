@@ -4,7 +4,7 @@ const { ToolRegistry } = require('../lib/tools')
 const { ToolParser, parseToolCall } = require('../lib/tools/parser')
 
 test('parseToolCall extracts tool name and json arguments', () => {
-  const input = 'Let me check: <|tool_call|>call:terminal_write{"input": "cargo build\n", "watch": "completion"}<tool_call|>'
+  const input = 'Let me check: <|tool_call>call:terminal_write{"input": "cargo build\n", "watch": "completion"}<tool_call|>'
   const parsed = parseToolCall(input)
   assert.notStrictEqual(parsed, null)
   assert.strictEqual(parsed.name, 'terminal_write')
@@ -43,8 +43,8 @@ test('ToolParser intercepts streaming tool call and pushes response', async () =
   }
 
   const parser = ToolParser(mockRegistry, mockClient)
-  await parser.ingestChunk('I will run this: <|tool_call|>call:terminal_reset{}<tool_call|>')
+  await parser.ingestChunk('I will run this: <|tool_call>call:terminal_reset{}<tool_call|>')
 
-  assert.strictEqual(sentResponse.includes('<|tool_response|>'), true)
+  assert.strictEqual(sentResponse.includes('<|tool_response>'), true)
   assert.strictEqual(sentResponse.includes('executed terminal_reset'), true)
 })
