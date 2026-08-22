@@ -13,6 +13,8 @@ pub const vq = @import("vq.zig");
 pub const gpu = @import("gpu.zig");
 pub const quant = @import("quant.zig");
 pub const bench = @import("model/bench.zig");
+pub const server = @import("server.zig");
+pub const interactive = @import("interactive.zig");
 
 const MEMORY_CAPACITY: usize = 8192;
 
@@ -35,6 +37,7 @@ pub fn main() !void {
     var quiescence_threshold: f32 = 0.0;
     var gpu_enabled = false;
     var bench_mode = false;
+    var serve_mode = false;
     var quant_mode: quant.QuantMode = .none;
     var storage_path: ?[]const u8 = null;
     var prompt_buf = std.ArrayList(u8).init(allocator);
@@ -51,6 +54,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) { storage_path = args[arg_idx + 1]; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--quiescence-threshold") and arg_idx + 1 < args.len) { quiescence_threshold = std.fmt.parseFloat(f32, args[arg_idx + 1]) catch 0.001; quiescence_enabled = true; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true; quiescence_threshold = 0.001;
+        } else if (std.mem.eql(u8, arg, "--serve")) { serve_mode = true;
         } else if (std.mem.eql(u8, arg, "--bench")) { bench_mode = true; gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--gpu")) { gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--q8")) { quant_mode = .q8; gpu_enabled = true;
@@ -64,7 +68,7 @@ pub fn main() !void {
     }
 
     num_recall = @min(num_recall, model.types.MAX_RECALL_SLOTS);
-    try stdout.print("Loading model from: {s}...\n", .{model_dir});
+    if (!serve_mode) try stdout.print("Loading model from: {s}...\n", .{model_dir});
 
     var config_path_buf: [512]u8 = undefined;
     const config = try model.ModelConfig.loadFromJson(allocator, try std.fmt.bufPrint(&config_path_buf, "{s}/config.json", .{model_dir}));
@@ -77,19 +81,19 @@ pub fn main() !void {
     defer m.deinit();
 
     var gpu_ctx: ?gpu.context.GpuContext = if (gpu_enabled) gpu.context.GpuContext.init(allocator) catch |err| {
-        try stdout.print("GpuContext.init error: {}\n", .{err});
+        if (!serve_mode) try stdout.print("GpuContext.init error: {}\n", .{err});
         return err;
     } else null;
     defer if (gpu_ctx) |*gc| gc.deinit();
     var gpu_model_ctx: ?gpu.model_gpu.GpuModelContext = if (gpu_ctx) |*gc| gpu.model_gpu.GpuModelContext.init(allocator, gc, &m, config, quant_mode, quiescence_threshold) catch |err| {
-        std.debug.print("GPU init error: {any}\n", .{err});
+        if (!serve_mode) std.debug.print("GPU init error: {any}\n", .{err});
         return err;
     } else null;
     defer if (gpu_model_ctx) |*gmc| gmc.deinit();
     const gpu_ptr: ?*gpu.model_gpu.GpuModelContext = if (gpu_model_ctx) |*gmc| gmc else null;
     if (gpu_ctx) |gc| {
         const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4 => "Q4_0" };
-        try stdout.print("GPU: {s} (UMA Compute, {s})\n", .{ gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)], mode_tag });
+        if (!serve_mode) try stdout.print("GPU: {s} (UMA Compute, {s})\n", .{ gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)], mode_tag });
     }
     if (bench_mode and gpu_ptr != null) {
         try bench.runGpuBenchmark(&m, config, gpu_ptr.?, stdout);
@@ -117,21 +121,28 @@ pub fn main() !void {
         a.deinit();
     };
 
-    var q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = quiescence_enabled }, config.num_hidden_layers);
-    const q_ptr: ?*quiescence.QuiescenceTracker = if (quiescence_enabled) &q_tracker else null;
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
+
+    if (serve_mode) {
+        var srv = try server.Server.init(allocator, &m, &tok, &ring, &scratch, &thread_pool, gpu_ptr, if (archive) |*a| a else null, if (store) |*s| s else null, quiescence_enabled, quiescence_threshold);
+        defer srv.deinit();
+        try srv.run(stdin, stdout);
+        return;
+    }
+
+    var q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = quiescence_enabled }, config.num_hidden_layers);
+    const q_ptr: ?*quiescence.QuiescenceTracker = if (quiescence_enabled) &q_tracker else null;
     const memory_ptr: ?*memory.DiffArchive = if (archive) |*a| a else null;
 
     if (prompt_buf.items.len > 0) {
         var clock: usize = 0;
-        try runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, gpu_ptr, &clock, true);
+        try interactive.runInference(&m, &tok, &ring, &scratch, prompt_buf.items, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, gpu_ptr, &clock, true);
         try stdout.print("\n", .{});
         return;
     }
 
     try stdout.print("\n=== Gemma 4 Dynamic Streaming REPL ({s}) ===\nAnchors: {d}, Window: {d}, Recall: {d}, Total Slots: {d}\n\n", .{ model_dir, num_anchors, window_size, num_recall, ring.total_slots });
-
     var global_clock: usize = 0;
     var line_buf: [4096]u8 = undefined;
     while (true) {
@@ -141,52 +152,8 @@ pub fn main() !void {
         const trimmed = std.mem.trim(u8, line, " \r\t");
         if (trimmed.len == 0) continue;
         if (std.mem.eql(u8, trimmed, "exit") or std.mem.eql(u8, trimmed, "quit")) break;
-
-        try runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, gpu_ptr, &global_clock, false);
+        try interactive.runInference(&m, &tok, &ring, &scratch, trimmed, max_tokens, &thread_pool, stdout, allocator, memory_ptr, q_ptr, gpu_ptr, &global_clock, false);
         try stdout.print("\n\n", .{});
-    }
-}
-
-fn printToken(stdout: anytype, token_str: []const u8) !void {
-    var buf: [512]u8 = undefined;
-    var out_len: usize = 0;
-    var i: usize = 0;
-    while (i < token_str.len and out_len < buf.len) {
-        if (i + 2 < token_str.len and token_str[i] == 0xE2 and token_str[i + 1] == 0x96 and token_str[i + 2] == 0x81) {
-            buf[out_len] = ' '; out_len += 1; i += 3;
-        } else {
-            buf[out_len] = token_str[i]; out_len += 1; i += 1;
-        }
-    }
-    try stdout.writeAll(buf[0..out_len]);
-}
-
-fn runInference(m: *const model.Model, tok: *const tokenizer.Tokenizer, ring: *ring_buffer.DynamicRingBuffer, scratch: *model.ForwardScratch, prompt: []const u8, max_tokens: usize, thread_pool: *std.Thread.Pool, stdout: anytype, allocator: std.mem.Allocator, memory_opt: ?*memory.DiffArchive, quiescence_opt: ?*quiescence.QuiescenceTracker, gpu_opt: ?*gpu.model_gpu.GpuModelContext, clock_ptr: *usize, reset_ring: bool) !void {
-    const prompt_tokens = try tok.encode(allocator, prompt, true);
-    defer allocator.free(prompt_tokens);
-    if (reset_ring) ring.reset();
-
-    var current_token: u32 = 0;
-    for (prompt_tokens, 0..) |t, i| {
-        const is_last = (i == prompt_tokens.len - 1);
-        current_token = m.forwardToken(ring, scratch, t, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt, is_last);
-        clock_ptr.* += 1;
-    }
-
-    const gen_start = std.time.milliTimestamp();
-    var gen_count: usize = 0;
-    for (0..max_tokens) |_| {
-        const token_str = tok.decode(current_token);
-        try printToken(stdout, token_str);
-        gen_count += 1;
-        if (current_token == tok.eos_token_id or current_token == 106) break;
-        current_token = m.forwardToken(ring, scratch, current_token, clock_ptr.*, thread_pool, memory_opt, quiescence_opt, gpu_opt, true);
-        clock_ptr.* += 1;
-    }
-    const elapsed_ms = std.time.milliTimestamp() - gen_start;
-    if (gen_count > 0 and elapsed_ms > 0) {
-        const tps = (@as(f64, @floatFromInt(gen_count)) / @as(f64, @floatFromInt(elapsed_ms))) * 1000.0;
-        try stdout.print("\n[{d} tokens, {d:.1} tok/s]", .{ gen_count, tps });
     }
 }
 
@@ -195,4 +162,5 @@ test {
     _ = @import("tokenizer.zig"); _ = @import("ring_buffer.zig"); _ = @import("diff.zig");
     _ = @import("memory.zig"); _ = @import("storage.zig"); _ = @import("quiescence.zig");
     _ = @import("vq.zig"); _ = @import("gpu.zig"); _ = @import("quant.zig");
+    _ = @import("protocol.zig"); _ = @import("hippocampus.zig");
 }

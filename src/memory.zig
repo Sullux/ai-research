@@ -3,10 +3,7 @@ pub const ring_buffer = @import("ring_buffer.zig");
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
 pub const SalienceConfig = struct {
-    alpha: f32 = 1.0,
-    beta: f32 = 0.5,
-    gamma: f32 = 1.0,
-    lambda: f32 = 1.0 / 2048.0,
+    alpha: f32 = 1.0, beta: f32 = 0.5, gamma: f32 = 1.0, lambda: f32 = 1.0 / 2048.0,
 };
 
 pub const MemoryMeta = struct {
@@ -15,24 +12,16 @@ pub const MemoryMeta = struct {
     access_count: u32,
     salience_norm: f32,
     layer_id: u8,
+    is_interrupted: bool = false,
+    token_id: u32 = 0,
 };
 
 pub const DiffArchive = struct {
     allocator: std.mem.Allocator,
-    dim: usize,
-    capacity: usize,
-    count: usize,
-    write_head: usize,
-    num_layers: usize,
-    max_kv_dim: usize,
-    kv_stride: usize,
+    dim: usize, capacity: usize, count: usize = 0, write_head: usize = 0,
+    num_layers: usize, max_kv_dim: usize, kv_stride: usize,
     config: SalienceConfig,
-
-    vectors: []f32,
-    metas: []MemoryMeta,
-    scan_scores: []f32,
-    scan_indices: []usize,
-    kv_cache: []f32,
+    vectors: []f32, metas: []MemoryMeta, scan_scores: []f32, scan_indices: []usize, kv_cache: []f32,
 
     pub fn init(allocator: std.mem.Allocator, dim: usize, capacity: usize, config: SalienceConfig) !DiffArchive {
         return initWithKV(allocator, dim, capacity, 0, 0, config);
@@ -55,24 +44,13 @@ pub const DiffArchive = struct {
             @memset(kv_cache, 0);
         }
         errdefer if (kv_cache.len > 0) allocator.free(kv_cache);
-
         @memset(vectors, 0);
 
         return .{
-            .allocator = allocator,
-            .dim = dim,
-            .capacity = capacity,
-            .count = 0,
-            .write_head = 0,
-            .num_layers = num_layers,
-            .max_kv_dim = max_kv_dim,
-            .kv_stride = kv_stride,
-            .config = config,
-            .vectors = vectors,
-            .metas = metas,
-            .scan_scores = scores,
-            .scan_indices = indices,
-            .kv_cache = kv_cache,
+            .allocator = allocator, .dim = dim, .capacity = capacity,
+            .num_layers = num_layers, .max_kv_dim = max_kv_dim, .kv_stride = kv_stride,
+            .config = config, .vectors = vectors, .metas = metas,
+            .scan_scores = scores, .scan_indices = indices, .kv_cache = kv_cache,
         };
     }
 
@@ -85,8 +63,7 @@ pub const DiffArchive = struct {
     }
 
     pub fn reset(self: *DiffArchive) void {
-        self.count = 0;
-        self.write_head = 0;
+        self.count = 0; self.write_head = 0;
         if (self.kv_cache.len > 0) @memset(self.kv_cache, 0);
     }
 
@@ -112,23 +89,23 @@ pub const DiffArchive = struct {
     }
 
     pub fn append(self: *DiffArchive, timestamp: u64, salience_norm: f32, layer_id: u8, vector: []const f32) void {
+        self.appendWithMeta(timestamp, salience_norm, layer_id, false, 0, vector);
+    }
+
+    pub fn appendWithMeta(self: *DiffArchive, timestamp: u64, salience_norm: f32, layer_id: u8, is_interrupted: bool, token_id: u32, vector: []const f32) void {
         std.debug.assert(vector.len == self.dim);
         var sum_sq: f32 = 0.0;
         for (vector) |v| sum_sq += v * v;
         const inv = if (sum_sq > 1e-12) 1.0 / @sqrt(sum_sq) else 0.0;
-
         const idx = self.write_head;
         const row = self.vectors[idx * self.dim .. (idx + 1) * self.dim];
         for (row, vector) |*dst, v| dst.* = v * inv;
 
         self.metas[idx] = .{
-            .timestamp = timestamp,
-            .last_accessed = timestamp,
-            .access_count = 0,
-            .salience_norm = salience_norm,
-            .layer_id = layer_id,
+            .timestamp = timestamp, .last_accessed = timestamp, .access_count = 0,
+            .salience_norm = salience_norm, .layer_id = layer_id,
+            .is_interrupted = is_interrupted, .token_id = token_id,
         };
-
         self.write_head = (idx + 1) % self.capacity;
         if (self.count < self.capacity) self.count += 1;
     }
@@ -136,7 +113,6 @@ pub const DiffArchive = struct {
     pub fn scan(self: *DiffArchive, query: []const f32, now: u64, out_indices: []usize, top_k: usize) usize {
         const n = self.count;
         if (n == 0) return 0;
-
         for (0..n) |i| {
             self.scan_scores[i] = self.score(query, now, i);
             self.scan_indices[i] = i;

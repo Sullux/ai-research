@@ -282,3 +282,16 @@ Having exhausted micro-architectural shader layouts and proven that dense 48-lay
 | **Baseline Parity** | Gemma 4 inference comparison | Logits on prompt *"Once upon a time"* match reference implementation. |
 | **GPU Compute** | Vulkan shader integration | Token generation speed $\ge 25$ tok/s on AMD integrated UMA compute. |
 | **Streaming Step 2**| 50,000+ continuous token stream | Sustained generation with zero memory growth and intact narrative anchor. |
+
+---
+
+## 8. Low-Level Binary Wire Protocol & Real-Time Memory Engine (Stage G8)
+
+### Implementation Summary
+* **Binary Transport (`src/protocol.zig`):** 16-byte fixed uniform frame header `[Magic (4B) | Version (2B) | Msg ID (2B) | Opcode (2B) | Reserved (2B) | Payload Len (4B)]` over POSIX STDIN/STDOUT pipes (`--serve`).
+* **Pure Opcode Protocol:** Zero header bitmask flags. All channel markers (`OP_STREAM_THOUGHT` vs `OP_STREAM_CONTENT`), lifecycle markers (`OP_TURN_COMPLETE`), emergency aborts (`OP_ABORT`), and telemetry (`OP_STATUS`) dispatch via top-level opcode.
+* **Asynchronous Transport & Instant Abort (`src/server.zig`, `src/server_queue.zig`):** Dedicated background STDIN reader thread communicating with the engine via atomic flags (`std.atomic.Value(bool)`) and a thread-safe message queue. Sub-microsecond administrative halting (`OP_ABORT`) immediately halts autoregressive decoding without resetting the working context.
+* **Hippocampal Debounce Staging Buffer (`src/hippocampus.zig`):** Buffers working episodic state transitions during active inference, committing to long-term `DiffArchive` (and optional mmap store) on a 6-second debounce inactivity window or turn completion.
+* **Dual-Modality Explicit Memory Retrieval (`src/model/memory_inject.zig`):** Direct $O(1)$ unquantized keyword embedding lookup from `embed_tokens` and associative cosine scanning across multi-layer KV states.
+* **Code Size Adherence:** All 51 source files maintained strictly under 200 lines.
+

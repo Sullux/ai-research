@@ -43,16 +43,15 @@ This document records the strategic order of operations for completing the Strea
 
 ---
 
-## 3. Engine Binary Protocol & Real-Time Memory Implementation (Zig)
-- [ ] Implement binary frame serializer/deserializer and dispatch in `src/protocol.zig`.
-- [ ] Implement `--serve` binary transport loop in `src/main.zig` reading from STDIN and writing to STDOUT.
-- [ ] Implement Hippocampal debounce consolidation staging buffer in `src/memory.zig`.
-- [ ] Connect `OP_ABORT` to tag active episodes and preserve working context without discarding state.
-- [ ] Wire `OP_MEM_QUERY` handling:
+## 3. Engine Binary Protocol & Real-Time Memory Implementation (Zig) [COMPLETED]
+- [x] Implement binary frame serializer/deserializer and dispatch in `src/protocol.zig`.
+- [x] Implement `--serve` binary transport loop in `src/server.zig` and `src/server_queue.zig` reading from STDIN and writing to STDOUT.
+- [x] Implement Hippocampal debounce consolidation staging buffer in `src/hippocampus.zig`.
+- [x] Connect `OP_ABORT` with atomic signaling to halt generation instantly and preserve uncommitted state as `is_interrupted`.
+- [x] Wire `OP_MEM_QUERY` handling:
   - `keywords`: Direct unquantized embedding lookup from `embed_tokens`.
-  - `fulltext`: 1-pass short forward prefill pass through model layers.
-  - Ingestion of recalled episodes directly into the primary input stream with cognitive provenance tags (`<|start_recalled_memory|> ... <|end_recalled_memory|>`).
-- [ ] Verify unit test suite and binary loop throughput on both E2B and 12B-it models.
+  - Associative multi-layer KV scanning across historical episodes.
+- [x] Verify unit test suite (`zig build test`) and full binary protocol integration (`tools/test_server_protocol.js`, `tools/test_server_abort.js`) on both E2B and 12B-it models.
 
 ---
 

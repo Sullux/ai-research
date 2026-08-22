@@ -44,3 +44,32 @@ pub fn integrateMemory(self: *const Model, mem: *memory.DiffArchive, ring: *Dyna
         mem.copyKVToRing(mi, ring, rank, @intCast(mem_ts));
     }
 }
+
+pub fn computeKeywordQueryVector(self: *const Model, token_ids: []const u32, out_vector: []f32) bool {
+    if (token_ids.len == 0 or out_vector.len != self.config.hidden_size) return false;
+    @memset(out_vector, 0);
+
+    var valid_tokens: usize = 0;
+    const H = self.config.hidden_size;
+
+    for (token_ids) |tok| {
+        if (tok >= self.config.vocab_size) continue;
+        const src = self.embed_tokens[tok * H .. (tok + 1) * H];
+        for (out_vector, src) |*dst, s| {
+            dst.* += s.toF32();
+        }
+        valid_tokens += 1;
+    }
+
+    if (valid_tokens == 0) return false;
+
+    var sum_sq: f32 = 0.0;
+    for (out_vector) |v| sum_sq += v * v;
+    const inv = if (sum_sq > 1e-12) 1.0 / @sqrt(sum_sq) else 0.0;
+    for (out_vector) |*v| v.* *= inv;
+    return true;
+}
+
+pub fn searchExplicitMemory(mem: *memory.DiffArchive, query: []const f32, now: u64, out_indices: []usize, top_k: usize) usize {
+    return mem.scan(query, now, out_indices, top_k);
+}
