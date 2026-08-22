@@ -24,6 +24,9 @@ const main = () => {
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
+    modules: {
+      controller,
+    },
     truecolor: true,
   })
 
@@ -49,26 +52,9 @@ const main = () => {
     app.redraw()
   })
 
-  process.stdin.on('keypress', (_, key) => {
-    if (!key) return
-    if (key.ctrl && key.name === 'c') {
-      session.kill()
-      client.shutdown()
-      process.exit(0)
-    }
-    if (key.ctrl && key.name === 'x') {
-      controller.abortGeneration()
-      return
-    }
-    if (key.name === 'return') {
-      controller.submitPrompt()
-    } else if (key.name === 'backspace') {
-      const cur = store.state.input
-      if (cur.length > 0) store.setInput(cur.slice(0, -1))
-    } else if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
-      store.setInput(store.state.input + key.sequence)
-    }
-    app.redraw()
+  app.onExit(() => {
+    session.kill()
+    client.shutdown()
   })
 
   client.start()

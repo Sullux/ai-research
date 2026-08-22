@@ -22,7 +22,7 @@ const sessionFactory = (spawnProc = spawn, BufferFactory = bufferFactory()) => (
   let watchCallback = null
 
   const spawnShell = () => {
-    proc = spawnProc(shell, ['-i'], {
+    proc = spawnProc(shell, ['--norc', '+m'], {
       cwd,
       env: { ...process.env, TERM: 'xterm-256color', COLUMNS: '100', LINES: '30' },
       stdio: ['pipe', 'pipe', 'pipe'],

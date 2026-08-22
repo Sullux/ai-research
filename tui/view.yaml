@@ -5,6 +5,7 @@ type: layout
 direction: vertical
 width: fill
 height: fill
+onKey: '@controller:onKey'
 
 inner:
   - type: layout
@@ -35,14 +36,14 @@ inner:
             inner:
               - type: text
                 wrap: true
-                text: '@lib/ui/controller.js:getThoughts'
+                text: '@controller:getThoughts'
           - type: border
             class: panel
             height: fill
             inner:
               - type: text
                 wrap: true
-                text: '@lib/ui/controller.js:getDialogue'
+                text: '@controller:getDialogue'
 
       - type: border
         class: terminalPanel
@@ -51,7 +52,7 @@ inner:
         inner:
           - type: text
             wrap: false
-            text: '@lib/ui/controller.js:getTerminal'
+            text: '@controller:getTerminal'
 
   - type: border
     class: inputBar
@@ -60,11 +61,11 @@ inner:
       - type: text
         bold: true
         fg: '#fab387'
-        text: '@lib/ui/controller.js:getInput'
+        text: '@controller:getInput'
 
   - type: layout
     height: 1
     class: status
     inner:
       - type: text
-        text: '@lib/ui/controller.js:getStatus'
+        text: '@controller:getStatus'
