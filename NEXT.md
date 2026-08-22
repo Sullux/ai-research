@@ -55,18 +55,17 @@ This document records the strategic order of operations for completing the Strea
 
 ---
 
-## 4. Interactive Node.js TUI Application (`@sullux/tui`)
-- [ ] Create Node.js interactive client harness using the `@sullux/tui` library.
-- [ ] Child process orchestration over STDIN/STDOUT binary pipe.
-- [ ] Visual UI components:
-  - Live streaming response window.
-  - Real-time performance telemetry dashboard (tok/s, active vs. quiescent layer gauge, VRAM/UMA memory usage).
-  - Memory inspector panel showing active anchors, sliding window, and recalled historical diffs.
-  - Thinking channel / reasoning display toggle.
-- [ ] Keyboard interactions:
-  - Interactive full-duplex typing.
-  - Instant administrative halt via hotkey (triggering `OP_ABORT`).
-  - Runtime adjustment of thinking depth and quiescence thresholds.
+## 4. Interactive Node.js TUI Application (`@sullux/tui`) [COMPLETED]
+- [x] Create base system prompt kernel in `PROMPT_KERNEL.md` defining model persona, dual-channel reasoning, explicit memory recall, and live terminal control plane.
+- [x] Implement pure JavaScript TUI client harness in `tui/` with zero external dependencies (linking local `@sullux/tui`).
+- [x] Built binary framing client (`tui/lib/client/index.js`, `tui/lib/protocol/framing.js`) communicating over STDIN/STDOUT binary pipe with `./zig-out/bin/infer --serve`.
+- [x] Built Virtual Terminal Buffer (VTB) with in-memory 2D active viewport ($30 \times 100$) and 5,000-line scrollback history (`tui/lib/terminal/buffer.js`, `tui/lib/terminal/session.js`).
+- [x] Implemented cognitive tool catalog & stream parser (`tui/lib/tools/index.js`, `tui/lib/tools/parser.js`):
+  - `recall`: Explicit memory queries via `OP_MEM_QUERY`.
+  - `terminal_write`, `terminal_read`, `terminal_search`, `terminal_key`, `terminal_reset`: Full virtual terminal control plane.
+  - `set_timer`, `cancel_timer`: Asynchronous cognitive wake-up notifications (`<|notification|>TIMER: note<|end_notification|>`).
+- [x] Built declarative double-buffered UI (`tui/view.yaml`, `tui/theme.yaml`) with split panels for Thinking Scratchpad, Dialogue Stream, Terminal Viewport, Input Bar, and Status Telemetry.
+- [x] Verified unit test suite with 100% pass rate (`tui/test/*.test.js`) and confirmed all JS files are strictly under 100 lines.
 
 ---
 

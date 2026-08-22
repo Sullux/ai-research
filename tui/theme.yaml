@@ -1,0 +1,34 @@
+classes:
+  header:
+    bg: '#313244'
+    fg: '#cdd6f4'
+    bold: true
+    padding: 0
+
+  panel:
+    borderStyle: rounded
+    borderFg: '#89b4fa'
+    bg: '#1e1e2e'
+    fg: '#cdd6f4'
+
+  thoughtPanel:
+    borderStyle: rounded
+    borderFg: '#f9e2af'
+    bg: '#181825'
+    fg: '#bac2de'
+
+  terminalPanel:
+    borderStyle: rounded
+    borderFg: '#a6e3a1'
+    bg: '#11111b'
+    fg: '#a6adc8'
+
+  inputBar:
+    borderStyle: single
+    borderFg: '#fab387'
+    bg: '#1e1e2e'
+    fg: '#cdd6f4'
+
+  status:
+    bg: '#181825'
+    fg: '#9399b2'

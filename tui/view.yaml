@@ -1,0 +1,70 @@
+classes:
+  '@theme.yaml:classes': '*'
+
+type: layout
+direction: vertical
+width: fill
+height: fill
+
+inner:
+  - type: layout
+    height: 1
+    class: header
+    inner:
+      - type: text
+        bold: true
+        fg: '#89b4fa'
+        text: ' SULLUX COGNITIVE ENGINE '
+      - type: text
+        fg: '#a6adc8'
+        text: '│ Vulkan RDNA 3.5 │ Gemma 4 Streaming │ Hippocampal Memory & Terminal '
+
+  - type: layout
+    direction: horizontal
+    width: fill
+    height: fill
+    inner:
+      - type: layout
+        direction: vertical
+        width: 50%
+        height: fill
+        inner:
+          - type: border
+            class: thoughtPanel
+            height: 35%
+            inner:
+              - type: text
+                wrap: true
+                text: '@lib/ui/controller.js:getThoughts'
+          - type: border
+            class: panel
+            height: fill
+            inner:
+              - type: text
+                wrap: true
+                text: '@lib/ui/controller.js:getDialogue'
+
+      - type: border
+        class: terminalPanel
+        width: 50%
+        height: fill
+        inner:
+          - type: text
+            wrap: false
+            text: '@lib/ui/controller.js:getTerminal'
+
+  - type: border
+    class: inputBar
+    height: 3
+    inner:
+      - type: text
+        bold: true
+        fg: '#fab387'
+        text: '@lib/ui/controller.js:getInput'
+
+  - type: layout
+    height: 1
+    class: status
+    inner:
+      - type: text
+        text: '@lib/ui/controller.js:getStatus'
