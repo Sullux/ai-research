@@ -16,39 +16,43 @@ This document records the strategic order of operations for completing the Strea
 
 ---
 
-## 2. Low-Level Binary Wire Protocol Specification (`API.md`)
-- [ ] Define the binary wire format over **STDIN/STDOUT** (using `--serve` mode).
-- [ ] Design compact, 16-byte fixed-header frame envelope:
+## 2. Low-Level Binary Wire Protocol Specification (`API.md`) [COMPLETED]
+- [x] Define the binary wire format over **STDIN/STDOUT** (using `--serve` mode).
+- [x] Adopt **Pure Opcode Protocol** with compact 16-byte fixed-header envelope:
   - `magic` (4 bytes: `0x53554C58` / `'SULX'`)
-  - `version` (2 bytes)
+  - `version` (2 bytes: `1`)
   - `msg_id` (2 bytes)
   - `opcode` (2 bytes)
-  - `flags` (2 bytes: e.g., stream continuation, interrupt tag, end-of-turn)
+  - `reserved` (2 bytes: `0`)
   - `payload_len` (4 bytes)
-- [ ] Catalog protocol opcodes:
-  - `OP_STREAM_INPUT`: Streaming input text / token blocks into primary Layer 0 pipeline.
-  - `OP_STREAM_TOKEN`: Real-time output token emitted by the engine (with token ID, UTF-8 text, clock $t$).
-  - `OP_ABORT`: Administrative emergency brake / halt of generation; preserves uncommitted staging buffer and tags episode `is_interrupted`.
-  - `OP_MEM_QUERY`: Explicit memory query (`keywords`, `fulltext`, temporal anchor, continuation cursor).
-  - `OP_MEM_RESPONSE`: Result packet returning matched memory metadata and token lengths.
-  - `OP_CONFIG`: Granular per-turn parameters (thinking budget/temperature, stop tokens, quiescence threshold).
-  - `OP_TOOL_CALL`: Model-initiated tool execution request.
-  - `OP_TOOL_RETURN`: Host response to model tool request.
-  - `OP_STATUS`: Engine telemetry (active vs. quiescent layer breakdown, tok/s, memory usage).
-  - `OP_ERROR`: Structured error reporting.
-- [ ] Specify asynchronous state machine transitions and full-duplex duplex semantics.
+- [x] Catalog protocol opcodes:
+  - `OP_STREAM_INPUT` (`0x0001`): Multimodal streaming into primary Layer 0 pipeline (text, tokens, soft vectors, audio PCM, images, video).
+  - `OP_ABORT` (`0x0002`): Administrative emergency brake; preserves uncommitted staging buffer and tags episode `is_interrupted`.
+  - `OP_MEM_QUERY` (`0x0003`): Explicit memory search (`keywords`, `fulltext`, temporal anchor, continuation cursor).
+  - `OP_SET_CONFIG` (`0x0004`): Granular runtime parameters (thinking budget, temperature, stop tokens, quiescence threshold).
+  - `OP_TOOL_RETURN` (`0x0005`): Host response to model tool request.
+  - `OP_MEM_COMMIT` (`0x0006`): Force immediate consolidation of staging buffer to NVMe storage.
+  - `OP_PING` (`0x000E`) / `OP_SHUTDOWN` (`0x000F`).
+  - `OP_STREAM_CONTENT` (`0x0101`): Outbound conversational response token (with token type, clock $t$, active layer mask, UTF-8 text).
+  - `OP_STREAM_THOUGHT` (`0x0102`): Outbound reasoning / thought channel token (`<channel>thought`).
+  - `OP_TURN_COMPLETE` (`0x0103`): Outbound turn conclusion (token count, duration ms, tok/s, stop reason).
+  - `OP_TOOL_CALL` (`0x0104`): Model-initiated tool execution request.
+  - `OP_MEM_RESPONSE` (`0x0105`): Stream-injection memory telemetry badge (injected count, tokens, timestamps, cursor).
+  - `OP_STATUS` (`0x0106`): Engine telemetry (tok/s, active vs. quiescent layer breakdown, ring slots, VRAM).
+  - `OP_PONG` (`0x010E`) / `OP_ERROR` (`0x01FF`).
 
 ---
 
 ## 3. Engine Binary Protocol & Real-Time Memory Implementation (Zig)
-- [ ] Implement `--serve` binary transport loop in Zig (`src/protocol.zig`, `src/main.zig`).
+- [ ] Implement binary frame serializer/deserializer and dispatch in `src/protocol.zig`.
+- [ ] Implement `--serve` binary transport loop in `src/main.zig` reading from STDIN and writing to STDOUT.
 - [ ] Implement Hippocampal debounce consolidation staging buffer in `src/memory.zig`.
 - [ ] Connect `OP_ABORT` to tag active episodes and preserve working context without discarding state.
 - [ ] Wire `OP_MEM_QUERY` handling:
   - `keywords`: Direct unquantized embedding lookup from `embed_tokens`.
   - `fulltext`: 1-pass short forward prefill pass through model layers.
-  - Ingestion of recalled episodes directly into the 1,024-token primary input stream with cognitive provenance tags.
-- [ ] Verify unit test suite and binary loop throughput.
+  - Ingestion of recalled episodes directly into the primary input stream with cognitive provenance tags (`<|start_recalled_memory|> ... <|end_recalled_memory|>`).
+- [ ] Verify unit test suite and binary loop throughput on both E2B and 12B-it models.
 
 ---
 
@@ -62,7 +66,7 @@ This document records the strategic order of operations for completing the Strea
   - Thinking channel / reasoning display toggle.
 - [ ] Keyboard interactions:
   - Interactive full-duplex typing.
-  - Instant interruption via hotkey (triggering `OP_INTERRUPT`).
+  - Instant administrative halt via hotkey (triggering `OP_ABORT`).
   - Runtime adjustment of thinking depth and quiescence thresholds.
 
 ---
