@@ -140,7 +140,8 @@ pub const Server = struct {
     }
 
     fn parseTokens(self: *Server, p: []const u8) ![]u32 {
-        if (p[0] == protocol.MODE_TEXT) return self.tok.encode(self.allocator, p[8..], false);
+        const add_bos = (self.clock == 0);
+        if (p[0] == protocol.MODE_TEXT) return self.tok.encode(self.allocator, p[8..], add_bos);
         const count = std.mem.readInt(u16, p[2..4], .little);
         const slice: []const u32 = @alignCast(std.mem.bytesAsSlice(u32, p[8 .. 8 + count * 4]));
         const copy = try self.allocator.alloc(u32, slice.len);
@@ -156,23 +157,29 @@ pub const Server = struct {
 
         for (0..self.config.max_tokens) |_| {
             if (self.is_aborted.load(.monotonic)) { reason = protocol.STOP_ABORTED; break; }
-            if (cur == self.tok.eos_token_id or cur == 106) break;
+            if (cur == self.tok.eos_token_id or cur == 106) break; // <turn|>
+            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur); continue; } // <|channel>
+            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur); continue; } // <channel|>
+            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur); continue; } // <|turn>, <|think|>
 
             const str = self.tok.decode(cur);
-            if (std.mem.indexOf(u8, str, "<|channel>thought") != null) self.in_thinking_channel = true;
-            if (std.mem.indexOf(u8, str, "<channel|>") != null) self.in_thinking_channel = false;
-
+            if (self.in_thinking_channel and std.mem.eql(u8, str, "thought")) { cur = self.advanceToken(cur); continue; }
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
             gen_count += 1;
 
-            cur = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-            self.clock += 1;
+            cur = self.advanceToken(cur);
         }
 
         const elapsed: u32 = @intCast(@max(1, std.time.milliTimestamp() - start));
         const tok_sec = (@as(f32, @floatFromInt(gen_count)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
         try protocol.writeTurnComplete(writer, msg_id, gen_count, elapsed, tok_sec, reason);
         if (self.archive) |a| _ = self.hippo.commit(a, self.ring, self.store);
+    }
+
+    fn advanceToken(self: *Server, cur: u32) u32 {
+        const next = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+        self.clock += 1;
+        return next;
     }
 };

@@ -28,9 +28,11 @@ const clientFactory = (spawnProc = spawn, Emitter = EventEmitter) => (options = 
 
   const handleFrame = (h, p) => {
     if (h.opcode === OP_STREAM_CONTENT) {
-      emitter.emit('content', { text: p.subarray(24).toString('utf-8'), msgId: h.msgId })
+      const text = p.subarray(24).toString('utf-8').replace(/\u2581/g, ' ')
+      emitter.emit('content', { text, msgId: h.msgId })
     } else if (h.opcode === OP_STREAM_THOUGHT) {
-      emitter.emit('thought', { text: p.subarray(24).toString('utf-8'), msgId: h.msgId })
+      const text = p.subarray(24).toString('utf-8').replace(/\u2581/g, ' ')
+      emitter.emit('thought', { text, msgId: h.msgId })
     } else if (h.opcode === OP_TURN_COMPLETE) {
       emitter.emit('turnComplete', {
         totalTok: p.readUInt32LE(0), elapsedMs: p.readUInt32LE(4),

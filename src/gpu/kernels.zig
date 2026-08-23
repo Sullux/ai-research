@@ -38,7 +38,7 @@ pub const GpuEngine = struct {
         const logits_spirv = if (mode == .q4) &shaders.GEMV_Q8_SPIRV else gemv_spirv;
         var gemv_logits = try pipeline.ComputePipeline.init(ctx, logits_spirv, 3, 8); errdefer gemv_logits.deinit();
         var swiglu = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4); errdefer swiglu.deinit();
-        const gate_up_spirv = switch (mode) { .q4 => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, .q8 => &shaders.FUSED_GATE_UP_SWIGLU_Q8_SPIRV, .none => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV };
+        const gate_up_spirv = switch (mode) { .q4 => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, .q8 => &shaders.FUSED_GATE_UP_SWIGLU_Q8_SPIRV, .none => &shaders.FUSED_GATE_UP_SWIGLU_BF16_SPIRV };
         var gate_up = try pipeline.ComputePipeline.init(ctx, gate_up_spirv, 4, 8); errdefer gate_up.deinit();
         var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 12); errdefer add_rms.deinit();
         var rms = try pipeline.ComputePipeline.init(ctx, &shaders.RMSNORM_SPIRV, 3, 8); errdefer rms.deinit();

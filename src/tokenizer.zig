@@ -64,7 +64,13 @@ pub const Tokenizer = struct {
         if (add_bos) try token_ids.append(self.bos_token_id);
         if (text.len == 0) return token_ids.toOwnedSlice();
 
-        const specials = [_][]const u8{ "<|turn>", "<turn|>", "<|channel>", "<channel|>", "<bos>", "<eos>" };
+        const specials = [_][]const u8{
+            "<|turn>", "<turn|>", "<|channel>", "<channel|>",
+            "<|tool>", "<tool|>", "<|tool_call>", "<tool_call|>",
+            "<|tool_response>", "<tool_response|>", "<|think|>",
+            "<|start_recalled_memory|>", "<|end_recalled_memory|>",
+            "<|notification>", "<notification|>", "<bos>", "<eos>", "<pad>",
+        };
         var unescaped = std.ArrayList(u8).init(allocator);
         defer unescaped.deinit();
 
