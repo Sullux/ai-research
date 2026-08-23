@@ -11,13 +11,8 @@ pub const model_types = @import("../model/types.zig");
 pub const quant = @import("../quant.zig");
 
 pub const GpuLayerWeights = struct {
-    input_norm: buffer.GpuBuffer,
-    q_norm: buffer.GpuBuffer,
-    k_norm: buffer.GpuBuffer,
-    q_proj: buffer.GpuBuffer,
-    k_proj: buffer.GpuBuffer,
-    v_proj: buffer.GpuBuffer,
-    o_proj: buffer.GpuBuffer,
+    input_norm: buffer.GpuBuffer, q_norm: buffer.GpuBuffer, k_norm: buffer.GpuBuffer,
+    q_proj: buffer.GpuBuffer, k_proj: buffer.GpuBuffer, v_proj: buffer.GpuBuffer, o_proj: buffer.GpuBuffer,
     gate_proj: buffer.GpuBuffer, up_proj: buffer.GpuBuffer, down_proj: buffer.GpuBuffer,
     pre_ffn_norm: buffer.GpuBuffer, post_attn_norm: buffer.GpuBuffer, post_ffn_norm: buffer.GpuBuffer,
     buf_x_prev: buffer.GpuBuffer, buf_k_cache: buffer.GpuBuffer, buf_v_cache: buffer.GpuBuffer,
@@ -88,6 +83,7 @@ pub const GpuModelContext = struct {
         const max_q = config.num_attention_heads * max_head;
         const max_kv = @max(config.num_key_value_heads, config.num_global_key_value_heads) * max_head;
         const sb = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        const ind_sb = sb | types.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 
         const buf_x = try buffer.GpuBuffer.init(ctx, H * 4, sb);
         const buf_normed_x = try buffer.GpuBuffer.init(ctx, H * 4, sb);
@@ -103,8 +99,7 @@ pub const GpuModelContext = struct {
         const buf_logits = try buffer.GpuBuffer.init(ctx, V * 4, sb);
         const buf_sampled_token = try buffer.GpuBuffer.init(ctx, 4, sb);
         const buf_step_params = try buffer.GpuBuffer.init(ctx, 64, sb);
-        const ind_usage = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | types.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-        const buf_indirect_cmds = try buffer.GpuBuffer.init(ctx, m.layers.len * 16 * 12, ind_usage);
+        const buf_indirect_cmds = try buffer.GpuBuffer.init(ctx, m.layers.len * 16 * 12, ind_sb);
 
         const cb_info = types_dispatch.VkCommandBufferAllocateInfo{ .commandPool = engine.cmd_pool, .commandBufferCount = 2 };
         var cmds: [2]types.VkCommandBuffer = .{ null, null };
@@ -152,7 +147,6 @@ pub const GpuModelContext = struct {
             desc_mgr.bindBuffers(w.desc.pre_ffn_norm, &.{ &buf_x, &buf_mlp_out, &w.pre_ffn_norm, &buf_normed_x });
             desc_mgr.bindBuffers(w.desc.post_attn_norm, &.{ &buf_mlp_out, &w.post_attn_norm, &buf_mlp_out });
             desc_mgr.bindBuffers(w.desc.post_ffn_norm, &.{ &buf_mlp_out, &w.post_ffn_norm, &buf_mlp_out });
-            desc_mgr.bindBuffers(w.desc.post_ffn_add, &.{ &buf_x, &buf_mlp_out, &w.input_norm, &buf_normed_x });
             desc_mgr.bindBuffers(w.desc.quiescence_gate, &.{ &buf_x, &w.buf_x_prev, &buf_indirect_cmds });
             gpu_layers[i] = w;
         }
@@ -160,6 +154,12 @@ pub const GpuModelContext = struct {
         const embed_mode: quant.QuantMode = if (mode == .q4) .q8 else mode;
         const embed_tokens = try createWeightBuffer(ctx, m.embed_tokens, V, H, embed_mode);
         const final_norm = try createNormBuffer(ctx, m.final_norm, H);
+
+        for (gpu_layers, 0..) |*w, i| {
+            const next_norm = if (i + 1 < gpu_layers.len) &gpu_layers[i + 1].input_norm else &final_norm;
+            desc_mgr.bindBuffers(w.desc.post_ffn_add, &.{ &buf_x, &buf_mlp_out, next_norm, &buf_normed_x });
+        }
+
         const desc_logits = try desc_mgr.allocateSet(engine.gemv_logits_pipe.desc_set_layout);
         const desc_final_norm = try desc_mgr.allocateSet(engine.rmsnorm_pipe.desc_set_layout);
         const desc_argmax = try desc_mgr.allocateSet(engine.argmax_pipe.desc_set_layout);
@@ -171,8 +171,8 @@ pub const GpuModelContext = struct {
             .allocator = allocator, .ctx = ctx, .engine = engine, .desc_mgr = desc_mgr,
             .layers = gpu_layers, .embed_tokens = embed_tokens, .final_norm = final_norm,
             .desc_logits = desc_logits, .desc_final_norm = desc_final_norm, .desc_argmax = desc_argmax,
-            .buf_x = buf_x, .buf_normed_x = buf_normed_x, .buf_q = buf_q, .buf_k = buf_k,
-            .buf_v = buf_v, .buf_attn_out = buf_attn_out, .buf_active_slots = buf_active_slots,
+            .buf_x = buf_x, .buf_normed_x = buf_normed_x, .buf_q = buf_q, .buf_k = buf_k, .buf_v = buf_v,
+            .buf_attn_out = buf_attn_out, .buf_active_slots = buf_active_slots,
             .buf_gate = buf_gate, .buf_up = buf_up, .buf_act = buf_act, .buf_mlp_out = buf_mlp_out,
             .buf_logits = buf_logits, .buf_sampled_token = buf_sampled_token,
             .buf_step_params = buf_step_params, .buf_indirect_cmds = buf_indirect_cmds,

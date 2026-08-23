@@ -7,7 +7,7 @@ pub const kernels = @import("kernels.zig");
 pub const model_types = @import("../model/types.zig");
 pub const model_gpu = @import("model_gpu.zig");
 
-fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerWeights, l_cpu: model_types.LayerWeights, config: *const model_types.ModelConfig, cmd: types.VkCommandBuffer) void {
+fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerWeights, l_cpu: model_types.LayerWeights, config: *const model_types.ModelConfig, cmd: types.VkCommandBuffer, idx: usize) void {
     const H = config.hidden_size;
     const inter = config.intermediate_size;
     const eps = config.rms_norm_eps;
@@ -18,8 +18,10 @@ fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerW
     const theta: f32 = if (l_cpu.layer_type == .full_attention) config.rope_theta_full else config.rope_theta;
     const gqa_ratio: u32 = @intCast(config.num_attention_heads / l_cpu.num_kv_heads);
 
-    gpu.engine.recordRmsNorm(cmd, l_gpu.desc.input_norm, H, eps);
-    gpu.engine.recordBarrier(cmd);
+    if (idx == 0) {
+        gpu.engine.recordRmsNorm(cmd, l_gpu.desc.input_norm, H, eps);
+        gpu.engine.recordBarrier(cmd);
+    }
     gpu.engine.recordGemv(cmd, l_gpu.desc.q_proj, q_dim, H);
     gpu.engine.recordGemv(cmd, l_gpu.desc.k_proj, kv_dim, H);
     gpu.engine.recordGemv(cmd, l_gpu.desc.v_proj, kv_dim, H);
@@ -102,7 +104,6 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
 
 pub fn recordForwardGraph(gpu: *model_gpu.GpuModelContext, config: *const model_types.ModelConfig, layers: []const model_types.LayerWeights, cmd_buf: types.VkCommandBuffer, include_logits: bool, quiescence_thresh: f32) void {
     const H = config.hidden_size;
-    const eps = config.rms_norm_eps;
     const V = config.vocab_size;
     const dense_limit = config.num_hidden_layers / 3;
 
@@ -112,15 +113,13 @@ pub fn recordForwardGraph(gpu: *model_gpu.GpuModelContext, config: *const model_
 
     for (gpu.layers, 0..) |l_gpu, i| {
         if (i < dense_limit) {
-            recordLayerDirect(gpu, l_gpu, layers[i], config, cmd_buf);
+            recordLayerDirect(gpu, l_gpu, layers[i], config, cmd_buf, i);
         } else {
             recordLayerIndirect(gpu, l_gpu, layers[i], config, cmd_buf, i, quiescence_thresh);
         }
     }
 
     if (include_logits) {
-        gpu.engine.recordRmsNorm(cmd_buf, gpu.desc_final_norm, H, eps);
-        gpu.engine.recordBarrier(cmd_buf);
         gpu.engine.recordGemvLogits(cmd_buf, gpu.desc_logits, V, H);
         gpu.engine.recordBarrier(cmd_buf);
         gpu.engine.recordArgmax(cmd_buf, gpu.desc_argmax, V);

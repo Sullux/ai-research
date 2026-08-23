@@ -1,6 +1,47 @@
 const std = @import("std");
 const kernels = @import("kernels.zig");
 
+// Min-heap for keeping track of the top K elements
+const IndexedLogit = struct {
+    id: u32,
+    prob: f32,
+};
+
+fn pushTopK(heap: []IndexedLogit, size: *usize, max_k: usize, item: IndexedLogit) void {
+    if (size.* < max_k) {
+        heap[size.*] = item;
+        size.* += 1;
+        // Bubble up min-heap
+        var idx = size.* - 1;
+        while (idx > 0) {
+            const parent = (idx - 1) / 2;
+            if (heap[idx].prob < heap[parent].prob) {
+                const tmp = heap[idx];
+                heap[idx] = heap[parent];
+                heap[parent] = tmp;
+                idx = parent;
+            } else break;
+        }
+    } else if (item.prob > heap[0].prob) {
+        heap[0] = item;
+        // Sift down
+        var idx: usize = 0;
+        while (true) {
+            const left = 2 * idx + 1;
+            const right = 2 * idx + 2;
+            var smallest = idx;
+            if (left < max_k and heap[left].prob < heap[smallest].prob) smallest = left;
+            if (right < max_k and heap[right].prob < heap[smallest].prob) smallest = right;
+            if (smallest != idx) {
+                const tmp = heap[idx];
+                heap[idx] = heap[smallest];
+                heap[smallest] = tmp;
+                idx = smallest;
+            } else break;
+        }
+    }
+}
+
 pub const Sampler = struct {
     prng: std.Random.DefaultPrng,
     temp: f32 = 0.7,
@@ -47,27 +88,26 @@ pub const Sampler = struct {
         for (logits) |*l| l.* /= self.temp;
         kernels.softmax(logits);
 
-        const IndexedLogit = struct { id: u32, prob: f32 };
-        var top_buf: [128]IndexedLogit = undefined;
-        var count: usize = 0;
+        // Find true top-64 probabilities using min-heap
+        var top_heap: [64]IndexedLogit = undefined;
+        var heap_size: usize = 0;
 
         for (logits, 0..) |p, i| {
-            if (p > 1e-4 and count < top_buf.len) {
-                top_buf[count] = .{ .id = @intCast(i), .prob = p };
-                count += 1;
+            if (p > 1e-6) {
+                pushTopK(&top_heap, &heap_size, 64, .{ .id = @intCast(i), .prob = p });
             }
         }
 
-        if (count == 0) return kernels.sampleArgmax(logits);
+        if (heap_size == 0) return kernels.sampleArgmax(logits);
 
-        const slice = top_buf[0..count];
-        std.mem.sort(IndexedLogit, slice, {}, struct {
+        const candidates = top_heap[0..heap_size];
+        std.mem.sort(IndexedLogit, candidates, {}, struct {
             fn cmp(_: void, a: IndexedLogit, b: IndexedLogit) bool { return a.prob > b.prob; }
         }.cmp);
 
         var cum_p: f32 = 0.0;
         var cutoff: usize = 0;
-        for (slice, 0..) |cand, i| {
+        for (candidates, 0..) |cand, i| {
             cum_p += cand.prob;
             cutoff = i + 1;
             if (cum_p >= self.top_p) break;
@@ -75,10 +115,10 @@ pub const Sampler = struct {
 
         const r = self.prng.random().float(f32) * cum_p;
         var acc: f32 = 0.0;
-        for (slice[0..cutoff]) |cand| {
+        for (candidates[0..cutoff]) |cand| {
             acc += cand.prob;
             if (acc >= r) return cand.id;
         }
-        return slice[0].id;
+        return candidates[0].id;
     }
 };
