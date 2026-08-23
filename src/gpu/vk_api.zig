@@ -29,6 +29,7 @@ pub const PFN_vkCreateComputePipelines = *const fn (types.VkDevice, ?*anyopaque,
 pub const PFN_vkDestroyPipeline = *const fn (types.VkDevice, types.VkPipeline, ?*const anyopaque) callconv(.C) void;
 pub const PFN_vkCreateDescriptorPool = *const fn (types.VkDevice, *const types_dispatch.VkDescriptorPoolCreateInfo, ?*const anyopaque, *types.VkDescriptorPool) callconv(.C) types.VkResult;
 pub const PFN_vkDestroyDescriptorPool = *const fn (types.VkDevice, types.VkDescriptorPool, ?*const anyopaque) callconv(.C) void;
+pub const PFN_vkResetDescriptorPool = *const fn (types.VkDevice, types.VkDescriptorPool, u32) callconv(.C) types.VkResult;
 pub const PFN_vkAllocateDescriptorSets = *const fn (types.VkDevice, *const types_dispatch.VkDescriptorSetAllocateInfo, [*]types.VkDescriptorSet) callconv(.C) types.VkResult;
 pub const PFN_vkUpdateDescriptorSets = *const fn (types.VkDevice, u32, [*]const types_dispatch.VkWriteDescriptorSet, u32, ?*const anyopaque) callconv(.C) void;
 pub const PFN_vkCreateCommandPool = *const fn (types.VkDevice, *const types_dispatch.VkCommandPoolCreateInfo, ?*const anyopaque, *types.VkCommandPool) callconv(.C) types.VkResult;
@@ -39,6 +40,7 @@ pub const PFN_vkEndCommandBuffer = *const fn (types.VkCommandBuffer) callconv(.C
 pub const PFN_vkCmdBindPipeline = *const fn (types.VkCommandBuffer, u32, types.VkPipeline) callconv(.C) void;
 pub const PFN_vkCmdBindDescriptorSets = *const fn (types.VkCommandBuffer, u32, types.VkPipelineLayout, u32, u32, [*]const types.VkDescriptorSet, u32, ?*const u32) callconv(.C) void;
 pub const PFN_vkCmdPushConstants = *const fn (types.VkCommandBuffer, types.VkPipelineLayout, u32, u32, u32, *const anyopaque) callconv(.C) void;
+pub const PFN_vkCmdCopyBuffer = *const fn (types.VkCommandBuffer, types.VkBuffer, types.VkBuffer, u32, [*]const types_dispatch.VkBufferCopy) callconv(.C) void;
 pub const PFN_vkCmdPipelineBarrier = *const fn (types.VkCommandBuffer, u32, u32, u32, u32, ?*const anyopaque, u32, ?[*]const types_dispatch.VkBufferMemoryBarrier, u32, ?*const anyopaque) callconv(.C) void;
 pub const PFN_vkCmdDispatch = *const fn (types.VkCommandBuffer, u32, u32, u32) callconv(.C) void;
 pub const PFN_vkCmdDispatchIndirect = *const fn (types.VkCommandBuffer, types.VkBuffer, u64) callconv(.C) void;
@@ -80,6 +82,7 @@ pub const VulkanApi = struct {
     vkDestroyPipeline: PFN_vkDestroyPipeline,
     vkCreateDescriptorPool: PFN_vkCreateDescriptorPool,
     vkDestroyDescriptorPool: PFN_vkDestroyDescriptorPool,
+    vkResetDescriptorPool: PFN_vkResetDescriptorPool,
     vkAllocateDescriptorSets: PFN_vkAllocateDescriptorSets,
     vkUpdateDescriptorSets: PFN_vkUpdateDescriptorSets,
     vkCreateCommandPool: PFN_vkCreateCommandPool,
@@ -90,6 +93,7 @@ pub const VulkanApi = struct {
     vkCmdBindPipeline: PFN_vkCmdBindPipeline,
     vkCmdBindDescriptorSets: PFN_vkCmdBindDescriptorSets,
     vkCmdPushConstants: PFN_vkCmdPushConstants,
+    vkCmdCopyBuffer: PFN_vkCmdCopyBuffer,
     vkCmdPipelineBarrier: PFN_vkCmdPipelineBarrier,
     vkCmdDispatch: PFN_vkCmdDispatch,
     vkCmdDispatchIndirect: PFN_vkCmdDispatchIndirect,
@@ -142,6 +146,7 @@ pub const VulkanApi = struct {
             .vkDestroyPipeline = lib.lookup(PFN_vkDestroyPipeline, "vkDestroyPipeline") orelse return error.SymbolNotFound,
             .vkCreateDescriptorPool = lib.lookup(PFN_vkCreateDescriptorPool, "vkCreateDescriptorPool") orelse return error.SymbolNotFound,
             .vkDestroyDescriptorPool = lib.lookup(PFN_vkDestroyDescriptorPool, "vkDestroyDescriptorPool") orelse return error.SymbolNotFound,
+            .vkResetDescriptorPool = lib.lookup(PFN_vkResetDescriptorPool, "vkResetDescriptorPool") orelse return error.SymbolNotFound,
             .vkAllocateDescriptorSets = lib.lookup(PFN_vkAllocateDescriptorSets, "vkAllocateDescriptorSets") orelse return error.SymbolNotFound,
             .vkUpdateDescriptorSets = lib.lookup(PFN_vkUpdateDescriptorSets, "vkUpdateDescriptorSets") orelse return error.SymbolNotFound,
             .vkCreateCommandPool = lib.lookup(PFN_vkCreateCommandPool, "vkCreateCommandPool") orelse return error.SymbolNotFound,
@@ -152,6 +157,7 @@ pub const VulkanApi = struct {
             .vkCmdBindPipeline = lib.lookup(PFN_vkCmdBindPipeline, "vkCmdBindPipeline") orelse return error.SymbolNotFound,
             .vkCmdBindDescriptorSets = lib.lookup(PFN_vkCmdBindDescriptorSets, "vkCmdBindDescriptorSets") orelse return error.SymbolNotFound,
             .vkCmdPushConstants = lib.lookup(PFN_vkCmdPushConstants, "vkCmdPushConstants") orelse return error.SymbolNotFound,
+            .vkCmdCopyBuffer = lib.lookup(PFN_vkCmdCopyBuffer, "vkCmdCopyBuffer") orelse return error.SymbolNotFound,
             .vkCmdPipelineBarrier = lib.lookup(PFN_vkCmdPipelineBarrier, "vkCmdPipelineBarrier") orelse return error.SymbolNotFound,
             .vkCmdDispatch = lib.lookup(PFN_vkCmdDispatch, "vkCmdDispatch") orelse return error.SymbolNotFound,
             .vkCmdDispatchIndirect = lib.lookup(PFN_vkCmdDispatchIndirect, "vkCmdDispatchIndirect") orelse return error.SymbolNotFound,

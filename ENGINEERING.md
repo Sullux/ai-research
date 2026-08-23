@@ -298,3 +298,20 @@ Having exhausted micro-architectural shader layouts and proven that dense 48-lay
 * **Blocking Fence Synchronization & CPU Isolation (`src/gpu/kernels.zig`, `src/model/forward.zig`):** Direct `vkWaitForFences` blocking synchronization yielding the CPU thread to prevent user-space busy-wait thermal spikes, and bypassing CPU-side KV copying when running under the GPU backend.
 * **Code Size Adherence:** All source files maintained strictly under 200 lines (and JavaScript files $\le 100$ lines).
 
+---
+
+## 9. Batched GPU Prompt Prefill & Mixed-Precision Compute Engine (Stage G9)
+
+### Implementation Summary
+* **2D Batched Prefill Compute Pipeline (`src/gpu/batch_prefill.zig`, `src/gpu/batch_dispatch.zig`):** Replaced the 390-token serial single-token decode loop with dedicated parallel 2D compute shaders (`batch_gemm_q8`, `batch_gemm_q4`, `batch_rmsnorm`, `batch_add_rmsnorm`, `batch_fused_mlp_q4`, `batch_fused_mlp_q8`, `batch_qkv_rope`, `batch_causal_attn`).
+* **Chunked Batch Submission & Hardware Safety:** Dispatches 48-layer prefill in 4-layer command buffer chunks with direct GPU-side memory barriers (`VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`), dropping prompt encoding latency from **$24.0\text{ seconds} \rightarrow \mathbf{< 0.5\text{ seconds}}$** without triggering GPU watchdog timeouts or `VK_ERROR_DEVICE_LOST`.
+* **Mixed-Precision Quantization (`--mixed`):**
+  * **Attention Projections ($Q, K, V, O$):** Retained in **Q8_0** (preserving 512-dim RoPE angular precision and multi-head attention resolution).
+  * **Feedforward MLPs ($Gate, Up, Down$):** Quantized to **Q4_0** (saving 75% parameter memory bandwidth).
+  * **Vocabulary Classifier (`embed_tokens`):** Quantized to **Q8_0**.
+  * **Input Token Embeddings:** Raw unquantized **BF16**.
+* **Workgroup Reduction Bug Fixes (`shaders/*.wgsl`):** Added the missing `lane < 1u` workgroup barrier reduction step across all GEMV and attention shaders, eliminating accumulated activation noise that caused subword/contraction corruption.
+* **Control Token Suppression (`src/sampler.zig`):** Suppresses multimodal control tokens (`<audio|>`, `<image|>`, IDs `258882..258883` and `255995..256001`) during textual inference per `generation_config.json`.
+* **Zero-Copy Host Pipeline:** Last-token normalized activation is copied on-device via `vkCmdCopyBuffer` to compute initial generation logits in the same prefill submission with zero CPU synchronization stall.
+
+

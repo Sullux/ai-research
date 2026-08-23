@@ -109,10 +109,15 @@ fn main(
         sdata_up[lid.x] = sdata_up[lid.x] + sdata_up[lid.x + 2u];
     }
     workgroupBarrier();
+    if (lane < 1u) {
+        sdata_gate[lid.x] = sdata_gate[lid.x] + sdata_gate[lid.x + 1u];
+        sdata_up[lid.x] = sdata_up[lid.x] + sdata_up[lid.x + 1u];
+    }
+    workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        let g_final = sdata_gate[lid.x] + sdata_gate[lid.x + 1u];
-        let u_final = sdata_up[lid.x] + sdata_up[lid.x + 1u];
+        let g_final = sdata_gate[lid.x];
+        let u_final = sdata_up[lid.x];
         let act = gelu_tanh(g_final);
         Y[row] = act * u_final;
     }

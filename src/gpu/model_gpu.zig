@@ -28,20 +28,16 @@ pub const GpuLayerWeights = struct {
 };
 
 pub const GpuModelContext = struct {
-    allocator: std.mem.Allocator,
-    ctx: *const context.GpuContext,
-    engine: kernels.GpuEngine,
-    desc_mgr: descriptors.DescriptorManager,
-    layers: []GpuLayerWeights,
+    allocator: std.mem.Allocator, ctx: *const context.GpuContext, engine: kernels.GpuEngine,
+    desc_mgr: descriptors.DescriptorManager, layers: []GpuLayerWeights,
     embed_tokens: buffer.GpuBuffer, final_norm: buffer.GpuBuffer,
     desc_logits: types.VkDescriptorSet, desc_final_norm: types.VkDescriptorSet, desc_argmax: types.VkDescriptorSet,
-    buf_x: buffer.GpuBuffer, buf_normed_x: buffer.GpuBuffer,
-    buf_q: buffer.GpuBuffer, buf_k: buffer.GpuBuffer, buf_v: buffer.GpuBuffer,
-    buf_attn_out: buffer.GpuBuffer, buf_active_slots: buffer.GpuBuffer,
-    buf_gate: buffer.GpuBuffer, buf_up: buffer.GpuBuffer, buf_act: buffer.GpuBuffer,
-    buf_mlp_out: buffer.GpuBuffer, buf_logits: buffer.GpuBuffer, buf_sampled_token: buffer.GpuBuffer,
+    buf_x: buffer.GpuBuffer, buf_normed_x: buffer.GpuBuffer, buf_q: buffer.GpuBuffer, buf_k: buffer.GpuBuffer, buf_v: buffer.GpuBuffer,
+    buf_attn_out: buffer.GpuBuffer, buf_active_slots: buffer.GpuBuffer, buf_gate: buffer.GpuBuffer, buf_up: buffer.GpuBuffer,
+    buf_act: buffer.GpuBuffer, buf_mlp_out: buffer.GpuBuffer, buf_logits: buffer.GpuBuffer, buf_sampled_token: buffer.GpuBuffer,
     buf_step_params: buffer.GpuBuffer, buf_indirect_cmds: buffer.GpuBuffer,
     cmd_buf_decode: types.VkCommandBuffer, cmd_buf_prefill: types.VkCommandBuffer,
+    batch_prefill_ctx: ?*@import("batch_prefill.zig").BatchPrefillContext = null,
 
     fn createWeightBuffer(ctx: *const context.GpuContext, src: []const tensor.bf16, rows: usize, cols: usize, mode: quant.QuantMode) !buffer.GpuBuffer {
         if (mode == .none or src.len == 0) {
@@ -100,37 +96,36 @@ pub const GpuModelContext = struct {
         const buf_sampled_token = try buffer.GpuBuffer.init(ctx, 4, sb);
         const buf_step_params = try buffer.GpuBuffer.init(ctx, 64, sb);
         const buf_indirect_cmds = try buffer.GpuBuffer.init(ctx, m.layers.len * 16 * 12, ind_sb);
-
         const cb_info = types_dispatch.VkCommandBufferAllocateInfo{ .commandPool = engine.cmd_pool, .commandBufferCount = 2 };
         var cmds: [2]types.VkCommandBuffer = .{ null, null };
         if (ctx.api.vkAllocateCommandBuffers(ctx.device, &cb_info, &cmds) != .SUCCESS) return error.VkCmdBufferAllocFailed;
 
+        const attn_m: quant.QuantMode = if (mode == .mixed) .q8 else mode;
+        const mlp_m: quant.QuantMode = if (mode == .mixed) .q4 else mode;
+
         var gpu_layers = try allocator.alloc(GpuLayerWeights, m.layers.len);
         for (m.layers, 0..) |l, i| {
-            const q_dim = l.q_proj.len / H;
-            const kv_dim = l.k_proj.len / H;
+            const q_dim, const kv_dim = .{ l.q_proj.len / H, l.k_proj.len / H };
             const d = try desc_mgr.allocateLayerSets(&engine);
             var w = GpuLayerWeights{
                 .input_norm = try createNormBuffer(ctx, l.input_layernorm, H),
                 .q_norm = try createNormBuffer(ctx, l.q_norm, l.head_dim),
                 .k_norm = try createNormBuffer(ctx, l.k_norm, l.head_dim),
-                .q_proj = try createWeightBuffer(ctx, l.q_proj, q_dim, H, mode),
-                .k_proj = try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
-                .v_proj = if (l.v_proj.len > 0) try createWeightBuffer(ctx, l.v_proj, kv_dim, H, mode) else try createWeightBuffer(ctx, l.k_proj, kv_dim, H, mode),
-                .o_proj = try createWeightBuffer(ctx, l.o_proj, H, q_dim, mode),
-                .gate_proj = try createWeightBuffer(ctx, l.gate_proj, I, H, mode),
-                .up_proj = try createWeightBuffer(ctx, l.up_proj, I, H, mode),
-                .down_proj = try createWeightBuffer(ctx, l.down_proj, H, I, mode),
+                .q_proj = try createWeightBuffer(ctx, l.q_proj, q_dim, H, attn_m),
+                .k_proj = try createWeightBuffer(ctx, l.k_proj, kv_dim, H, attn_m),
+                .v_proj = if (l.v_proj.len > 0) try createWeightBuffer(ctx, l.v_proj, kv_dim, H, attn_m) else try createWeightBuffer(ctx, l.k_proj, kv_dim, H, attn_m),
+                .o_proj = try createWeightBuffer(ctx, l.o_proj, H, q_dim, attn_m),
+                .gate_proj = try createWeightBuffer(ctx, l.gate_proj, I, H, mlp_m),
+                .up_proj = try createWeightBuffer(ctx, l.up_proj, I, H, mlp_m),
+                .down_proj = try createWeightBuffer(ctx, l.down_proj, H, I, mlp_m),
                 .pre_ffn_norm = try createNormBuffer(ctx, l.pre_feedforward_layernorm, H),
                 .post_attn_norm = try createNormBuffer(ctx, if (l.post_attention_layernorm) |p| p else &.{}, H),
                 .post_ffn_norm = try createNormBuffer(ctx, if (l.post_feedforward_layernorm) |p| p else &.{}, H),
                 .buf_x_prev = try buffer.GpuBuffer.init(ctx, H * 4, sb),
                 .buf_k_cache = try buffer.GpuBuffer.init(ctx, max_slots * max_kv * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
                 .buf_v_cache = try buffer.GpuBuffer.init(ctx, max_slots * max_kv * @sizeOf(f32), types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
-                .layer_scalar = l.layer_scalar orelse 1.0,
-                .has_post_attn_norm = (l.post_attention_layernorm != null),
-                .has_post_ffn_norm = (l.post_feedforward_layernorm != null),
-                .desc = d,
+                .layer_scalar = l.layer_scalar orelse 1.0, .has_post_attn_norm = (l.post_attention_layernorm != null),
+                .has_post_ffn_norm = (l.post_feedforward_layernorm != null), .desc = d,
             };
             desc_mgr.bindBuffers(w.desc.input_norm, &.{ &buf_x, &w.input_norm, &buf_normed_x });
             desc_mgr.bindBuffers(w.desc.q_proj, &.{ &w.q_proj, &buf_normed_x, &buf_q });
@@ -151,8 +146,7 @@ pub const GpuModelContext = struct {
             gpu_layers[i] = w;
         }
 
-        const embed_mode: quant.QuantMode = if (mode == .q4) .q8 else mode;
-        const embed_tokens = try createWeightBuffer(ctx, m.embed_tokens, V, H, embed_mode);
+        const embed_tokens = try createWeightBuffer(ctx, m.embed_tokens, V, H, .q8);
         const final_norm = try createNormBuffer(ctx, m.final_norm, H);
 
         for (gpu_layers, 0..) |*w, i| {
@@ -167,6 +161,13 @@ pub const GpuModelContext = struct {
         desc_mgr.bindBuffers(desc_logits, &.{ &embed_tokens, &buf_normed_x, &buf_logits });
         desc_mgr.bindBuffers(desc_argmax, &.{ &buf_logits, &buf_sampled_token });
 
+        var bp_ptr: ?*@import("batch_prefill.zig").BatchPrefillContext = null;
+        if (allocator.create(@import("batch_prefill.zig").BatchPrefillContext)) |bp| {
+            if (@import("batch_prefill.zig").BatchPrefillContext.init(ctx, &config, 1024)) |res| {
+                bp.* = res; bp_ptr = bp;
+            } else |_| allocator.destroy(bp);
+        } else |_| {}
+
         var self_ctx = GpuModelContext{
             .allocator = allocator, .ctx = ctx, .engine = engine, .desc_mgr = desc_mgr,
             .layers = gpu_layers, .embed_tokens = embed_tokens, .final_norm = final_norm,
@@ -176,7 +177,7 @@ pub const GpuModelContext = struct {
             .buf_gate = buf_gate, .buf_up = buf_up, .buf_act = buf_act, .buf_mlp_out = buf_mlp_out,
             .buf_logits = buf_logits, .buf_sampled_token = buf_sampled_token,
             .buf_step_params = buf_step_params, .buf_indirect_cmds = buf_indirect_cmds,
-            .cmd_buf_decode = cmds[0], .cmd_buf_prefill = cmds[1],
+            .cmd_buf_decode = cmds[0], .cmd_buf_prefill = cmds[1], .batch_prefill_ctx = bp_ptr,
         };
         const model_dispatch = @import("model_dispatch.zig");
         model_dispatch.recordForwardGraph(&self_ctx, &m.config, m.layers, cmds[0], true, quiescence_thresh);
@@ -185,6 +186,7 @@ pub const GpuModelContext = struct {
     }
 
     pub fn deinit(self: *GpuModelContext) void {
+        if (self.batch_prefill_ctx) |bp| { bp.deinit(); self.allocator.destroy(bp); }
         self.engine.deinit(); self.desc_mgr.deinit();
         for (self.layers) |*l| l.deinit();
         self.allocator.free(self.layers);

@@ -16,6 +16,14 @@ shaders = [
     ("quiescence_gate", "QUIESCENCE_GATE_SPIRV", "src/gpu/shaders_quiescence.zig"),
     ("qkv_prep", "QKV_PREP_SPIRV", "src/gpu/shaders_qkv_prep.zig"),
     ("qkv_rope", "QKV_ROPE_SPIRV", "src/gpu/shaders_qkv_rope.zig"),
+    ("batch_rmsnorm", "BATCH_RMSNORM_SPIRV", "src/gpu/shaders_batch_rmsnorm.zig"),
+    ("batch_gemm_q4", "BATCH_GEMM_Q4_SPIRV", "src/gpu/shaders_batch_gemm_q4.zig"),
+    ("batch_gemm_q8", "BATCH_GEMM_Q8_SPIRV", "src/gpu/shaders_batch_gemm_q8.zig"),
+    ("batch_add_rmsnorm", "BATCH_ADD_RMSNORM_SPIRV", "src/gpu/shaders_batch_add_rmsnorm.zig"),
+    ("batch_fused_mlp_q4", "BATCH_FUSED_MLP_Q4_SPIRV", "src/gpu/shaders_batch_fused_mlp_q4.zig"),
+    ("batch_fused_mlp_q8", "BATCH_FUSED_MLP_Q8_SPIRV", "src/gpu/shaders_batch_fused_mlp_q8.zig"),
+    ("batch_qkv_rope", "BATCH_QKV_ROPE_SPIRV", "src/gpu/shaders_batch_qkv_rope.zig"),
+    ("batch_causal_attn", "BATCH_CAUSAL_ATTN_SPIRV", "src/gpu/shaders_batch_causal_attn.zig"),
 ]
 
 def compile_wgsl(src, dst):

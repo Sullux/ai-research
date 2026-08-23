@@ -31,16 +31,16 @@ pub const DescriptorManager = struct {
     pub fn allocateLayerSets(self: *DescriptorManager, engine: anytype) !LayerDescriptorSets {
         return .{
             .input_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
-            .q_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
-            .k_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
-            .v_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .q_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),
+            .k_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),
+            .v_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),
             .qkv_rope = try self.allocateSet(engine.qkv_rope_pipe.desc_set_layout),
             .attn = try self.allocateSet(engine.attn_pipe.desc_set_layout),
-            .o_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
-            .gate_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
-            .up_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .o_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),
+            .gate_proj = try self.allocateSet(engine.gemv_mlp_pipe.desc_set_layout),
+            .up_proj = try self.allocateSet(engine.gemv_mlp_pipe.desc_set_layout),
             .swiglu = try self.allocateSet(engine.swiglu_pipe.desc_set_layout),
-            .down_proj = try self.allocateSet(engine.gemv_pipe.desc_set_layout),
+            .down_proj = try self.allocateSet(engine.gemv_mlp_pipe.desc_set_layout),
             .gate_up_swiglu = try self.allocateSet(engine.gate_up_pipe.desc_set_layout),
             .pre_ffn_norm = try self.allocateSet(engine.add_rmsnorm_pipe.desc_set_layout),
             .post_attn_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
@@ -68,6 +68,10 @@ pub const DescriptorManager = struct {
         self.ctx.api.vkDestroyDescriptorPool(self.ctx.device, self.pool, null);
     }
 
+    pub fn reset(self: *const DescriptorManager) void {
+        _ = self.ctx.api.vkResetDescriptorPool(self.ctx.device, self.pool, 0);
+    }
+
     pub fn allocateSet(self: *const DescriptorManager, layout: types.VkDescriptorSetLayout) !types.VkDescriptorSet {
         const alloc_info = types_dispatch.VkDescriptorSetAllocateInfo{
             .descriptorPool = self.pool,
@@ -88,7 +92,7 @@ pub const DescriptorManager = struct {
             infos[i] = .{
                 .buffer = bufs[i].buffer,
                 .offset = 0,
-                .range = bufs[i].size,
+                .range = 0xFFFFFFFFFFFFFFFF, // VK_WHOLE_SIZE
             };
             writes[i] = .{
                 .dstSet = set,

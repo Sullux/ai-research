@@ -10,6 +10,8 @@ pub const gpu_kernels = @import("gpu/kernels.zig");
 pub const descriptors = @import("gpu/descriptors.zig");
 pub const model_dispatch = @import("gpu/model_dispatch.zig");
 pub const model_gpu = @import("gpu/model_gpu.zig");
+pub const batch_prefill = @import("gpu/batch_prefill.zig");
+pub const batch_dispatch = @import("gpu/batch_dispatch.zig");
 pub const quant = @import("quant.zig");
 
 fn testCtx() !?context.GpuContext {

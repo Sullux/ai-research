@@ -74,6 +74,11 @@ pub const Sampler = struct {
     }
 
     pub fn sample(self: *Sampler, logits: []f32) u32 {
+        const suppress = [_]u32{ 0, 258882, 258883, 255999, 256000, 256001, 255995, 255996, 255997, 255998 };
+        for (suppress) |sup| {
+            if (sup < logits.len) logits[sup] = -1e9;
+        }
+
         if (self.rep_penalty != 1.0) {
             for (self.history[0..self.history_len]) |tok| {
                 if (tok < logits.len) {

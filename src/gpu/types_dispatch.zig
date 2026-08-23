@@ -1,6 +1,12 @@
 const std = @import("std");
 const types = @import("types.zig");
 
+pub const VkBufferCopy = extern struct {
+    srcOffset: u64 = 0,
+    dstOffset: u64 = 0,
+    size: u64 = 0,
+};
+
 pub const VkDescriptorSetLayoutBinding = extern struct {
     binding: u32,
     descriptorType: u32,

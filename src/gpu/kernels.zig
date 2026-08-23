@@ -18,7 +18,8 @@ pub const QuiescenceGatePushConstants = extern struct {
 pub const GpuEngine = struct {
     ctx: *const context.GpuContext,
     mode: quant.QuantMode,
-    gemv_pipe: pipeline.ComputePipeline,
+    gemv_attn_pipe: pipeline.ComputePipeline,
+    gemv_mlp_pipe: pipeline.ComputePipeline,
     gemv_logits_pipe: pipeline.ComputePipeline,
     swiglu_pipe: pipeline.ComputePipeline,
     gate_up_pipe: pipeline.ComputePipeline,
@@ -33,12 +34,13 @@ pub const GpuEngine = struct {
     fence: types.VkFence,
 
     pub fn init(ctx: *const context.GpuContext, mode: quant.QuantMode) !GpuEngine {
-        const gemv_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8 => &shaders.GEMV_Q8_SPIRV, .q4 => &shaders.GEMV_Q4_SPIRV };
-        var gemv = try pipeline.ComputePipeline.init(ctx, gemv_spirv, 3, 8); errdefer gemv.deinit();
-        const logits_spirv = if (mode == .q4) &shaders.GEMV_Q8_SPIRV else gemv_spirv;
-        var gemv_logits = try pipeline.ComputePipeline.init(ctx, logits_spirv, 3, 8); errdefer gemv_logits.deinit();
+        const attn_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8, .mixed => &shaders.GEMV_Q8_SPIRV, .q4 => &shaders.GEMV_Q4_SPIRV };
+        const mlp_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8 => &shaders.GEMV_Q8_SPIRV, .q4, .mixed => &shaders.GEMV_Q4_SPIRV };
+        var gemv_attn = try pipeline.ComputePipeline.init(ctx, attn_spirv, 3, 16); errdefer gemv_attn.deinit();
+        var gemv_mlp = try pipeline.ComputePipeline.init(ctx, mlp_spirv, 3, 16); errdefer gemv_mlp.deinit();
+        var gemv_logits = try pipeline.ComputePipeline.init(ctx, &shaders.GEMV_Q8_SPIRV, 3, 16); errdefer gemv_logits.deinit();
         var swiglu = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_SWIGLU_SPIRV, 3, 4); errdefer swiglu.deinit();
-        const gate_up_spirv = switch (mode) { .q4 => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, .q8 => &shaders.FUSED_GATE_UP_SWIGLU_Q8_SPIRV, .none => &shaders.FUSED_GATE_UP_SWIGLU_BF16_SPIRV };
+        const gate_up_spirv = switch (mode) { .q4, .mixed => &shaders.FUSED_GATE_UP_SWIGLU_Q4_SPIRV, .q8 => &shaders.FUSED_GATE_UP_SWIGLU_Q8_SPIRV, .none => &shaders.FUSED_GATE_UP_SWIGLU_BF16_SPIRV };
         var gate_up = try pipeline.ComputePipeline.init(ctx, gate_up_spirv, 4, 8); errdefer gate_up.deinit();
         var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 12); errdefer add_rms.deinit();
         var rms = try pipeline.ComputePipeline.init(ctx, &shaders.RMSNORM_SPIRV, 3, 8); errdefer rms.deinit();
@@ -59,7 +61,7 @@ pub const GpuEngine = struct {
         if (ctx.api.vkCreateFence(ctx.device, &fence_info, null, &fence) != .SUCCESS) return error.VkFenceCreationFailed;
 
         return .{
-            .ctx = ctx, .mode = mode, .gemv_pipe = gemv, .gemv_logits_pipe = gemv_logits,
+            .ctx = ctx, .mode = mode, .gemv_attn_pipe = gemv_attn, .gemv_mlp_pipe = gemv_mlp, .gemv_logits_pipe = gemv_logits,
             .swiglu_pipe = swiglu, .gate_up_pipe = gate_up, .add_rmsnorm_pipe = add_rms,
             .rmsnorm_pipe = rms, .attn_pipe = attn, .qkv_rope_pipe = qkv_rope,
             .argmax_pipe = argmax, .quiescence_pipe = quiescence,
@@ -73,20 +75,28 @@ pub const GpuEngine = struct {
         self.ctx.api.vkDestroyCommandPool(self.ctx.device, self.cmd_pool, null);
         self.qkv_rope_pipe.deinit(); self.attn_pipe.deinit(); self.rmsnorm_pipe.deinit();
         self.add_rmsnorm_pipe.deinit(); self.gate_up_pipe.deinit(); self.swiglu_pipe.deinit();
-        self.gemv_logits_pipe.deinit(); self.gemv_pipe.deinit(); self.argmax_pipe.deinit();
+        self.gemv_logits_pipe.deinit(); self.gemv_mlp_pipe.deinit(); self.gemv_attn_pipe.deinit(); self.argmax_pipe.deinit();
         self.quiescence_pipe.deinit();
     }
 
     pub fn recordGemv(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
-        const pc = [_]u32{ @intCast(m), @intCast(k) };
-        self.gemv_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
+        const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
+        self.gemv_attn_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
+    }
+    pub fn recordGemvMlp(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
+        const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
+        self.gemv_mlp_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
     }
     pub fn recordGemvIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize, ind: types.VkBuffer, off: u64) void {
-        const pc = [_]u32{ @intCast(m), @intCast(k) };
-        self.gemv_pipe.recordIndirect(cmd, set, std.mem.sliceAsBytes(&pc), ind, off);
+        const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
+        self.gemv_attn_pipe.recordIndirect(cmd, set, std.mem.sliceAsBytes(&pc), ind, off);
     }
-    pub fn recordGemvLogits(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
-        const pc = [_]u32{ @intCast(m), @intCast(k) };
+    pub fn recordGemvMlpIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize, ind: types.VkBuffer, off: u64) void {
+        const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
+        self.gemv_mlp_pipe.recordIndirect(cmd, set, std.mem.sliceAsBytes(&pc), ind, off);
+    }
+    pub fn recordGemvLogits(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize, x_offset: usize) void {
+        const pc = [_]u32{ @intCast(m), @intCast(k), @intCast(x_offset), 0 };
         self.gemv_logits_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
     }
     pub fn recordGateUpSwiGlu(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
@@ -141,8 +151,8 @@ pub const GpuEngine = struct {
         self.argmax_pipe.record(cmd, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
     pub fn recordBarrier(self: *const GpuEngine, cmd: types.VkCommandBuffer) void {
-        const b = types_dispatch.VkMemoryBarrier{ .srcAccessMask = 0x00000040 | 0x00004000, .dstAccessMask = 0x00000020 | 0x00000040 | 0x00000001 };
-        self.ctx.api.vkCmdPipelineBarrier(cmd, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | 0x00004000, types.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | 0x00004000, 0, 1, (&b)[0..1].ptr, 0, null, 0, null);
+        const b = types_dispatch.VkMemoryBarrier{ .srcAccessMask = 0x00008000 | 0x00004000 | 0x00000800 | 0x00000040 | 0x00000020, .dstAccessMask = 0x00008000 | 0x00004000 | 0x00000800 | 0x00000040 | 0x00000020 };
+        self.ctx.api.vkCmdPipelineBarrier(cmd, 0x00010000, 0x00010000, 0, 1, (&b)[0..1].ptr, 0, null, 0, null);
     }
     pub fn submitPreRecorded(self: *const GpuEngine, cmd_buf: types.VkCommandBuffer) !void {
         _ = self.ctx.api.vkResetFences(self.ctx.device, 1, (&self.fence)[0..1].ptr);

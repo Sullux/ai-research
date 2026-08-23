@@ -75,8 +75,10 @@ fn main(
     workgroupBarrier();
     if (lane < 2u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 2u]; }
     workgroupBarrier();
+    if (lane < 1u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 1u]; }
+    workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        Y[row] = sdata[lid.x] + sdata[lid.x + 1u];
+        Y[row] = sdata[lid.x];
     }
 }

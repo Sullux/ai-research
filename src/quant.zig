@@ -4,10 +4,12 @@ pub const QuantMode = enum {
     none,
     q8,
     q4,
+    mixed,
 
     pub fn fromString(str: []const u8) QuantMode {
         if (std.mem.eql(u8, str, "q8") or std.mem.eql(u8, str, "q8_0")) return .q8;
         if (std.mem.eql(u8, str, "q4") or std.mem.eql(u8, str, "q4_0")) return .q4;
+        if (std.mem.eql(u8, str, "mixed") or std.mem.eql(u8, str, "q4_mixed")) return .mixed;
         return .none;
     }
 };
@@ -101,7 +103,7 @@ pub fn quantizeMatrix(dst_words: []u32, src_bf16: []const u16, rows: usize, cols
             const src_row = src_bf16[r * row_bf16_len .. (r + 1) * row_bf16_len];
             const dst_row = dst_words[r * row_words_len .. (r + 1) * row_words_len];
             switch (mode) {
-                .q8 => quantizeRowQ8_0(dst_row, src_row),
+                .q8, .mixed => quantizeRowQ8_0(dst_row, src_row),
                 .q4 => quantizeRowQ4_0(dst_row, src_row),
                 .none => unreachable,
             }
@@ -124,7 +126,7 @@ pub fn quantizeMatrix(dst_words: []u32, src_bf16: []const u16, rows: usize, cols
                 const src_row = self.src[r * self.row_b_len .. (r + 1) * self.row_b_len];
                 const dst_row = self.dst[r * self.row_w_len .. (r + 1) * self.row_w_len];
                 switch (self.m) {
-                    .q8 => quantizeRowQ8_0(dst_row, src_row),
+                    .q8, .mixed => quantizeRowQ8_0(dst_row, src_row),
                     .q4 => quantizeRowQ4_0(dst_row, src_row),
                     .none => unreachable,
                 }
@@ -165,7 +167,7 @@ pub fn getQuantizedRowWords(cols: usize, mode: QuantMode) usize {
     const num_blocks = (cols + QK - 1) / QK;
     return switch (mode) {
         .none => cols / 2,
-        .q8 => num_blocks * 9,
+        .q8, .mixed => num_blocks * 9,
         .q4 => num_blocks * 5,
     };
 }

@@ -55,9 +55,11 @@ fn main(
         workgroupBarrier();
         if (lane < 2u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 2u]; }
         workgroupBarrier();
+        if (lane < 1u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 1u]; }
+        workgroupBarrier();
 
         if (lane == 0u) {
-            s_scores[slot_i] = (sdata_dot[0] + sdata_dot[1]) * pc.inv_sqrt_dim;
+            s_scores[slot_i] = sdata_dot[0] * pc.inv_sqrt_dim;
         }
         workgroupBarrier();
     }

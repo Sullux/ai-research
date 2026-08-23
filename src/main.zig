@@ -59,6 +59,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--gpu")) { gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--q8")) { quant_mode = .q8; gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--q4")) { quant_mode = .q4; gpu_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--mixed") or std.mem.eql(u8, arg, "--q4-mixed")) { quant_mode = .mixed; gpu_enabled = true;
         } else if (std.mem.eql(u8, arg, "--quant") and arg_idx + 1 < args.len) { quant_mode = quant.QuantMode.fromString(args[arg_idx + 1]); gpu_enabled = true; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--no-memory")) { memory_enabled = false;
         } else {
@@ -92,7 +93,7 @@ pub fn main() !void {
     defer if (gpu_model_ctx) |*gmc| gmc.deinit();
     const gpu_ptr: ?*gpu.model_gpu.GpuModelContext = if (gpu_model_ctx) |*gmc| gmc else null;
     if (gpu_ctx) |gc| {
-        const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4 => "Q4_0" };
+        const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4 => "Q4_0", .mixed => "Mixed (Attn:Q8_0/MLP:Q4_0)" };
         if (!serve_mode) try stdout.print("GPU: {s} (UMA Compute, {s})\n", .{ gc.device_name[0..(std.mem.indexOfScalar(u8, &gc.device_name, 0) orelse gc.device_name.len)], mode_tag });
     }
     if (bench_mode and gpu_ptr != null) {

@@ -37,7 +37,7 @@ fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerW
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordGateUpSwiGlu(cmd, l_gpu.desc.gate_up_swiglu, inter, H);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordGemv(cmd, l_gpu.desc.down_proj, H, inter);
+    gpu.engine.recordGemvMlp(cmd, l_gpu.desc.down_proj, H, inter);
     if (l_gpu.has_post_ffn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNorm(cmd, l_gpu.desc.post_ffn_norm, H, eps); }
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordAddRmsNorm(cmd, l_gpu.desc.post_ffn_add, H, eps, l_gpu.layer_scalar);
@@ -95,7 +95,7 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordGateUpSwiGluIndirect(cmd, l_gpu.desc.gate_up_swiglu, inter, H, buf, base + 9 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.down_proj, H, inter, buf, base + 10 * 12);
+    gpu.engine.recordGemvMlpIndirect(cmd, l_gpu.desc.down_proj, H, inter, buf, base + 10 * 12);
     if (l_gpu.has_post_ffn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.post_ffn_norm, H, eps, buf, base + 11 * 12); }
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordAddRmsNormIndirect(cmd, l_gpu.desc.post_ffn_add, H, eps, l_gpu.layer_scalar, buf, base + 12 * 12);
@@ -120,7 +120,7 @@ pub fn recordForwardGraph(gpu: *model_gpu.GpuModelContext, config: *const model_
     }
 
     if (include_logits) {
-        gpu.engine.recordGemvLogits(cmd_buf, gpu.desc_logits, V, H);
+        gpu.engine.recordGemvLogits(cmd_buf, gpu.desc_logits, V, H, 0);
         gpu.engine.recordBarrier(cmd_buf);
         gpu.engine.recordArgmax(cmd_buf, gpu.desc_argmax, V);
     }

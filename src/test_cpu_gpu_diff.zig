@@ -23,7 +23,7 @@ pub fn main() !void {
 
     var gpu_ctx = try gpu.context.GpuContext.init(allocator);
     defer gpu_ctx.deinit();
-    var gpu_model = try gpu.model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .q4, 0.001);
+    var gpu_model = try gpu.model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .q8, 0.001);
     defer gpu_model.deinit();
 
     const H = config.hidden_size;
@@ -43,7 +43,7 @@ pub fn main() !void {
     defer full_prompt.deinit();
     try full_prompt.appendSlice("<|turn>system\n<|think|>\n");
     try full_prompt.appendSlice(txt);
-    try full_prompt.appendSlice("\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n<|channel>thought\n");
+    try full_prompt.appendSlice("\n<turn|>\n<|turn>user\nHello, how are you today?<turn|>\n<|turn>model\n<|channel>thought\n");
 
     const tokens = try tok.encode(allocator, full_prompt.items, true);
     defer allocator.free(tokens);

@@ -1,94 +1,57 @@
-import { spawn } from 'child_process';
-import fs from 'fs';
+#!/usr/bin/env node
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const constants = require('../tui/lib/protocol/constants');
+const framing = require('../tui/lib/protocol/framing');
 
-const MAGIC = 0x53554C58;
-const VERSION = 1;
-const OP_STREAM_INPUT = 0x0001;
-const OP_SET_CONFIG = 0x0004;
-const OP_SHUTDOWN = 0x000F;
-const OP_STREAM_CONTENT = 0x0101;
-const OP_STREAM_THOUGHT = 0x0102;
-const OP_TURN_COMPLETE = 0x0103;
-
-function makeHeader(opcode, msgId, payloadLen) {
-  const buf = Buffer.alloc(16);
-  buf.writeUInt32LE(MAGIC, 0);
-  buf.writeUInt16LE(VERSION, 4);
-  buf.writeUInt16LE(msgId, 6);
-  buf.writeUInt16LE(opcode, 8);
-  buf.writeUInt16LE(0, 10);
-  buf.writeUInt32LE(payloadLen, 12);
-  return buf;
+const modelPath = process.argv[2] || '../gemma-4-12B-it';
+const extraArgs = process.argv.slice(3);
+if (extraArgs.length === 0) {
+  extraArgs.push('--gpu', '--mixed');
 }
 
-function makeStreamInputFrame(text, msgId = 1) {
-  const textBytes = Buffer.from(text, 'utf-8');
-  const payload = Buffer.alloc(8 + textBytes.length);
-  payload.writeUInt8(0x00, 0);
-  textBytes.copy(payload, 8);
-  const hdr = makeHeader(OP_STREAM_INPUT, msgId, payload.length);
-  return Buffer.concat([hdr, payload]);
-}
+const binPath = path.resolve(__dirname, '../zig-out/bin/infer');
+const child = spawn(binPath, ['--model', modelPath, '--serve', ...extraArgs], {
+  stdio: ['pipe', 'pipe', 'inherit'],
+});
 
-function makeConfigFrame(maxTokens = 64) {
+let rxBuffer = Buffer.alloc(0);
+child.stdout.on('data', (chunk) => {
+  rxBuffer = Buffer.concat([rxBuffer, chunk]);
+  while (true) {
+    const frame = framing.parsedFrame(rxBuffer);
+    if (!frame) break;
+    rxBuffer = rxBuffer.subarray(16 + frame.header.payloadLen);
+
+    if (frame.header.opcode === constants.OP_STREAM_THOUGHT) {
+      const text = frame.payload.subarray(24).toString('utf-8');
+      process.stdout.write(`\x1b[33m${text}\x1b[0m`);
+    } else if (frame.header.opcode === constants.OP_STREAM_CONTENT) {
+      const text = frame.payload.subarray(24).toString('utf-8');
+      process.stdout.write(`\x1b[32m${text}\x1b[0m`);
+    } else if (frame.header.opcode === constants.OP_TURN_COMPLETE) {
+      console.log('\n\n\x1b[36m[Turn Complete]\x1b[0m');
+      const shutdownHdr = framing.headerBuffer(constants.OP_SHUTDOWN, 999, 0);
+      child.stdin.write(shutdownHdr);
+    }
+  }
+});
+
+function makeConfigFrame(maxTokens = 128, temp = 0.7) {
   const payload = Buffer.alloc(20);
   payload.writeUInt32LE(512, 0);
-  payload.writeFloatLE(0.7, 4);
+  payload.writeFloatLE(temp, 4);
   payload.writeFloatLE(0.95, 8);
-  payload.writeFloatLE(0.001, 12);
+  payload.writeFloatLE(0.0, 12);
   payload.writeUInt32LE(maxTokens, 16);
-  const hdr = makeHeader(OP_SET_CONFIG, 1, payload.length);
+  const hdr = framing.headerBuffer(constants.OP_SET_CONFIG, 1, payload.length);
   return Buffer.concat([hdr, payload]);
 }
 
-async function testTurn() {
-  const proc = spawn('./zig-out/bin/infer', ['--model', '../gemma-4-12B-it', '--serve', '--gpu', '--q4'], {
-    stdio: ['pipe', 'pipe', 'inherit'],
-  });
+const kernelPath = path.resolve(__dirname, '../tui/PROMPT_KERNEL.md');
+const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : '';
+const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n<|channel>thought\n`;
 
-  let rx = Buffer.alloc(0);
-  let thoughts = '';
-  let content = '';
-  let complete = false;
-
-  proc.stdout.on('data', (chunk) => {
-    rx = Buffer.concat([rx, chunk]);
-    while (rx.length >= 16) {
-      const magic = rx.readUInt32LE(0);
-      if (magic !== MAGIC) break;
-      const opcode = rx.readUInt16LE(8);
-      const payloadLen = rx.readUInt32LE(12);
-      if (rx.length < 16 + payloadLen) break;
-
-      const payload = rx.subarray(16, 16 + payloadLen);
-      rx = rx.subarray(16 + payloadLen);
-
-      if (opcode === OP_STREAM_THOUGHT) {
-        const t = payload.subarray(24).toString('utf-8');
-        thoughts += t;
-      } else if (opcode === OP_STREAM_CONTENT) {
-        const t = payload.subarray(24).toString('utf-8');
-        content += t;
-      } else if (opcode === OP_TURN_COMPLETE) {
-        complete = true;
-      }
-    }
-  });
-
-  proc.stdin.write(makeConfigFrame(64));
-  const prompt = '<|turn>user\nHello! How are you today?<turn|>\n<|turn>model\n';
-  proc.stdin.write(makeStreamInputFrame(prompt, 1));
-
-  const start = Date.now();
-  while (!complete && Date.now() - start < 15000) {
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  proc.stdin.write(makeHeader(OP_SHUTDOWN, 0, 0));
-  await new Promise((r) => proc.on('close', r));
-
-  console.log('THOUGHTS:', JSON.stringify(thoughts));
-  console.log('CONTENT:', JSON.stringify(content));
-}
-
-testTurn();
+child.stdin.write(makeConfigFrame(128, 0.7));
+child.stdin.write(framing.streamInputFrame(prompt, 1));

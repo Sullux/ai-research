@@ -1,6 +1,8 @@
 struct PushConstants {
     M: u32,
     K: u32,
+    x_offset: u32,
+    pad: u32,
 };
 
 @group(0) @binding(0) var<storage, read> W: array<u32>;
@@ -33,7 +35,7 @@ fn main(
             let p0 = W[bb0 + lane_word_idx];
             let raw0 = (p0 >> byte_shift) & 0xFFu;
             let sb0 = (i32(raw0) << 24) >> 24;
-            let x0 = X[b * 32u + lane];
+            let x0 = X[pc.x_offset + b * 32u + lane];
             acc = acc + f32(sb0) * s0 * x0;
 
             let bb1 = bb0 + 9u;
@@ -41,7 +43,7 @@ fn main(
             let p1 = W[bb1 + lane_word_idx];
             let raw1 = (p1 >> byte_shift) & 0xFFu;
             let sb1 = (i32(raw1) << 24) >> 24;
-            let x1 = X[(b + 1u) * 32u + lane];
+            let x1 = X[pc.x_offset + (b + 1u) * 32u + lane];
             acc = acc + f32(sb1) * s1 * x1;
 
             let bb2 = bb0 + 18u;
@@ -49,7 +51,7 @@ fn main(
             let p2 = W[bb2 + lane_word_idx];
             let raw2 = (p2 >> byte_shift) & 0xFFu;
             let sb2 = (i32(raw2) << 24) >> 24;
-            let x2 = X[(b + 2u) * 32u + lane];
+            let x2 = X[pc.x_offset + (b + 2u) * 32u + lane];
             acc = acc + f32(sb2) * s2 * x2;
 
             let bb3 = bb0 + 27u;
@@ -57,7 +59,7 @@ fn main(
             let p3 = W[bb3 + lane_word_idx];
             let raw3 = (p3 >> byte_shift) & 0xFFu;
             let sb3 = (i32(raw3) << 24) >> 24;
-            let x3 = X[(b + 3u) * 32u + lane];
+            let x3 = X[pc.x_offset + (b + 3u) * 32u + lane];
             acc = acc + f32(sb3) * s3 * x3;
 
             b = b + 4u;
@@ -75,8 +77,10 @@ fn main(
     workgroupBarrier();
     if (lane < 2u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 2u]; }
     workgroupBarrier();
+    if (lane < 1u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 1u]; }
+    workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        Y[row] = sdata[lid.x] + sdata[lid.x + 1u];
+        Y[row] = sdata[lid.x];
     }
 }

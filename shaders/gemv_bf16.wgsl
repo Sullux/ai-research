@@ -1,6 +1,8 @@
 struct PushConstants {
     M: u32,
     K: u32,
+    x_offset: u32,
+    pad: u32,
 };
 
 @group(0) @binding(0) var<storage, read> W: array<u32>;
@@ -35,7 +37,7 @@ fn main(
             let p2 = W[row_offset + idx + 2u];
             let p3 = W[row_offset + idx + 3u];
 
-            let x_base = idx * 2u;
+            let x_base = pc.x_offset + idx * 2u;
             acc = acc + bf16_to_f32(p0 & 0xFFFFu) * X[x_base] + bf16_to_f32(p0 >> 16u) * X[x_base + 1u];
             acc = acc + bf16_to_f32(p1 & 0xFFFFu) * X[x_base + 2u] + bf16_to_f32(p1 >> 16u) * X[x_base + 3u];
             acc = acc + bf16_to_f32(p2 & 0xFFFFu) * X[x_base + 4u] + bf16_to_f32(p2 >> 16u) * X[x_base + 5u];
@@ -56,8 +58,10 @@ fn main(
     workgroupBarrier();
     if (lane < 2u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 2u]; }
     workgroupBarrier();
+    if (lane < 1u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 1u]; }
+    workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        Y[row] = sdata[lid.x] + sdata[lid.x + 1u];
+        Y[row] = sdata[lid.x];
     }
 }

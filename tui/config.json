@@ -2,7 +2,7 @@
   "modelPath": "../../gemma-4-12B-it",
   "extraArgs": [
     "--gpu",
-    "--q4",
+    "--mixed",
     "--quiescence"
   ],
   "runtime": {
