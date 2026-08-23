@@ -25,10 +25,10 @@ const formattedTurn = (text) => {
     const kernelPath = path.resolve(__dirname, '../../PROMPT_KERNEL.md')
     const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : ''
     return kernel.length > 0
-      ? `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\n${text}<turn|>\n<|turn>model\n<|channel>thought\n`
-      : `<|turn>user\n${text}<turn|>\n<|turn>model\n<|channel>thought\n`
+      ? `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\n${text}<turn|>\n<|turn>model\n`
+      : `<|turn>user\n${text}<turn|>\n<|turn>model\n`
   }
-  return `<|turn>user\n${text}<turn|>\n<|turn>model\n<|channel>thought\n`
+  return `<|turn>user\n${text}<turn|>\n<|turn>model\n`
 }
 
 const submitPrompt = () => {
