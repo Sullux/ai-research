@@ -9,12 +9,12 @@ const { ToolParser } = require('./lib/tools/parser')
 const { StateStore } = require('./lib/ui/state')
 const controller = require('./lib/ui/controller')
 
+const STATUS_NAMES = ['Idle', 'Encoding prompt...', 'Generating...', 'Searching memory...', 'Consolidating diffs...']
+
 const loadConfig = () => {
   const cfgPath = path.resolve(__dirname, './config.json')
   if (fs.existsSync(cfgPath)) {
-    try {
-      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
-    } catch (_) {}
+    try { return JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) } catch (_) {}
   }
   return {
     modelPath: '../../gemma-4-12B-it',
@@ -59,6 +59,17 @@ const main = () => {
     app.redraw()
   })
 
+  client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, tokSec, currentTok, totalTok }) => {
+    const sName = STATUS_NAMES[status] || 'Active'
+    const devTag = isGpu ? 'GPU Q4_0' : 'CPU BF16'
+    const prog = status === 1
+      ? ` (${currentTok}/${totalTok} tok)`
+      : (status === 2 ? ` (${currentTok} tok)` : '')
+    const rate = tokSec > 0 ? ` | ${tokSec.toFixed(1)} tok/s` : ''
+    store.setStatus(`[${devTag}] ${sName}${prog}${rate} | Slots: ${activeSlots} | Memory: ${archivedDiffs} diffs`)
+    app.redraw()
+  })
+
   client.on('turnComplete', ({ tokSec, elapsedMs, totalTok }) => {
     store.setGenerating(false)
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
@@ -79,9 +90,7 @@ const main = () => {
   if (config.runtime) client.setConfig(config.runtime)
   app.start()
 
-  setInterval(() => {
-    app.redraw()
-  }, 250)
+  setInterval(() => { app.redraw() }, 250)
 }
 
 main()

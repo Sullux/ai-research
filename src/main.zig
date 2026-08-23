@@ -125,7 +125,7 @@ pub fn main() !void {
     defer scratch.deinit(allocator);
 
     if (serve_mode) {
-        var srv = try server.Server.init(allocator, &m, &tok, &ring, &scratch, &thread_pool, gpu_ptr, if (archive) |*a| a else null, if (store) |*s| s else null, quiescence_enabled, quiescence_threshold);
+        var srv = try server.Server.init(allocator, &m, &ring, &tok, if (archive) |*a| a else null, if (store) |*s| s else null, &scratch, null, config, max_tokens, quiescence_threshold, gpu_ptr);
         defer srv.deinit();
         try srv.run(stdin, stdout);
         return;

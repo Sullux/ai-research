@@ -103,13 +103,22 @@ pub fn writeMemResponse(writer: anytype, msg_id: u16, count: u8, status: u8, cur
     for (timestamps) |ts| try writer.writeInt(u64, ts, .little);
 }
 
-pub fn writeStatus(writer: anytype, msg_id: u16, tok_sec: f32, active_slots: u16, archived_diffs: u16, active_mask: u64, vram_mb: u32) !void {
+pub const STATUS_IDLE: u8 = 0;
+pub const STATUS_ENCODING: u8 = 1;
+pub const STATUS_GENERATING: u8 = 2;
+pub const STATUS_MEMORY: u8 = 3;
+pub const STATUS_CONSOLIDATING: u8 = 4;
+
+pub fn writeStatus(writer: anytype, msg_id: u16, status: u8, tok_sec: f32, active_slots: u16, archived_diffs: u16, current_tok: u32, total_tok: u32, is_gpu: u8) !void {
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_STATUS, .payload_len = 20 });
-    try writer.writeInt(u32, @bitCast(tok_sec), .little);
+    try writer.writeByte(status);
+    try writer.writeByte(is_gpu);
     try writer.writeInt(u16, active_slots, .little);
     try writer.writeInt(u16, archived_diffs, .little);
-    try writer.writeInt(u64, active_mask, .little);
-    try writer.writeInt(u32, vram_mb, .little);
+    try writer.writeInt(u16, 0, .little);
+    try writer.writeInt(u32, @bitCast(tok_sec), .little);
+    try writer.writeInt(u32, current_tok, .little);
+    try writer.writeInt(u32, total_tok, .little);
 }
 
 pub fn writeError(writer: anytype, msg_id: u16, msg: []const u8) !void {

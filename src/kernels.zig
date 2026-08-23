@@ -15,11 +15,14 @@ pub fn swiGlu(out: []f32, gate: []const f32, up: []const f32) void {
     }
 }
 
-pub fn rmsNorm(out: []f32, in: []const f32, weight: []const f32, eps: f32) void {
+pub fn rmsNorm(out: []f32, in: []const f32, weight: anytype, eps: f32) void {
     var sum_sq: f32 = 0.0;
     for (in) |v| sum_sq += v * v;
     const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(in.len)) + eps);
-    for (out, in, weight) |*o, i, w| o.* = i * inv_rms * w;
+    for (out, in, weight) |*o, i, w| {
+        const w_f: f32 = if (@TypeOf(w) == bf16) w.toF32() else w;
+        o.* = i * inv_rms * w_f;
+    }
 }
 
 pub fn unitRmsNorm(out: []f32, in: []const f32, eps: f32) void {

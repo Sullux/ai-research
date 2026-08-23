@@ -68,6 +68,7 @@ pub const Tokenizer = struct {
             "<|turn>", "<turn|>", "<|channel>", "<channel|>",
             "<|tool>", "<tool|>", "<|tool_call>", "<tool_call|>",
             "<|tool_response>", "<tool_response|>", "<|think|>",
+            "<|\"|>",
             "<|start_recalled_memory|>", "<|end_recalled_memory|>",
             "<|notification>", "<notification|>", "<bos>", "<eos>", "<pad>",
         };
