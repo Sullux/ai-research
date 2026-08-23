@@ -293,5 +293,7 @@ Having exhausted micro-architectural shader layouts and proven that dense 48-lay
 * **Asynchronous Transport & Instant Abort (`src/server.zig`, `src/server_queue.zig`):** Dedicated background STDIN reader thread communicating with the engine via atomic flags (`std.atomic.Value(bool)`) and a thread-safe message queue. Sub-microsecond administrative halting (`OP_ABORT`) immediately halts autoregressive decoding without resetting the working context.
 * **Hippocampal Debounce Staging Buffer (`src/hippocampus.zig`):** Buffers working episodic state transitions during active inference, committing to long-term `DiffArchive` (and optional mmap store) on a 6-second debounce inactivity window or turn completion.
 * **Dual-Modality Explicit Memory Retrieval (`src/model/memory_inject.zig`):** Direct $O(1)$ unquantized keyword embedding lookup from `embed_tokens` and associative cosine scanning across multi-layer KV states.
-* **Code Size Adherence:** All 51 source files maintained strictly under 200 lines.
+* **Top-P Sampling & Final Logit Softcapping (`src/sampler.zig`):** Zero-copy host-visible GPU logits sampling with standard $30.0$ tanh softcapping (`ref/modeling_gemma4.py`), temperature scaling ($0.7$), top-p filtering ($0.95$), and localized repetition suppression ($1.05$), eliminating greedy argmax token repetition collapse.
+* **Blocking Fence Synchronization & CPU Isolation (`src/gpu/kernels.zig`, `src/model/forward.zig`):** Direct `vkWaitForFences` blocking synchronization yielding the CPU thread to prevent user-space busy-wait thermal spikes, and bypassing CPU-side KV copying when running under the GPU backend.
+* **Code Size Adherence:** All source files maintained strictly under 200 lines (and JavaScript files $\le 100$ lines).
 

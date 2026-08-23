@@ -43,6 +43,9 @@ pub fn forwardToken(
         const active_count = ring.getActiveSlots(0, clock, scratch.active_slots);
         const logits_slice = if (compute_logits) scratch.logits else scratch.logits[0..0];
         result_token = gpu.model_dispatch.gpuDispatchForwardToken(g, &self.config, self.layers, scratch.x, logits_slice, clock, slot_idx, scratch.active_slots[0..active_count]);
+        if (compute_logits) {
+            @memcpy(scratch.logits, g.buf_logits.asSlice(f32)[0..self.config.vocab_size]);
+        }
     } else {
         if (ple_dim > 0) ple.preparePLE(self, scratch, token_id, H, ple_dim, tp);
 
