@@ -35,14 +35,12 @@ pub fn main() !void {
     var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, 32, 512, 96);
     defer ring.deinit();
 
-    // Canonical Gemma 4 System Prompt with <|tool> definitions
     const full_prompt =
         "<|turn>system\n" ++
-        "You are an autonomous cognitive assistant operating in a continuous streaming runtime.\n" ++
-        "<|tool>declaration:recall{description:<|\"|>Search memory archive<|\"|>,parameters:{properties:{query:{type:<|\"|>STRING<|\"|>}},required:[<|\"|>query<|\"|>],type:<|\"|>OBJECT<|\"|>}}<tool|>" ++
-        "<|tool>declaration:terminal_write{description:<|\"|>Write shell command<|\"|>,parameters:{properties:{input:{type:<|\"|>STRING<|\"|>}},required:[<|\"|>input<|\"|>],type:<|\"|>OBJECT<|\"|>}}<tool|>" ++
+        "You are an AI assistant that can use tools to help the user.\n" ++
+        "<|tool>declaration:terminal_write{description:<|\"|>Execute a shell command<|\"|>,parameters:{properties:{input:{description:<|\"|>Command to run<|\"|>,type:<|\"|>STRING<|\"|>}},required:[<|\"|>input<|\"|>],type:<|\"|>OBJECT<|\"|>}}<tool|>\n" ++
         "<turn|>\n" ++
-        "<|turn>user\nHow are you doing today?<turn|>\n" ++
+        "<|turn>user\nList the current directory files please.<turn|>\n" ++
         "<|turn>model\n";
 
     const tokens = try tok.encode(allocator, full_prompt, true);
@@ -64,8 +62,8 @@ pub fn main() !void {
     std.debug.print("Prefill {} tokens in {}ms ({d:.1} tok/s)\n", .{ tokens.len, prefill_elapsed, (@as(f32, @floatFromInt(tokens.len)) / @as(f32, @floatFromInt(prefill_elapsed))) * 1000.0 });
 
     std.debug.print("\nGenerated: ", .{});
-    for (0..40) |_| {
-        std.debug.print("[{s}]", .{tok.decode(cur)});
+    for (0..60) |_| {
+        std.debug.print("{s}", .{tok.decode(cur)});
         const emb_offset = @as(usize, cur) * H;
         for (scratch.x, m.embed_tokens[emb_offset .. emb_offset + H]) |*out, e| out.* = e.toF32() * embed_scale;
         const slot_idx = ring.activateSlot(0, clock);

@@ -148,11 +148,6 @@ pub const GpuEngine = struct {
         _ = self.ctx.api.vkResetFences(self.ctx.device, 1, (&self.fence)[0..1].ptr);
         const submit_info = types_dispatch.VkSubmitInfo{ .commandBufferCount = 1, .pCommandBuffers = (&cmd_buf)[0..1].ptr };
         if (self.ctx.api.vkQueueSubmit(self.ctx.queue, 1, (&submit_info)[0..1].ptr, self.fence) != .SUCCESS) return error.VkQueueSubmitFailed;
-        var spin: usize = 0;
-        while (spin < 500_000) : (spin += 1) {
-            if (self.ctx.api.vkGetFenceStatus(self.ctx.device, self.fence) == .SUCCESS) return;
-            std.atomic.spinLoopHint();
-        }
         if (self.ctx.api.vkWaitForFences(self.ctx.device, 1, (&self.fence)[0..1].ptr, 1, 5_000_000_000) != .SUCCESS) return error.VkFenceTimeout;
     }
 };

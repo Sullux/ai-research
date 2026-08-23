@@ -24,9 +24,11 @@ const formattedTurn = (text) => {
     isFirstTurn = false
     const kernelPath = path.resolve(__dirname, '../../PROMPT_KERNEL.md')
     const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : ''
-    return `<|turn>system\n${kernel}\n<turn|>\n<|turn>user\n${text}\n<turn|>\n<|turn>model\n`
+    return kernel.length > 0
+      ? `<|turn>system\n${kernel}\n<turn|>\n<|turn>user\n${text}<turn|>\n<|turn>model\n`
+      : `<|turn>user\n${text}<turn|>\n<|turn>model\n`
   }
-  return `<|turn>user\n${text}\n<turn|>\n<|turn>model\n`
+  return `<|turn>user\n${text}<turn|>\n<|turn>model\n`
 }
 
 const submitPrompt = () => {
