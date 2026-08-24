@@ -75,8 +75,12 @@ pub fn main() !void {
 
     std.debug.print("\nGenerated tokens:\n", .{});
     var clock: usize = tokens.len;
-    for (0..60) |_| {
-        std.debug.print("{s}", .{tok.decode(cur)});
+    for (0..120) |_| {
+        const decoded = tok.decode(cur);
+        for (decoded) |b| {
+            if (b == 0xe2) continue;
+            std.debug.print("{c}", .{b});
+        }
         if (cur == 106 or cur == 1) break;
         cur = m.forwardToken(&ring, &sc, cur, clock, null, null, null, &gpu_model, true);
         clock += 1;

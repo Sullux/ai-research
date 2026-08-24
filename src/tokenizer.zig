@@ -1,12 +1,12 @@
 const std = @import("std");
+const trie = @import("trie.zig");
 
 pub const Tokenizer = struct {
     allocator: std.mem.Allocator,
     id_to_token: [][]const u8,
-    token_to_id: std.StringHashMap(u32),
+    trie: trie.Trie,
     raw_json: []u8,
     parsed: std.json.Parsed(std.json.Value),
-    max_token_len: usize = 32,
     bos_token_id: u32 = 2,
     eos_token_id: u32 = 1,
 
@@ -25,33 +25,31 @@ pub const Tokenizer = struct {
         const model_obj = root.object.get("model") orelse return error.InvalidTokenizerJson;
         const vocab_obj = model_obj.object.get("vocab") orelse return error.InvalidTokenizerJson;
 
-        var token_to_id = std.StringHashMap(u32).init(allocator);
-        try token_to_id.ensureTotalCapacity(@intCast(vocab_obj.object.count()));
+        var tr = try trie.Trie.init(allocator, vocab_obj.object.count() * 3);
+        errdefer tr.deinit();
+
         const id_to_token = try allocator.alloc([]const u8, vocab_obj.object.count());
         @memset(id_to_token, "");
 
-        var max_len: usize = 0;
         var iter = vocab_obj.object.iterator();
         while (iter.next()) |entry| {
             const token_str = entry.key_ptr.*;
             const id: u32 = @intCast(entry.value_ptr.*.integer);
             if (id < id_to_token.len) id_to_token[id] = token_str;
-            token_to_id.putAssumeCapacity(token_str, id);
-            if (token_str.len > max_len) max_len = token_str.len;
+            try tr.insert(token_str, id);
         }
 
         return Tokenizer{
             .allocator = allocator,
             .id_to_token = id_to_token,
-            .token_to_id = token_to_id,
+            .trie = tr,
             .raw_json = raw_json,
             .parsed = parsed,
-            .max_token_len = if (max_len > 0) max_len else 32,
         };
     }
 
     pub fn deinit(self: *Tokenizer) void {
-        self.token_to_id.deinit();
+        self.trie.deinit();
         self.allocator.free(self.id_to_token);
         self.parsed.deinit();
         self.allocator.free(self.raw_json);
@@ -101,7 +99,8 @@ pub const Tokenizer = struct {
             var found_special = false;
             for (specials) |sp| {
                 if (std.mem.startsWith(u8, raw[cursor..], sp)) {
-                    if (self.token_to_id.get(sp)) |id| {
+                    const match = self.trie.findLongestPrefix(sp);
+                    if (match.id) |id| {
                         try token_ids.append(id);
                         cursor += sp.len;
                         found_special = true;
@@ -131,25 +130,15 @@ pub const Tokenizer = struct {
             const norm_bytes = norm.items;
             var sub_cursor: usize = 0;
             while (sub_cursor < norm_bytes.len) {
-                var max_match_len: usize = 0;
-                var matched_id: ?u32 = null;
-                const max_search = @min(norm_bytes.len, sub_cursor + self.max_token_len);
-                var end = max_search;
-                while (end > sub_cursor) : (end -= 1) {
-                    if (self.token_to_id.get(norm_bytes[sub_cursor..end])) |id| {
-                        max_match_len = end - sub_cursor;
-                        matched_id = id;
-                        break;
-                    }
-                }
-
-                if (matched_id) |id| {
-                    try token_ids.append(id);
-                    sub_cursor += max_match_len;
+                const match = self.trie.findLongestPrefix(norm_bytes[sub_cursor..]);
+                if (match.id != null and match.len > 0) {
+                    try token_ids.append(match.id.?);
+                    sub_cursor += match.len;
                 } else {
                     var hex_buf: [6]u8 = undefined;
                     const hex_str = std.fmt.bufPrint(&hex_buf, "<0x{X:0>2}>", .{norm_bytes[sub_cursor]}) catch "<0x00>";
-                    if (self.token_to_id.get(hex_str)) |id| try token_ids.append(id);
+                    const hex_match = self.trie.findLongestPrefix(hex_str);
+                    if (hex_match.id) |id| try token_ids.append(id);
                     sub_cursor += 1;
                 }
             }
