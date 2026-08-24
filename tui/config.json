@@ -6,7 +6,7 @@
   ],
   "runtime": {
     "budget": 512,
-    "temp": 0.7,
+    "temp": 0.0,
     "topP": 0.95,
     "qThresh": 0.0,
     "maxTokens": 512

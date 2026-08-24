@@ -345,5 +345,20 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 * **First Turn Footprint:** Turn 1 ingests the entire system prompt + 7 tool declarations with JSON schemas (~$500$ tokens), whereas subsequent turns ingest only short user turns (~$20$ tokens).
 * **Vulkan Buffer Virtual Memory Page Faulting:** Host-visible UMA activation buffers (`buf_x`, `buf_mlp_out`) are lazily committed by the Linux kernel on the first memory access across 48 layers. Once physical memory pages are populated during Turn 1, subsequent turns execute without page fault latency.
 
+### 5. Temperature Elimination & Native Final Logit Soft-Capping Alignment
+* **Built-in Soft-Capping:** Gemma 4 models natively embed a $30.0 \cdot \tanh(\text{logits} / 30.0)$ soft-capping mechanism directly on output vocabulary projections (`config.final_logit_softcapping: 30.0`).
+* **Avoidance of Artificial Temperature Scaling:** Dividing logits by a temperature $< 1.0$ (e.g. $0.7$) after non-linear tanh soft-capping distorts the calibrated logit margins between dominant tokens and low-probability punctuation/sub-word tokens, inducing anomalous hyphenations (`-`) and broken contractions (`1_m`). Defaulting to `temp: 0.0` (deterministic greedy argmax) directly uses the GPU/CPU argmax kernel, preserving exact model generation behavior.
+
+### 6. Full-Layer GPU Ring Buffer Synchronization (`src/model/forward.zig`)
+* **Layer 0..47 Clock Parity:** In continuous full-duplex inference, every forward pass calls `ring.activateSlot(l, clock)` across all $48$ layers. This guarantees that internal ring buffer clocks, physical slot mappings, and sliding window boundaries remain synchronized across all layers as context history exceeds the $512$-token window, preventing historical KV cache corruption.
+
+### 7. Sub-Batch Prefill Progress Telemetry (`src/gpu/batch_dispatch.zig`, `src/server.zig`)
+* **Real-Time Prefill Telemetry:** `gpuDispatchPrefillBatch` incorporates an asynchronous progress callback invoked after every 2-layer command submission fence synchronization.
+* **Continuous Wire Updates:** The server emits `OP_STATUS` (`STATUS_ENCODING`) updates to the client after each sub-batch, providing smooth real-time progress (`16 / 389`, `32 / 389`, ... `389 / 389 tok`) and throughput telemetry throughout multi-second prefill operations.
+
+### 8. Robust Control Channel Stripping (`src/server.zig`)
+* **Thinking Channel Opener Consumption:** When discrete token `100` (`<|channel>`) is encountered, `decodeResponse` consumes all prefix channel headers (including `thought`, `call`, and whitespace) until the terminating newline (`107` / `\n`), ensuring no control tags or structural headers leak into thought or content dialogue streams.
+
+
 
 

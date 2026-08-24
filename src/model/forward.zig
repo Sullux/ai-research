@@ -39,7 +39,8 @@ pub fn forwardToken(
     var result_token: u32 = 0;
 
     if (gpu_opt) |g| {
-        const slot_idx = ring.activateSlot(0, clock);
+        for (0..self.config.num_hidden_layers) |l| _ = ring.activateSlot(l, clock);
+        const slot_idx = ring.getSlotIndex(clock);
         const active_count = ring.getActiveSlots(0, clock, scratch.active_slots);
         const logits_slice = if (compute_logits) scratch.logits else scratch.logits[0..0];
         result_token = gpu.model_dispatch.gpuDispatchForwardToken(g, &self.config, self.layers, scratch.x, logits_slice, clock, slot_idx, scratch.active_slots[0..active_count]);

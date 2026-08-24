@@ -22,6 +22,8 @@ fn expandEmbeddings(dst: []f32, tokens: []const u32, embed: []const tensor.bf16,
     }
 }
 
+pub const ProgressFn = *const fn (layer_idx: usize, total_layers: usize, ctx: ?*anyopaque) void;
+
 pub fn gpuDispatchPrefillBatch(
     prefill: *batch_prefill.BatchPrefillContext,
     gpu: *model_gpu.GpuModelContext,
@@ -33,6 +35,8 @@ pub fn gpuDispatchPrefillBatch(
     start_clock: usize,
     num_prev_slots: usize,
     logits_out: []f32,
+    progress_fn: ?ProgressFn,
+    progress_ctx: ?*anyopaque,
 ) !void {
     const N: u32 = @intCast(tokens.len);
     if (N == 0 or N > prefill.max_tokens) return error.BatchTooLarge;
@@ -146,6 +150,7 @@ pub fn gpuDispatchPrefillBatch(
             _ = prefill.ctx.api.vkQueueSubmit(prefill.ctx.queue, 1, (&submit_info)[0..1].ptr, prefill.fence);
             _ = prefill.ctx.api.vkWaitForFences(prefill.ctx.device, 1, (&prefill.fence)[0..1].ptr, 1, std.math.maxInt(u64));
             _ = prefill.ctx.api.vkResetFences(prefill.ctx.device, 1, (&prefill.fence)[0..1].ptr);
+            if (progress_fn) |pfn| pfn(i + 1, gpu.layers.len, progress_ctx);
             if (i + 1 < gpu.layers.len) {
                 _ = prefill.ctx.api.vkBeginCommandBuffer(prefill.cmd_buf, &begin_info);
                 recordBarrier(gpu, prefill.cmd_buf);
