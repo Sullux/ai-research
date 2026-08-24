@@ -133,7 +133,7 @@ pub fn gpuDispatchPrefillBatch(
         prefill.pipe_add_norm.record(prefill.cmd_buf, d.post_ffn_add, std.mem.asBytes(&pc_padd), N, 1, 1);
         recordBarrier(gpu, prefill.cmd_buf);
 
-        if ((i + 1) % 6 == 0 or i + 1 == gpu.layers.len) {
+        if ((i + 1) % 2 == 0 or i + 1 == gpu.layers.len) {
             if (i + 1 == gpu.layers.len and logits_out.len > 0) {
                 const last_tok_off = (N - 1) * H * 4;
                 const copy_region = types_dispatch.VkBufferCopy{ .srcOffset = last_tok_off, .dstOffset = 0, .size = H * 4 };
@@ -143,10 +143,8 @@ pub fn gpuDispatchPrefillBatch(
             }
             _ = prefill.ctx.api.vkEndCommandBuffer(prefill.cmd_buf);
             const submit_info = types_dispatch.VkSubmitInfo{ .commandBufferCount = 1, .pCommandBuffers = (&prefill.cmd_buf)[0..1].ptr };
-            const res_sub = prefill.ctx.api.vkQueueSubmit(prefill.ctx.queue, 1, (&submit_info)[0..1].ptr, prefill.fence);
-            const res_wait = prefill.ctx.api.vkWaitForFences(prefill.ctx.device, 1, (&prefill.fence)[0..1].ptr, 1, std.math.maxInt(u64));
-            if (res_sub != .SUCCESS) std.debug.print("vkQueueSubmit err: {any}\n", .{res_sub});
-            if (res_wait != .SUCCESS) std.debug.print("vkWaitForFences err: {any}\n", .{res_wait});
+            _ = prefill.ctx.api.vkQueueSubmit(prefill.ctx.queue, 1, (&submit_info)[0..1].ptr, prefill.fence);
+            _ = prefill.ctx.api.vkWaitForFences(prefill.ctx.device, 1, (&prefill.fence)[0..1].ptr, 1, std.math.maxInt(u64));
             _ = prefill.ctx.api.vkResetFences(prefill.ctx.device, 1, (&prefill.fence)[0..1].ptr);
             if (i + 1 < gpu.layers.len) {
                 _ = prefill.ctx.api.vkBeginCommandBuffer(prefill.cmd_buf, &begin_info);
