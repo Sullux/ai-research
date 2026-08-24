@@ -6,6 +6,7 @@ pub const Tokenizer = struct {
     token_to_id: std.StringHashMap(u32),
     raw_json: []u8,
     parsed: std.json.Parsed(std.json.Value),
+    max_token_len: usize = 32,
     bos_token_id: u32 = 2,
     eos_token_id: u32 = 1,
 
@@ -29,12 +30,14 @@ pub const Tokenizer = struct {
         const id_to_token = try allocator.alloc([]const u8, vocab_obj.object.count());
         @memset(id_to_token, "");
 
+        var max_len: usize = 0;
         var iter = vocab_obj.object.iterator();
         while (iter.next()) |entry| {
             const token_str = entry.key_ptr.*;
             const id: u32 = @intCast(entry.value_ptr.*.integer);
             if (id < id_to_token.len) id_to_token[id] = token_str;
             token_to_id.putAssumeCapacity(token_str, id);
+            if (token_str.len > max_len) max_len = token_str.len;
         }
 
         return Tokenizer{
@@ -43,6 +46,7 @@ pub const Tokenizer = struct {
             .token_to_id = token_to_id,
             .raw_json = raw_json,
             .parsed = parsed,
+            .max_token_len = if (max_len > 0) max_len else 32,
         };
     }
 
@@ -129,7 +133,7 @@ pub const Tokenizer = struct {
             while (sub_cursor < norm_bytes.len) {
                 var max_match_len: usize = 0;
                 var matched_id: ?u32 = null;
-                const max_search = @min(norm_bytes.len, sub_cursor + 64);
+                const max_search = @min(norm_bytes.len, sub_cursor + self.max_token_len);
                 var end = max_search;
                 while (end > sub_cursor) : (end -= 1) {
                     if (self.token_to_id.get(norm_bytes[sub_cursor..end])) |id| {

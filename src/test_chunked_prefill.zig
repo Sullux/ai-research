@@ -49,7 +49,7 @@ pub fn main() !void {
 
     const bp = gpu_model.batch_prefill_ctx.?;
     const start = std.time.milliTimestamp();
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, batch_logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits);
     const elapsed = std.time.milliTimestamp() - start;
     std.debug.print("Prefill completed in {}ms ({d:.1} tok/s)\n", .{ elapsed, (@as(f32, @floatFromInt(tokens.len)) / @as(f32, @floatFromInt(elapsed))) * 1000.0 });
 

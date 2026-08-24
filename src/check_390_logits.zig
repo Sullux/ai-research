@@ -47,7 +47,7 @@ pub fn main() !void {
     defer allocator.free(batch_logits);
 
     const bp = gpu_model.batch_prefill_ctx.?;
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, batch_logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits);
 
     var top5: [10]struct { id: u32, val: f32 } = undefined;
     for (&top5) |*t| t.* = .{ .id = 0, .val = -1e9 };

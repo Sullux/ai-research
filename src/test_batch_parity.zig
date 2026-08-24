@@ -56,9 +56,9 @@ pub fn main() !void {
     defer allocator.free(batch_logits);
 
     const bp = gpu_model.batch_prefill_ctx.?;
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, batch_logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits);
 
-    var s = sampler.Sampler.init(1337, 0.0, 0.95, 1.0);
+    var s = sampler.Sampler.init(1337, 0.0, 0.95);
     const top_tok = s.sample(batch_logits);
     std.debug.print("Batched prefill top token: {} '{s}'\n", .{ top_tok, tok.decode(top_tok) });
 

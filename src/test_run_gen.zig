@@ -26,7 +26,7 @@ pub fn main() !void {
     var gpu_ctx = try context.GpuContext.init(allocator);
     defer gpu_ctx.deinit();
 
-    var gpu_model = try model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .q8, 0.001);
+    var gpu_model = try model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .mixed, 0.001);
     defer gpu_model.deinit();
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
@@ -53,7 +53,7 @@ pub fn main() !void {
     const bp = gpu_model.batch_prefill_ctx.?;
     const batch_logits = try allocator.alloc(f32, config.vocab_size);
     defer allocator.free(batch_logits);
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, batch_logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits);
 
     const raw_gpu_logits = gpu_model.buf_logits.asSlice(f32);
     std.debug.print("raw_gpu_logits first 8: {any}\n", .{raw_gpu_logits[0..8]});
@@ -69,9 +69,8 @@ pub fn main() !void {
     var sc = try model.ForwardScratch.init(allocator, config);
     defer sc.deinit(allocator);
 
-    var s = sampler.Sampler.init(1337, 0.7, 0.95, 1.05);
+    var s = sampler.Sampler.init(1337, 0.7, 0.95);
     var cur = s.sample(batch_logits);
-    s.recordToken(cur);
     std.debug.print("Prefill top token: {} ('{s}')\n", .{ cur, tok.decode(cur) });
 
     std.debug.print("\nGenerated tokens:\n", .{});
@@ -82,7 +81,6 @@ pub fn main() !void {
         cur = m.forwardToken(&ring, &sc, cur, clock, null, null, null, &gpu_model, true);
         clock += 1;
         cur = s.sample(sc.logits);
-        s.recordToken(cur);
     }
     std.debug.print("\n", .{});
 }

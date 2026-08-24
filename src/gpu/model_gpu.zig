@@ -163,7 +163,7 @@ pub const GpuModelContext = struct {
 
         var bp_ptr: ?*@import("batch_prefill.zig").BatchPrefillContext = null;
         if (allocator.create(@import("batch_prefill.zig").BatchPrefillContext)) |bp| {
-            if (@import("batch_prefill.zig").BatchPrefillContext.init(ctx, &config, 1024)) |res| {
+            if (@import("batch_prefill.zig").BatchPrefillContext.init(allocator, ctx, &config, gpu_layers, &embed_tokens, &final_norm, &buf_logits, 1024, mode)) |res| {
                 bp.* = res; bp_ptr = bp;
             } else |_| allocator.destroy(bp);
         } else |_| {}

@@ -63,11 +63,10 @@ pub fn main() !void {
     const prefill_elapsed = std.time.milliTimestamp() - prefill_start;
     std.debug.print("Prefill {} tokens in {}ms ({d:.1} tok/s)\n", .{ tokens.len, prefill_elapsed, (@as(f32, @floatFromInt(tokens.len)) / @as(f32, @floatFromInt(prefill_elapsed))) * 1000.0 });
 
-    var s = sampler.Sampler.init(1337, 0.0, 0.95, 1.0);
+    var s = sampler.Sampler.init(1337, 0.0, 0.95);
     const gpu_logits = gpu_model.buf_logits.asSlice(f32)[0..config.vocab_size];
     @memcpy(scratch.logits, gpu_logits);
     cur = s.sample(scratch.logits);
-    s.recordToken(cur);
 
     std.debug.print("\nGenerated (temp=0.0):\n", .{});
     const gen_start = std.time.milliTimestamp();
@@ -82,7 +81,6 @@ pub fn main() !void {
         clock += 1;
         @memcpy(scratch.logits, gpu_model.buf_logits.asSlice(f32)[0..config.vocab_size]);
         cur = s.sample(scratch.logits);
-        s.recordToken(cur);
         gen_count += 1;
         if (cur == tok.eos_token_id or cur == 106) break;
     }

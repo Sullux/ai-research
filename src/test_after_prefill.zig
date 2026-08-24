@@ -52,9 +52,9 @@ pub fn main() !void {
     defer scratch.deinit(allocator);
 
     const bp = gpu_model.batch_prefill_ctx.?;
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, scratch.logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, scratch.logits);
 
-    var s = sampler.Sampler.init(1337, 0.0, 0.95, 1.0);
+    var s = sampler.Sampler.init(1337, 0.0, 0.95);
     const top_tok0 = s.sample(scratch.logits);
     std.debug.print("Prefill top token: {} ('{s}')\n", .{ top_tok0, tok.decode(top_tok0) });
 
