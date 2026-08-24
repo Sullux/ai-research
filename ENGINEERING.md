@@ -314,4 +314,36 @@ Having exhausted micro-architectural shader layouts and proven that dense 48-lay
 * **Control Token Suppression (`src/sampler.zig`):** Suppresses multimodal control tokens (`<audio|>`, `<image|>`, IDs `258882..258883` and `255995..256001`) during textual inference per `generation_config.json`.
 * **Zero-Copy Host Pipeline:** Last-token normalized activation is copied on-device via `vkCmdCopyBuffer` to compute initial generation logits in the same prefill submission with zero CPU synchronization stall.
 
+---
+
+## 10. Canonical Gemma 4 Thinking & Multi-Turn Protocol Alignment (Stage G10)
+
+### 1. Thinking Mode Architecture (`chat_template.jinja`)
+In Google Gemma 4, reasoning/thinking is implemented as a **global session mode switch** rather than a per-turn response prefix:
+* **Initial Turn Setup:** When thinking is active (`enable_thinking = true`), the control token `<|think|>` is injected **only once at the very top of the initial system turn**:
+  ```text
+  <|turn>system
+  <|think|>
+  ${SYSTEM_PROMPT_AND_TOOLS}
+  <turn|>
+  <|turn>user
+  ${USER_PROMPT}<turn|>
+  <|turn>model
+  ```
+* **Autonomous Model Channel Switching:** In subsequent turns, the model natively recognizes its reasoning state from the KV cache anchor. The prompt ends at `<|turn>model\n`, allowing the model to autonomously emit `<|channel>thought\n` (token `100`), stream its reasoning thoughts, close with `<channel|>` (token `101`), and transition into `<|channel>call\n` or direct response dialogue.
+* **Never Remove `<|think|>` from System Turn:** Omitting `<|think|>` sets `enable_thinking = false`, suppressing the thought channel entirely and forcing direct unreasoned generation.
+
+### 2. Elimination of Repetition Penalty & Monotonic Top-64 Logit Selection
+* **Zero Repetition Penalties:** Gemma 4 natively relies on $30.0 \cdot \tanh(\text{logits} / 30.0)$ soft-capping and Top-K/Top-P filtering. Repetition penalty multipliers were completely removed as they penalize natural subwords (`er`, `ed`, `ing`, spaces) and induce syntactic degeneration.
+* **Fast Monotonic Top-64 Extraction (`src/sampler.zig`):** Softmax and soft-capping are strictly monotonic functions. Rather than computing $\tanh$ and $\exp$ across all $262,144$ vocabulary entries on CPU, the engine maintains a 64-element min-heap over raw logits, applying soft-capping, temperature scaling ($0.7$), and Top-P filtering ($0.95$) solely to the top-64 candidates.
+
+### 3. Chunked Prefill & UMA Co-existence Yielding
+* **Prompt Slicing (`src/server.zig`):** Initial system prompts and long context histories are sliced into $128$-token prefill batches on GPU with explicit $1\text{ms}$ OS yields (`std.time.sleep(1_000_000)`) between chunks.
+* **UMA Contention Mitigation:** Slicing avoids saturating the 256-bit LPDDR5X-8000 bus, ensuring host desktop rendering and user-space input threads remain responsive during multi-hundred-token prompt ingestion.
+
+### 4. Turn 1 vs Subsequent Turn Dynamics & Lazy Physical Page Commit
+* **First Turn Footprint:** Turn 1 ingests the entire system prompt + 7 tool declarations with JSON schemas (~$500$ tokens), whereas subsequent turns ingest only short user turns (~$20$ tokens).
+* **Vulkan Buffer Virtual Memory Page Faulting:** Host-visible UMA activation buffers (`buf_x`, `buf_mlp_out`) are lazily committed by the Linux kernel on the first memory access across 48 layers. Once physical memory pages are populated during Turn 1, subsequent turns execute without page fault latency.
+
+
 
