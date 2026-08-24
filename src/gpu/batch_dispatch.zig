@@ -19,6 +19,8 @@ pub fn gpuDispatchPrefillBatch(
     tokens: []const u32,
     embed_tokens: []const tensor.bf16,
     slots: []const u32,
+    start_clock: usize,
+    num_prev_slots: usize,
     logits_out: []f32,
 ) !void {
     const N: u32 = @intCast(tokens.len);
@@ -39,7 +41,7 @@ pub fn gpuDispatchPrefillBatch(
             dst.* = src.toF32() * embed_scale;
         }
     }
-    @memcpy(prefill.buf_slots.asSlice(u32)[0..N], slots[0..N]);
+    @memcpy(prefill.buf_slots.asSlice(u32)[0..slots.len], slots);
 
     // 2. Record command buffer
     const begin_info = types_dispatch.VkCommandBufferBeginInfo{};
@@ -82,10 +84,12 @@ pub fn gpuDispatchPrefillBatch(
         const pc_rope = extern struct {
             num_q_heads: u32, num_kv_heads: u32, head_dim: u32, rotary_dim: u32,
             k_eq_v: u32, rope_theta: f32, eps: f32, N: u32,
+            start_clock: u32, slot_offset: u32, pad0: u32, pad1: u32,
         }{
             .num_q_heads = @intCast(config.num_attention_heads), .num_kv_heads = @intCast(l_cpu.num_kv_heads),
             .head_dim = head_dim, .rotary_dim = rot_dim, .k_eq_v = if (l_cpu.k_eq_v) 1 else 0,
             .rope_theta = theta, .eps = eps, .N = N,
+            .start_clock = @intCast(start_clock), .slot_offset = @intCast(num_prev_slots), .pad0 = 0, .pad1 = 0,
         };
         const d_rope = try prefill.desc_mgr.allocateSet(prefill.pipe_qkv_rope.desc_set_layout);
         prefill.desc_mgr.bindBuffers(d_rope, &.{ &prefill.buf_q, &prefill.buf_k, &prefill.buf_v, &l_gpu.q_norm, &l_gpu.k_norm, &prefill.buf_q, &l_gpu.buf_k_cache, &l_gpu.buf_v_cache, &prefill.buf_slots });
@@ -94,10 +98,12 @@ pub fn gpuDispatchPrefillBatch(
 
         // Causal Attention
         const pc_attn = extern struct {
-            head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32, num_q_heads: u32, N: u32,
+            head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32,
+            num_q_heads: u32, N: u32, num_prev_slots: u32, pad: u32,
         }{
             .head_dim = head_dim, .kv_dim = kv_dim, .gqa_ratio = gqa_ratio, .inv_sqrt_dim = 1.0,
             .num_q_heads = @intCast(config.num_attention_heads), .N = N,
+            .num_prev_slots = @intCast(num_prev_slots), .pad = 0,
         };
         const d_attn = try prefill.desc_mgr.allocateSet(prefill.pipe_causal_attn.desc_set_layout);
         prefill.desc_mgr.bindBuffers(d_attn, &.{ &prefill.buf_q, &l_gpu.buf_k_cache, &l_gpu.buf_v_cache, &prefill.buf_slots, &prefill.buf_attn_out });

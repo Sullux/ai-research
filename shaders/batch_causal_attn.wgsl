@@ -5,6 +5,8 @@ struct PushConstants {
     inv_sqrt_dim: f32,
     num_q_heads: u32,
     N: u32,
+    num_prev_slots: u32,
+    pad: u32,
 };
 
 @group(0) @binding(0) var<storage, read> Q: array<f32>;
@@ -15,7 +17,7 @@ struct PushConstants {
 var<push_constant> pc: PushConstants;
 
 var<workgroup> sdata_dot: array<f32, 32>;
-var<workgroup> s_scores: array<f32, 1024>;
+var<workgroup> s_scores: array<f32, 4096>;
 
 @compute @workgroup_size(32, 1, 1)
 fn main(
@@ -33,7 +35,7 @@ fn main(
     let q_dim = pc.num_q_heads * D;
     let q_offset = t * q_dim + q_head * D;
 
-    let S = t + 1u;
+    let S = pc.num_prev_slots + t + 1u;
 
     for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
         let physical_slot = Slots[slot_i];

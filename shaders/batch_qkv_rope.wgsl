@@ -7,6 +7,10 @@ struct PushConstants {
     rope_theta: f32,
     eps: f32,
     N: u32,
+    start_clock: u32,
+    slot_offset: u32,
+    pad0: u32,
+    pad1: u32,
 };
 
 @group(0) @binding(0) var<storage, read> Q_in: array<f32>;
@@ -32,8 +36,8 @@ fn main(
     if (t >= pc.N) {
         return;
     }
-    let slot_idx = Slots[t];
-    let clock = t;
+    let slot_idx = Slots[pc.slot_offset + t];
+    let clock = pc.start_clock + t;
     let lane = lid.x;
     let D = pc.head_dim;
     let rot_D = pc.rotary_dim;

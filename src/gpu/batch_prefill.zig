@@ -62,8 +62,8 @@ pub const BatchPrefillContext = struct {
         var p_add = try pipeline.ComputePipeline.init(ctx, &shaders_add_norm.BATCH_ADD_RMSNORM_SPIRV, 4, 16); errdefer p_add.deinit();
         var p_mlp4 = try pipeline.ComputePipeline.init(ctx, &shaders_fused_mlp.BATCH_FUSED_MLP_Q4_SPIRV, 4, 16); errdefer p_mlp4.deinit();
         var p_mlp8 = try pipeline.ComputePipeline.init(ctx, &shaders_fused_mlp_q8.BATCH_FUSED_MLP_Q8_SPIRV, 4, 16); errdefer p_mlp8.deinit();
-        var p_rope = try pipeline.ComputePipeline.init(ctx, &shaders_qkv_rope.BATCH_QKV_ROPE_SPIRV, 9, 32); errdefer p_rope.deinit();
-        var p_attn = try pipeline.ComputePipeline.init(ctx, &shaders_causal_attn.BATCH_CAUSAL_ATTN_SPIRV, 5, 24); errdefer p_attn.deinit();
+        var p_rope = try pipeline.ComputePipeline.init(ctx, &shaders_qkv_rope.BATCH_QKV_ROPE_SPIRV, 9, 48); errdefer p_rope.deinit();
+        var p_attn = try pipeline.ComputePipeline.init(ctx, &shaders_causal_attn.BATCH_CAUSAL_ATTN_SPIRV, 5, 32); errdefer p_attn.deinit();
 
         var desc_mgr = try descriptors.DescriptorManager.init(ctx, 4096);
         errdefer desc_mgr.deinit();
@@ -76,7 +76,7 @@ pub const BatchPrefillContext = struct {
         var ba = try buffer.GpuBuffer.init(ctx, N * max_q * 4, sb); errdefer ba.deinit();
         var bact = try buffer.GpuBuffer.init(ctx, N * I * 4, sb); errdefer bact.deinit();
         var bmo = try buffer.GpuBuffer.init(ctx, N * H * 4, sb); errdefer bmo.deinit();
-        var bs = try buffer.GpuBuffer.init(ctx, N * 4, sb); errdefer bs.deinit();
+        var bs = try buffer.GpuBuffer.init(ctx, 4096 * 4, sb); errdefer bs.deinit();
 
         const cp_info = types_dispatch.VkCommandPoolCreateInfo{ .flags = types.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = ctx.queue_family_index };
         var pool: types.VkCommandPool = null;
