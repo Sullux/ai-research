@@ -58,7 +58,7 @@ pub const GpuContext = struct {
                     }
                 }
             }
-            const compute_q = fallback_compute_q orelse dedicated_compute_q;
+            const compute_q = dedicated_compute_q orelse fallback_compute_q;
 
             if (compute_q) |cq| {
                 if (selected_device == null or props.vendorID == 0x1002) {
