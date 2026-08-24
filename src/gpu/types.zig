@@ -58,6 +58,7 @@ pub const VkPhysicalDeviceType = enum(u32) {
     _,
 };
 
+pub const VK_QUEUE_GRAPHICS_BIT: u32 = 0x00000001;
 pub const VK_QUEUE_COMPUTE_BIT: u32 = 0x00000002;
 pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT: u32 = 0x00000001;
 pub const VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT: u32 = 0x00000002;

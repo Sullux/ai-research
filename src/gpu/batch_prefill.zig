@@ -73,7 +73,7 @@ pub const BatchPrefillContext = struct {
         const max_q = config.num_attention_heads * max_head;
         const max_kv = @max(config.num_key_value_heads, config.num_global_key_value_heads) * max_head;
         const I = config.intermediate_size;
-        const sb = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        const sb = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | types.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | types.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
         var p_rms = try pipeline.ComputePipeline.init(ctx, &shaders_rmsnorm.BATCH_RMSNORM_SPIRV, 3, 16); errdefer p_rms.deinit();
         var p_g4 = try pipeline.ComputePipeline.init(ctx, &shaders_gemm_q4.BATCH_GEMM_Q4_SPIRV, 3, 16); errdefer p_g4.deinit();

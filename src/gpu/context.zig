@@ -47,13 +47,18 @@ pub const GpuContext = struct {
             defer allocator.free(q_props);
             api.vkGetPhysicalDeviceQueueFamilyProperties(pdev, &num_q, q_props.ptr);
 
-            var compute_q: ?u32 = null;
+            var dedicated_compute_q: ?u32 = null;
+            var fallback_compute_q: ?u32 = null;
             for (q_props, 0..) |qp, idx| {
                 if ((qp.queueFlags & types.VK_QUEUE_COMPUTE_BIT) != 0) {
-                    compute_q = @intCast(idx);
-                    break;
+                    if ((qp.queueFlags & types.VK_QUEUE_GRAPHICS_BIT) == 0 and dedicated_compute_q == null) {
+                        dedicated_compute_q = @intCast(idx);
+                    } else if (fallback_compute_q == null) {
+                        fallback_compute_q = @intCast(idx);
+                    }
                 }
             }
+            const compute_q = fallback_compute_q orelse dedicated_compute_q;
 
             if (compute_q) |cq| {
                 if (selected_device == null or props.vendorID == 0x1002) {

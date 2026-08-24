@@ -78,7 +78,7 @@ pub const GpuModelContext = struct {
         const max_head = @max(config.head_dim, config.global_head_dim);
         const max_q = config.num_attention_heads * max_head;
         const max_kv = @max(config.num_key_value_heads, config.num_global_key_value_heads) * max_head;
-        const sb = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        const sb = types.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | types.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | types.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         const ind_sb = sb | types.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 
         const buf_x = try buffer.GpuBuffer.init(ctx, H * 4, sb);

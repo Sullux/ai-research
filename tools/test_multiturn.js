@@ -22,11 +22,11 @@ child.stdout.on('data', (chunk) => {
     rxBuffer = rxBuffer.subarray(16 + frame.header.payloadLen);
 
     if (frame.header.opcode === constants.OP_STREAM_THOUGHT) {
-      const text = frame.payload.subarray(24).toString('utf-8');
-      process.stdout.write(`\x1b[33m[THK:${text}]\x1b[0m`);
+      const text = frame.payload.subarray(24).toString('utf-8').replace(/\u2581/g, ' ');
+      process.stdout.write(`\x1b[33m${text}\x1b[0m`);
     } else if (frame.header.opcode === constants.OP_STREAM_CONTENT) {
-      const text = frame.payload.subarray(24).toString('utf-8');
-      process.stdout.write(`\x1b[32m[CNT:${text}]\x1b[0m`);
+      const text = frame.payload.subarray(24).toString('utf-8').replace(/\u2581/g, ' ');
+      process.stdout.write(`\x1b[32m${text}\x1b[0m`);
     } else if (frame.header.opcode === constants.OP_TURN_COMPLETE) {
       console.log(`\n\n\x1b[36m[Turn ${currentTurn} Complete]\x1b[0m\n`);
       if (currentTurn === 1) {
@@ -56,14 +56,14 @@ const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').
 
 function sendTurn1() {
   console.log('\x1b[34m--- SENDING TURN 1: "How are you doing today?" ---\x1b[0m');
-  const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n<|channel>thought\n`;
+  const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n`;
   child.stdin.write(makeConfigFrame(512, 0.7));
   child.stdin.write(framing.streamInputFrame(prompt, 1));
 }
 
 function sendTurn2() {
   console.log('\x1b[34m--- SENDING TURN 2: "What tools do you see that you have available?" ---\x1b[0m');
-  const prompt = `<|turn>user\nIn your context, what tools do you see that you have available?<turn|>\n<|turn>model\n<|channel>thought\n`;
+  const prompt = `<|turn>user\nIn your context, what tools do you see that you have available?<turn|>\n<|turn>model\n`;
   child.stdin.write(makeConfigFrame(512, 0.7));
   child.stdin.write(framing.streamInputFrame(prompt, 2));
 }

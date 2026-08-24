@@ -2,14 +2,13 @@
   "modelPath": "../../gemma-4-12B-it",
   "extraArgs": [
     "--gpu",
-    "--mixed",
-    "--quiescence"
+    "--mixed"
   ],
   "runtime": {
     "budget": 512,
     "temp": 0.7,
     "topP": 0.95,
-    "qThresh": 0.001,
+    "qThresh": 0.0,
     "maxTokens": 512
   }
 }
