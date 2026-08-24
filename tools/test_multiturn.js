@@ -56,7 +56,7 @@ const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').
 
 function sendTurn1() {
   console.log('\x1b[34m--- SENDING TURN 1: "How are you doing today?" ---\x1b[0m');
-  const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n`;
+  const prompt = `<|turn>system\n${kernel}\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n`;
   child.stdin.write(makeConfigFrame(128, 0.7));
   child.stdin.write(framing.streamInputFrame(prompt, 1));
 }

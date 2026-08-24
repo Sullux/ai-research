@@ -49,19 +49,21 @@ const main = () => {
   })
 
   client.on('thought', ({ text }) => {
-    store.appendThought(text)
+    store.appendThought(text.replaceAll('\u2581', ' '))
     app.redraw()
   })
 
   client.on('content', ({ text }) => {
-    store.appendDialogue(text)
-    parser.ingestChunk(text)
+    const clean = text.replaceAll('\u2581', ' ')
+    store.appendDialogue(clean)
+    parser.ingestChunk(clean)
     app.redraw()
   })
 
   client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, tokSec, currentTok, totalTok }) => {
     const sName = STATUS_NAMES[status] || 'Active'
-    const devTag = isGpu ? 'GPU Q4_0' : 'CPU BF16'
+    const isMixed = extraArgs.includes('--mixed')
+    const devTag = isGpu ? (isMixed ? 'GPU Mixed' : 'GPU Q4_0') : 'CPU BF16'
     const prog = status === 1
       ? ` (${currentTok}/${totalTok} tok)`
       : (status === 2 ? ` (${currentTok} tok)` : '')

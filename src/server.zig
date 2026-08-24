@@ -20,13 +20,11 @@ pub const Server = struct {
     clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
-        return Server{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .sampler = sampler.Sampler.init(1337, 0.7, 0.95, 1.0), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = null, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
+        return Server{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .sampler = sampler.Sampler.init(1337, 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = null, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
     }
     pub fn deinit(self: *Server) void { _ = self; }
-
     pub fn run(self: *Server, reader: anytype, writer: anytype) !void {
-        var queue = server_queue.MessageQueue.init(self.allocator);
-        defer queue.deinit();
+        var queue = server_queue.MessageQueue.init(self.allocator); defer queue.deinit();
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         try protocol.writeStatus(writer, 0, protocol.STATUS_IDLE, 0.0, 0, 0, 0, 0, is_gpu);
 
@@ -87,9 +85,7 @@ pub const Server = struct {
     fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
         if (payload.len < 8) return;
         self.is_aborted.store(false, .seq_cst);
-        const tokens = try self.parseTokens(payload);
-        defer self.allocator.free(tokens);
-
+        const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
         const total_prefill: u32 = @intCast(tokens.len);
         const prefill_start = std.time.milliTimestamp();
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
@@ -100,26 +96,34 @@ pub const Server = struct {
         var cur: u32 = 0;
         if (tokens.len > 1 and self.gpu_opt != null and self.gpu_opt.?.batch_prefill_ctx != null) {
             const gmc, const bp = .{ self.gpu_opt.?, self.gpu_opt.?.batch_prefill_ctx.? };
-            const prev_count = self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots);
-            var slots = try self.allocator.alloc(u32, prev_count + tokens.len); defer self.allocator.free(slots);
-            for (self.scratch.active_slots[0..prev_count], 0..) |s, j| slots[j] = @intCast(s);
-            for (tokens, 0..) |_, i| {
-                const c = self.clock + i; slots[prev_count + i] = @intCast(self.ring.getSlotIndex(c));
-                for (0..self.config.num_hidden_layers) |l| _ = self.ring.activateSlot(l, c);
+            var off: usize = 0;
+            while (off < tokens.len) {
+                if (self.is_aborted.load(.monotonic)) break;
+                const chunk = tokens[off..@min(tokens.len, off + 128)];
+                const is_last = (off + chunk.len == tokens.len);
+                const prev_count = self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots);
+                var slots = try self.allocator.alloc(u32, prev_count + chunk.len); defer self.allocator.free(slots);
+                for (self.scratch.active_slots[0..prev_count], 0..) |s, j| slots[j] = @intCast(s);
+                for (chunk, 0..) |_, i| {
+                    const c = self.clock + i; slots[prev_count + i] = @intCast(self.ring.getSlotIndex(c));
+                    for (0..self.config.num_hidden_layers) |l| _ = self.ring.activateSlot(l, c);
+                }
+                const l_dst = if (is_last) self.scratch.logits else self.scratch.logits[0..0];
+                try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, chunk, self.m.embed_tokens, slots, self.clock, prev_count, l_dst);
+                self.clock += chunk.len; off += chunk.len;
+                const el = @max(1, std.time.milliTimestamp() - prefill_start);
+                const rate = (@as(f32, @floatFromInt(off)) / @as(f32, @floatFromInt(el))) * 1000.0;
+                try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, rate, active_slots, diff_count, @intCast(off), total_prefill, is_gpu);
+                if (!is_last) std.time.sleep(1_000_000);
             }
-            try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, tokens, self.m.embed_tokens, slots, self.clock, prev_count, self.scratch.logits);
-            self.clock += tokens.len;
-            const elapsed = @max(1, std.time.milliTimestamp() - prefill_start);
-            const rate = (@as(f32, @floatFromInt(tokens.len)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
-            try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, rate, active_slots, diff_count, @intCast(tokens.len), total_prefill, is_gpu);
         } else {
             for (tokens, 0..) |t, i| {
                 if (self.is_aborted.load(.monotonic)) break;
                 cur = self.m.forwardToken(self.ring, self.scratch, t, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, i == tokens.len - 1);
                 self.clock += 1;
                 if ((i + 1) % 16 == 0 or i == tokens.len - 1) {
-                    const elapsed = @max(1, std.time.milliTimestamp() - prefill_start);
-                    const rate = (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
+                    const el = @max(1, std.time.milliTimestamp() - prefill_start);
+                    const rate = (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(el))) * 1000.0;
                     try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, rate, active_slots, diff_count, @intCast(i + 1), total_prefill, is_gpu);
                 }
             }
@@ -131,7 +135,6 @@ pub const Server = struct {
         }
         if (tokens.len > 0) {
             cur = self.sampler.sample(self.scratch.logits);
-            self.sampler.recordToken(cur);
             var is_thk = false;
             for (tokens) |t| { if (t == 100) is_thk = true else if (t == 101) is_thk = false; }
             self.in_thinking_channel = is_thk;
@@ -143,8 +146,7 @@ pub const Server = struct {
         if (p[0] == protocol.MODE_TEXT) return self.tok.encode(self.allocator, p[8..], self.clock == 0);
         const count = std.mem.readInt(u16, p[2..4], .little);
         const slice: []const u32 = @alignCast(std.mem.bytesAsSlice(u32, p[8 .. 8 + count * 4]));
-        const copy = try self.allocator.alloc(u32, slice.len);
-        @memcpy(copy, slice);
+        const copy = try self.allocator.alloc(u32, slice.len); @memcpy(copy, slice);
         return copy;
     }
 
@@ -193,8 +195,6 @@ pub const Server = struct {
 
     fn advanceToken(self: *Server, cur: u32) u32 {
         _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-        const next = self.sampler.sample(self.scratch.logits); self.sampler.recordToken(next);
-        return next;
+        self.clock += 1; return self.sampler.sample(self.scratch.logits);
     }
 };
