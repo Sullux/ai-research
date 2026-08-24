@@ -101,9 +101,10 @@ pub const Server = struct {
         if (tokens.len > 1 and self.gpu_opt != null and self.gpu_opt.?.batch_prefill_ctx != null) {
             const gmc, const bp = .{ self.gpu_opt.?, self.gpu_opt.?.batch_prefill_ctx.? };
             var off: usize = 0;
+            const max_chunk: usize = bp.max_tokens;
             while (off < tokens.len) {
                 if (self.is_aborted.load(.monotonic)) break;
-                const chunk = tokens[off..@min(tokens.len, off + 128)];
+                const chunk = tokens[off..@min(tokens.len, off + max_chunk)];
                 const is_last = (off + chunk.len == tokens.len);
                 const prev_count = self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots);
                 var c_slots = try self.allocator.alloc(u32, prev_count + chunk.len); defer self.allocator.free(c_slots);
@@ -117,7 +118,6 @@ pub const Server = struct {
                 self.clock += chunk.len; off += chunk.len;
                 const el = @max(1, std.time.milliTimestamp() - prefill_start);
                 try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, (@as(f32, @floatFromInt(off)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, @intCast(off), total_prefill, is_gpu);
-                if (!is_last) std.time.sleep(1_000_000);
             }
         } else {
             for (tokens, 0..) |t, i| {

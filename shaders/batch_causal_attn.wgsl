@@ -54,19 +54,12 @@ fn main(
         sdata_dot[lane] = dot;
         workgroupBarrier();
 
-        if (lane < 16u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 16u]; }
-        workgroupBarrier();
-        if (lane < 8u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 8u]; }
-        workgroupBarrier();
-        if (lane < 4u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 4u]; }
-        workgroupBarrier();
-        if (lane < 2u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 2u]; }
-        workgroupBarrier();
-        if (lane < 1u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 1u]; }
-        workgroupBarrier();
-
         if (lane == 0u) {
-            s_scores[slot_i] = sdata_dot[0] * pc.inv_sqrt_dim;
+            var sum_dot: f32 = 0.0;
+            for (var k = 0u; k < 32u; k = k + 1u) {
+                sum_dot = sum_dot + sdata_dot[k];
+            }
+            s_scores[slot_i] = sum_dot * pc.inv_sqrt_dim;
         }
         workgroupBarrier();
     }

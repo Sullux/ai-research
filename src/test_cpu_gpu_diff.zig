@@ -43,7 +43,7 @@ pub fn main() !void {
     defer full_prompt.deinit();
     try full_prompt.appendSlice("<|turn>system\n<|think|>\n");
     try full_prompt.appendSlice(txt);
-    try full_prompt.appendSlice("\n<turn|>\n<|turn>user\nHello, how are you today?<turn|>\n<|turn>model\n<|channel>thought\n");
+    try full_prompt.appendSlice("\n<turn|>\n<|turn>user\nHello, how are you today?<turn|>\n<|turn>model\n");
 
     const tokens = try tok.encode(allocator, full_prompt.items, true);
     defer allocator.free(tokens);

@@ -68,79 +68,59 @@ pub const Tokenizer = struct {
 
         const specials = [_][]const u8{
             "<|turn>", "<turn|>", "<|channel>", "<channel|>",
-            "<|tool>", "<tool|>", "<|tool_call>", "<tool_call|>",
-            "<|tool_response>", "<tool_response|>", "<|think|>",
+            "<|tool_call>", "<tool_call|>", "<|tool_response>", "<tool_response|>",
+            "<|tool>", "<tool|>", "<|think|>",
             "<|\"|>",
             "<|start_recalled_memory|>", "<|end_recalled_memory|>",
             "<|notification>", "<notification|>", "<bos>", "<eos>", "<pad>",
         };
-        var unescaped = std.ArrayList(u8).init(allocator);
-        defer unescaped.deinit();
 
-        var i: usize = 0;
-        while (i < text.len) {
-            if (text[i] == '\\' and i + 1 < text.len) {
-                switch (text[i + 1]) {
-                    'n' => { try unescaped.append('\n'); i += 2; continue; },
-                    't' => { try unescaped.append('\t'); i += 2; continue; },
-                    'r' => { try unescaped.append('\r'); i += 2; continue; },
-                    '\\' => { try unescaped.append('\\'); i += 2; continue; },
-                    else => {},
-                }
-            }
-            try unescaped.append(text[i]);
-            i += 1;
-        }
+        var pos: usize = 0;
+        while (pos < text.len) {
+            var next_pos: usize = text.len;
+            var next_sp_idx: ?usize = null;
 
-        const raw = unescaped.items;
-        var cursor: usize = 0;
-
-        while (cursor < raw.len) {
-            var found_special = false;
-            for (specials) |sp| {
-                if (std.mem.startsWith(u8, raw[cursor..], sp)) {
-                    const match = self.trie.findLongestPrefix(sp);
-                    if (match.id) |id| {
-                        try token_ids.append(id);
-                        cursor += sp.len;
-                        found_special = true;
-                        break;
+            for (specials, 0..) |sp, idx| {
+                if (std.mem.indexOfPos(u8, text, pos, sp)) |found| {
+                    if (found < next_pos) {
+                        next_pos = found;
+                        next_sp_idx = idx;
                     }
                 }
             }
-            if (found_special) continue;
 
-            var chunk_end = raw.len;
-            for (specials) |sp| {
-                if (std.mem.indexOfPos(u8, raw, cursor, sp)) |pos| {
-                    if (pos < chunk_end) chunk_end = pos;
+            if (next_pos > pos) {
+                const chunk = text[pos..next_pos];
+                var norm = std.ArrayList(u8).init(allocator);
+                defer norm.deinit();
+                for (chunk) |byte| {
+                    if (byte == ' ') try norm.appendSlice("\xe2\x96\x81") else try norm.append(byte);
+                }
+
+                const raw = norm.items;
+                var cursor: usize = 0;
+                while (cursor < raw.len) {
+                    const match = self.trie.findLongestPrefix(raw[cursor..]);
+                    if (match.id != null and match.len > 0) {
+                        try token_ids.append(match.id.?);
+                        cursor += match.len;
+                    } else {
+                        var hex_buf: [6]u8 = undefined;
+                        const hex_str = std.fmt.bufPrint(&hex_buf, "<0x{X:0>2}>", .{raw[cursor]}) catch "<0x00>";
+                        const hex_match = self.trie.findLongestPrefix(hex_str);
+                        if (hex_match.id) |id| try token_ids.append(id);
+                        cursor += 1;
+                    }
                 }
             }
 
-            const chunk = raw[cursor..chunk_end];
-            cursor = chunk_end;
-
-            var norm = std.ArrayList(u8).init(allocator);
-            defer norm.deinit();
-            if (cursor == chunk_end and chunk.len > 0 and chunk[0] != ' ' and chunk[0] != '\n' and !add_bos) try norm.appendSlice("\xe2\x96\x81");
-            for (chunk) |byte| {
-                if (byte == ' ') try norm.appendSlice("\xe2\x96\x81") else try norm.append(byte);
-            }
-
-            const norm_bytes = norm.items;
-            var sub_cursor: usize = 0;
-            while (sub_cursor < norm_bytes.len) {
-                const match = self.trie.findLongestPrefix(norm_bytes[sub_cursor..]);
-                if (match.id != null and match.len > 0) {
-                    try token_ids.append(match.id.?);
-                    sub_cursor += match.len;
-                } else {
-                    var hex_buf: [6]u8 = undefined;
-                    const hex_str = std.fmt.bufPrint(&hex_buf, "<0x{X:0>2}>", .{norm_bytes[sub_cursor]}) catch "<0x00>";
-                    const hex_match = self.trie.findLongestPrefix(hex_str);
-                    if (hex_match.id) |id| try token_ids.append(id);
-                    sub_cursor += 1;
-                }
+            if (next_sp_idx) |sp_idx| {
+                const sp_str = specials[sp_idx];
+                const match = self.trie.findLongestPrefix(sp_str);
+                if (match.id) |id| try token_ids.append(id);
+                pos = next_pos + sp_str.len;
+            } else {
+                break;
             }
         }
         return token_ids.toOwnedSlice();
