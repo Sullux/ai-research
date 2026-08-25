@@ -51,7 +51,7 @@ pub fn quantizeRowQ8_0(dst_words: []u32, src_bf16: []const u16) void {
     }
 }
 
-/// Quantize a row of BF16 weights into Q4_0 packed u32 array with asymmetric peak-preserving scale
+/// Quantize a row of BF16 weights into Q4_0 packed u32 array using llama.cpp signed scale convention
 /// Each block of 32 elements takes 5 u32 words (1 float scale d + 4 words of 32 nibbles)
 pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
     const num_blocks = src_bf16.len / QK;
@@ -60,26 +60,28 @@ pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
         const src_blk = src_bf16[b * QK .. (b + 1) * QK];
         const dst_blk = dst_words[b * 5 .. (b + 1) * 5];
 
-        var v_max: f32 = 0.0;
-        var abs_v_min: f32 = 0.0;
+        var amax: f32 = 0.0;
+        var max_val: f32 = 0.0;
         var vals: [QK]f32 = undefined;
         for (src_blk, 0..) |w, i| {
             const v = @as(f32, @bitCast(@as(u32, w) << 16));
             vals[i] = v;
-            if (v > v_max) v_max = v;
-            if (v < 0.0 and -v > abs_v_min) abs_v_min = -v;
+            const abs_v = @abs(v);
+            if (abs_v > amax) {
+                amax = abs_v;
+                max_val = v;
+            }
         }
 
-        const d_pos = v_max / 7.0;
-        const d_neg = abs_v_min / 8.0;
-        const d = @max(d_pos, d_neg);
-        const id = if (d > 0.0) 1.0 / d else 0.0;
+        const d = max_val / -8.0;
+        const id = if (d != 0.0) 1.0 / d else 0.0;
         dst_blk[0] = @bitCast(d);
 
         var nibbles: [32]u8 = undefined;
         for (vals, 0..) |v, i| {
-            const q = std.math.clamp(@as(i32, @intFromFloat(std.math.round(v * id))), -8, 7);
-            nibbles[i] = @intCast(q + 8); // Offset by +8 into [0..15]
+            const x0 = v * id;
+            const xi = std.math.clamp(@as(i32, @intFromFloat(x0 + 8.5)), 0, 15);
+            nibbles[i] = @intCast(xi);
         }
 
         for (0..4) |w| {

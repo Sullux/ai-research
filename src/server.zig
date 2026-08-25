@@ -93,6 +93,13 @@ pub const Server = struct {
         if (payload.len < 8) return;
         self.is_aborted.store(false, .seq_cst);
         const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
+        if (self.clock == 0 and tokens.len > 0) {
+            var sys_len: usize = 0;
+            for (tokens, 0..) |t, i| {
+                if (t == 106) { sys_len = i + 1; break; }
+            }
+            self.ring.setNumAnchors(if (sys_len > 0) sys_len else @min(tokens.len, 512));
+        }
         const total_prefill: u32 = @intCast(tokens.len);
         const prefill_start = std.time.milliTimestamp();
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
@@ -167,10 +174,7 @@ pub const Server = struct {
                 if (cur == 107) cur = self.advanceToken(cur);
                 continue;
             }
-            if (cur == 101) {
-                self.in_thinking_channel = false; cur = self.advanceToken(cur);
-                continue;
-            }
+            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur); continue; }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur); continue; }
             const str = self.tok.decode(cur);
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;

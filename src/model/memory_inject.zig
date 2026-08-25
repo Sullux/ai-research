@@ -29,7 +29,7 @@ pub fn integrateMemory(self: *const Model, mem: *memory.DiffArchive, ring: *Dyna
     }
     @memcpy(scratch.prev_normed_x, scratch.normed_x);
 
-    const recall_count = @min(ring.num_recall, scratch.recall_indices.len);
+    const recall_count = @min(ring_buffer.UPPER_RECALL_SLOTS, scratch.recall_indices.len);
     if (recall_count == 0) {
         ring.clearRecall();
         return;

@@ -5,13 +5,13 @@ This document records the strategic order of operations for completing the Strea
 ---
 
 ## 1. 4,096-Slot Layer Buffer & Dynamic 3-Tier Geometry
-- [ ] **Fixed Capacity & Dynamic Anchoring:** Update `src/ring_buffer.zig` to enforce strict 4,096-slot capacity per layer and dynamically lock initial system prompt ($N_{\text{sys}} \approx 384$) as immutable Tier 1 anchors.
-- [ ] **Depth-Asymmetric Partitioning:**
+- [x] **Fixed Capacity & Dynamic Anchoring:** Update `src/ring_buffer.zig` to enforce strict 4,096-slot capacity per layer and dynamically lock initial system prompt ($N_{\text{sys}} \approx 384$) as immutable Tier 1 anchors.
+- [x] **Depth-Asymmetric Partitioning:**
   - Lower Layers (0–15): Tier 1 Dynamic Anchors ($N_{\text{sys}}$) $+$ Tier 2 Sliding Ring ($4096 - N_{\text{sys}}$) $+$ Tier 3 ($0$ slots).
   - Upper Layers (16–47): Tier 1 Dynamic Anchors ($N_{\text{sys}}$) $+$ Tier 2 Sliding Ring ($4096 - N_{\text{sys}} - 128$) $+$ Tier 3 ($128$ recall slots).
-- [ ] **Confined Modulo Wrapping:** Ensure write head cycles strictly within Tier 2 $[N_{\text{sys}} \dots N_{\text{sys}} + W - 1]$ via $\text{slot} = N_{\text{sys}} + ((\text{clock} - N_{\text{sys}}) \pmod W)$, never corrupting anchors.
-- [ ] **GPU Indirection & Kernel Alignment:** Align GPU KV cache descriptor allocations, push constants, and decode attention gather kernels (`decode_attn.wgsl`) to the 4,096-slot buffer bounds.
-- [ ] **Multi-Turn Verification:** Verify multi-turn dialogue beyond token 544 without token repetition loops or prompt eviction.
+- [x] **Confined Modulo Wrapping:** Ensure write head cycles strictly within Tier 2 $[N_{\text{sys}} \dots N_{\text{sys}} + W - 1]$ via $\text{slot} = N_{\text{sys}} + ((\text{clock} - N_{\text{sys}}) \pmod W)$, never corrupting anchors.
+- [x] **GPU Indirection & Kernel Alignment:** Align GPU KV cache descriptor allocations, push constants, and decode attention gather kernels (`decode_attn.wgsl`) to the 4,096-slot buffer bounds.
+- [x] **Multi-Turn Verification:** Verify multi-turn dialogue beyond token 544 without token repetition loops or prompt eviction.
 
 ---
 

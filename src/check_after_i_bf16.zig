@@ -1,8 +1,11 @@
 const std = @import("std");
+const context = @import("gpu/context.zig");
+const model_gpu = @import("gpu/model_gpu.zig");
 const model = @import("model.zig");
 const safetensors = @import("safetensors.zig");
-const tokenizer = @import("tokenizer.zig");
 const ring_buffer = @import("ring_buffer.zig");
+const tokenizer = @import("tokenizer.zig");
+const batch_dispatch = @import("gpu/batch_dispatch.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,6 +23,12 @@ pub fn main() !void {
     var m = try model.Model.loadFromSafeTensors(allocator, &st, config);
     defer m.deinit();
 
+    var gpu_ctx = try context.GpuContext.init(allocator);
+    defer gpu_ctx.deinit();
+
+    var gpu_model = try model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .none, 0.0);
+    defer gpu_model.deinit();
+
     var kernel_buf: [4096]u8 = undefined;
     const kernel_bytes = try std.fs.cwd().readFile("tui/PROMPT_KERNEL.md", &kernel_buf);
     var full_prompt_buf: [8192]u8 = undefined;
@@ -30,24 +39,23 @@ pub fn main() !void {
     std.debug.print("Prompt tokens count: {}\n", .{tokens.len});
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
-    var ring = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, 384, 512, 96);
-    defer ring.deinit();
+    var ring1 = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, 384, 512, 96);
+    defer ring1.deinit();
 
-    var scratch = try model.ForwardScratch.init(allocator, config);
-    defer scratch.deinit(allocator);
+    var slots = try allocator.alloc(u32, tokens.len);
+    defer allocator.free(slots);
+    for (tokens, 0..) |_, i| slots[i] = @intCast(ring1.activateSlot(0, i));
 
-    var thread_pool: std.Thread.Pool = undefined;
-    try thread_pool.init(.{ .allocator = allocator });
-    defer thread_pool.deinit();
+    const batch_logits = try allocator.alloc(f32, config.vocab_size);
+    defer allocator.free(batch_logits);
 
-    for (tokens, 0..) |t, i| {
-        const is_last = (i == tokens.len - 1);
-        _ = m.forwardToken(&ring, &scratch, t, i, &thread_pool, null, null, null, is_last);
-    }
+    const bp = gpu_model.batch_prefill_ctx.?;
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits, null, null);
 
+    // Print top 10 logits after I'
     var top10: [10]struct { id: u32, val: f32 } = undefined;
     for (&top10) |*t| t.* = .{ .id = 0, .val = -1e9 };
-    for (scratch.logits, 0..) |val, i| {
+    for (batch_logits, 0..) |val, i| {
         for (0..10) |j| {
             if (val > top10[j].val) {
                 var k: usize = 9;
@@ -57,6 +65,6 @@ pub fn main() !void {
             }
         }
     }
-    std.debug.print("CPU BF16 Top 10 logits after \"I'\":\n", .{});
+    std.debug.print("GPU BF16 Top 10 logits after \"I'\":\n", .{});
     for (top10) |t| std.debug.print("  token {} ('{s}'): {d:.3}\n", .{ t.id, tok.decode(t.id), t.val });
 }

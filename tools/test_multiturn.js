@@ -6,8 +6,9 @@ const constants = require('../tui/lib/protocol/constants');
 const framing = require('../tui/lib/protocol/framing');
 
 const modelPath = process.argv[2] || '../gemma-4-12B-it';
+const quantFlag = process.argv[3] || '--q4';
 const binPath = path.resolve(__dirname, '../zig-out/bin/infer');
-const child = spawn(binPath, ['--model', modelPath, '--serve', '--gpu', '--q4'], {
+const child = spawn(binPath, ['--model', modelPath, '--serve', '--gpu', quantFlag], {
   stdio: ['pipe', 'pipe', 'inherit'],
 });
 
