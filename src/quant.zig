@@ -70,8 +70,8 @@ pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
             if (abs_v > amax) amax = abs_v;
         }
 
-        const d = amax / 7.0;
-        const id = if (amax > 0.0) 7.0 / amax else 0.0;
+        const d = amax / 8.0;
+        const id = if (amax > 0.0) 8.0 / amax else 0.0;
         dst_blk[0] = @bitCast(d);
 
         var nibbles: [32]u8 = undefined;

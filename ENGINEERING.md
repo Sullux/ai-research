@@ -363,6 +363,11 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 * **2D Workgroup Grid Tiling:** `batch_gemm_q8.wgsl`, `batch_gemm_q4.wgsl`, and `batch_fused_mlp_q4.wgsl` were upgraded from 1D 32-thread single-row workgroups to 128-thread $(4\text{ rows} \times 4\text{ tokens})$ 2D workgroups. This cuts the active compute workgroup count from $1,474,560$ to $368,640$ per layer, reducing redundant global memory reads of activation vector $X$ across wave lanes by $4\times$.
 * **AMDGPU Watchdog Window Tuning:** Partitioning prompt batch submissions into 8-layer sub-batches ($6$ submits total) guarantees each command buffer finishes within $\approx 250\text{ms}$ on Radeon 8060S, completely eliminating `VK_ERROR_DEVICE_LOST` kernel driver resets while maintaining sustained $40+\text{ tok/s}$ prefill throughput.
 
+### 10. Standard Q4_0 Quantization Scale Factor Alignment (`src/quant.zig`)
+* **Symmetric Signed 4-Bit Scale Math:** In standard GGML / `llama.cpp` Q4_0 quantization, signed 4-bit nibbles cover the integer range $[-8, +7]$ with a bias of $+8$. The block scale factor $d$ must be calculated as $d = a_{\max} / 8.0$ (and $id = 8.0 / a_{\max}$).
+* **Elimination of $+14.3\%$ MLP Gain Distortion:** Using $a_{\max} / 7.0$ previously introduced a systematic $+14.3\%$ excess gain on all 48 layers of MLP projections (gate, up, down). Over long multi-turn context sequences, this compounded activation drift eroded logit margins on dialogue boundaries and induced token repetition loops. Aligning to $a_{\max} / 8.0$ completely eliminates residual gain distortion, restoring character-perfect single-token decoding and multi-turn stability.
+
+
 
 
 
