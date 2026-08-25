@@ -39,47 +39,47 @@ fn main(
         while (b < num_blocks) {
             let bb0 = row_word_offset + b * 5u;
             let x0 = X[b * 32u + lane];
-            let gs0 = bitcast<f32>(W_gate[bb0]);
+            let g_sm0 = unpack2x16float(W_gate[bb0]);
             let gp0 = W_gate[bb0 + lane_word_idx];
             let gn0 = (gp0 >> nib_shift) & 0x0Fu;
-            gate_acc = gate_acc + (f32(gn0) - 8.0) * gs0 * x0;
-            let us0 = bitcast<f32>(W_up[bb0]);
+            gate_acc = gate_acc + (f32(gn0) * g_sm0.x + g_sm0.y) * x0;
+            let u_sm0 = unpack2x16float(W_up[bb0]);
             let up0 = W_up[bb0 + lane_word_idx];
             let un0 = (up0 >> nib_shift) & 0x0Fu;
-            up_acc = up_acc + (f32(un0) - 8.0) * us0 * x0;
+            up_acc = up_acc + (f32(un0) * u_sm0.x + u_sm0.y) * x0;
 
             let bb1 = bb0 + 5u;
             let x1 = X[(b + 1u) * 32u + lane];
-            let gs1 = bitcast<f32>(W_gate[bb1]);
+            let g_sm1 = unpack2x16float(W_gate[bb1]);
             let gp1 = W_gate[bb1 + lane_word_idx];
             let gn1 = (gp1 >> nib_shift) & 0x0Fu;
-            gate_acc = gate_acc + (f32(gn1) - 8.0) * gs1 * x1;
-            let us1 = bitcast<f32>(W_up[bb1]);
+            gate_acc = gate_acc + (f32(gn1) * g_sm1.x + g_sm1.y) * x1;
+            let u_sm1 = unpack2x16float(W_up[bb1]);
             let up1 = W_up[bb1 + lane_word_idx];
             let un1 = (up1 >> nib_shift) & 0x0Fu;
-            up_acc = up_acc + (f32(un1) - 8.0) * us1 * x1;
+            up_acc = up_acc + (f32(un1) * u_sm1.x + u_sm1.y) * x1;
 
             let bb2 = bb0 + 10u;
             let x2 = X[(b + 2u) * 32u + lane];
-            let gs2 = bitcast<f32>(W_gate[bb2]);
+            let g_sm2 = unpack2x16float(W_gate[bb2]);
             let gp2 = W_gate[bb2 + lane_word_idx];
             let gn2 = (gp2 >> nib_shift) & 0x0Fu;
-            gate_acc = gate_acc + (f32(gn2) - 8.0) * gs2 * x2;
-            let us2 = bitcast<f32>(W_up[bb2]);
+            gate_acc = gate_acc + (f32(gn2) * g_sm2.x + g_sm2.y) * x2;
+            let u_sm2 = unpack2x16float(W_up[bb2]);
             let up2 = W_up[bb2 + lane_word_idx];
             let un2 = (up2 >> nib_shift) & 0x0Fu;
-            up_acc = up_acc + (f32(un2) - 8.0) * us2 * x2;
+            up_acc = up_acc + (f32(un2) * u_sm2.x + u_sm2.y) * x2;
 
             let bb3 = bb0 + 15u;
             let x3 = X[(b + 3u) * 32u + lane];
-            let gs3 = bitcast<f32>(W_gate[bb3]);
+            let g_sm3 = unpack2x16float(W_gate[bb3]);
             let gp3 = W_gate[bb3 + lane_word_idx];
             let gn3 = (gp3 >> nib_shift) & 0x0Fu;
-            gate_acc = gate_acc + (f32(gn3) - 8.0) * gs3 * x3;
-            let us3 = bitcast<f32>(W_up[bb3]);
+            gate_acc = gate_acc + (f32(gn3) * g_sm3.x + g_sm3.y) * x3;
+            let u_sm3 = unpack2x16float(W_up[bb3]);
             let up3 = W_up[bb3 + lane_word_idx];
             let un3 = (up3 >> nib_shift) & 0x0Fu;
-            up_acc = up_acc + (f32(un3) - 8.0) * us3 * x3;
+            up_acc = up_acc + (f32(un3) * u_sm3.x + u_sm3.y) * x3;
 
             b = b + 4u;
         }

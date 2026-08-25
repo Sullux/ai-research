@@ -110,6 +110,10 @@ pub const DynamicRingBuffer = struct {
     }
 
     pub fn getActiveSlots(self: *const DynamicRingBuffer, layer: usize, curr_clock: usize, out_slots: []usize) usize {
+        return self.getActiveSlotsLayer(layer, curr_clock, false, 1024, out_slots);
+    }
+
+    pub fn getActiveSlotsLayer(self: *const DynamicRingBuffer, layer: usize, curr_clock: usize, is_sliding: bool, sliding_window: usize, out_slots: []usize) usize {
         const layer_offset = layer * self.total_slots;
         var count: usize = 0;
 
@@ -122,9 +126,10 @@ pub const DynamicRingBuffer = struct {
         }
 
         const w_start = self.recallStart(layer);
-        const w_size = self.windowSize(layer);
+        const max_cap = self.windowSize(layer);
+        const effective_window = if (is_sliding) @min(sliding_window, max_cap) else max_cap;
         if (curr_clock >= self.num_anchors) {
-            const min_valid_clock = if (curr_clock >= w_size) curr_clock - w_size + 1 else self.num_anchors;
+            const min_valid_clock = if (curr_clock >= effective_window) curr_clock - effective_window + 1 else self.num_anchors;
             for (self.num_anchors..w_start) |s| {
                 const global_idx = layer_offset + s;
                 if (!self.active[global_idx]) continue;

@@ -29,34 +29,34 @@ fn main(
         var b = 0u;
         while (b < num_blocks) {
             let bb0 = row_word_offset + b * 5u;
-            let scale_f0 = bitcast<f32>(W[bb0]);
+            let sm0 = unpack2x16float(W[bb0]);
             let packed_w0 = W[bb0 + lane_word_idx];
             let nibble0 = (packed_w0 >> nib_shift) & 0x0Fu;
-            let weight0 = (f32(nibble0) - 8.0) * scale_f0;
+            let weight0 = f32(nibble0) * sm0.x + sm0.y;
             let x_val0 = X[b * 32u + lane];
             acc = acc + weight0 * x_val0;
 
             let bb1 = bb0 + 5u;
-            let scale_f1 = bitcast<f32>(W[bb1]);
+            let sm1 = unpack2x16float(W[bb1]);
             let packed_w1 = W[bb1 + lane_word_idx];
             let nibble1 = (packed_w1 >> nib_shift) & 0x0Fu;
-            let weight1 = (f32(nibble1) - 8.0) * scale_f1;
+            let weight1 = f32(nibble1) * sm1.x + sm1.y;
             let x_val1 = X[(b + 1u) * 32u + lane];
             acc = acc + weight1 * x_val1;
 
             let bb2 = bb0 + 10u;
-            let scale_f2 = bitcast<f32>(W[bb2]);
+            let sm2 = unpack2x16float(W[bb2]);
             let packed_w2 = W[bb2 + lane_word_idx];
             let nibble2 = (packed_w2 >> nib_shift) & 0x0Fu;
-            let weight2 = (f32(nibble2) - 8.0) * scale_f2;
+            let weight2 = f32(nibble2) * sm2.x + sm2.y;
             let x_val2 = X[(b + 2u) * 32u + lane];
             acc = acc + weight2 * x_val2;
 
             let bb3 = bb0 + 15u;
-            let scale_f3 = bitcast<f32>(W[bb3]);
+            let sm3 = unpack2x16float(W[bb3]);
             let packed_w3 = W[bb3 + lane_word_idx];
             let nibble3 = (packed_w3 >> nib_shift) & 0x0Fu;
-            let weight3 = (f32(nibble3) - 8.0) * scale_f3;
+            let weight3 = f32(nibble3) * sm3.x + sm3.y;
             let x_val3 = X[(b + 3u) * 32u + lane];
             acc = acc + weight3 * x_val3;
 

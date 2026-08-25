@@ -67,15 +67,15 @@ fn main(
         var b = 0u;
         while (b < num_blocks) {
             let blk_off = row_word_offset + b * 5u;
-            let gs = bitcast<f32>(W_gate[blk_off]);
+            let g_sm = unpack2x16float(W_gate[blk_off]);
             let gp = W_gate[blk_off + lane_word_idx];
             let gn = (gp >> nib_shift) & 0x0Fu;
-            let g_val = (f32(gn) - 8.0) * gs;
+            let g_val = f32(gn) * g_sm.x + g_sm.y;
 
-            let us = bitcast<f32>(W_up[blk_off]);
+            let u_sm = unpack2x16float(W_up[blk_off]);
             let up = W_up[blk_off + lane_word_idx];
             let un = (up >> nib_shift) & 0x0Fu;
-            let u_val = (f32(un) - 8.0) * us;
+            let u_val = f32(un) * u_sm.x + u_sm.y;
 
             let k_idx = b * 32u + lane;
             let x0 = X[x_off0 + k_idx];

@@ -51,8 +51,10 @@ pub fn quantizeRowQ8_0(dst_words: []u32, src_bf16: []const u16) void {
     }
 }
 
-/// Quantize a row of BF16 weights into Q4_0 packed u32 array using llama.cpp signed scale convention
-/// Each block of 32 elements takes 5 u32 words (1 float scale d + 4 words of 32 nibbles)
+/// Quantize a row of BF16 weights into Q4 asymmetric affine packed u32 array
+/// Each block of 32 elements takes 5 u32 words:
+///   Word 0: packed (f16 scale | (f16 min << 16))
+///   Words 1..4: 32 nibbles (4 bits each in [0..15])
 pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
     const num_blocks = src_bf16.len / QK;
     var b: usize = 0;
@@ -60,27 +62,31 @@ pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
         const src_blk = src_bf16[b * QK .. (b + 1) * QK];
         const dst_blk = dst_words[b * 5 .. (b + 1) * 5];
 
-        var amax: f32 = 0.0;
-        var max_val: f32 = 0.0;
+        var vmin: f32 = @as(f32, @bitCast(@as(u32, src_blk[0]) << 16));
+        var vmax: f32 = vmin;
         var vals: [QK]f32 = undefined;
         for (src_blk, 0..) |w, i| {
             const v = @as(f32, @bitCast(@as(u32, w) << 16));
             vals[i] = v;
-            const abs_v = @abs(v);
-            if (abs_v > amax) {
-                amax = abs_v;
-                max_val = v;
-            }
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
         }
 
-        const d = max_val / -8.0;
-        const id = if (d != 0.0) 1.0 / d else 0.0;
-        dst_blk[0] = @bitCast(d);
+        const raw_scale = (vmax - vmin) / 15.0;
+        const scale_f16: f16 = @floatCast(raw_scale);
+        const min_f16: f16 = @floatCast(vmin);
+        const scale_u16: u16 = @bitCast(scale_f16);
+        const min_u16: u16 = @bitCast(min_f16);
+
+        const scale: f32 = @floatCast(scale_f16);
+        const min_val: f32 = @floatCast(min_f16);
+        const id = if (scale > 0.0) 1.0 / scale else 0.0;
+
+        dst_blk[0] = @as(u32, scale_u16) | (@as(u32, min_u16) << 16);
 
         var nibbles: [32]u8 = undefined;
         for (vals, 0..) |v, i| {
-            const x0 = v * id;
-            const xi = std.math.clamp(@as(i32, @intFromFloat(x0 + 8.5)), 0, 15);
+            const xi = std.math.clamp(@as(i32, @intFromFloat(std.math.round((v - min_val) * id))), 0, 15);
             nibbles[i] = @intCast(xi);
         }
 

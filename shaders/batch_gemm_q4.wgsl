@@ -51,10 +51,10 @@ fn main(
         var b = 0u;
         while (b < num_blocks) {
             let blk_off = row_word_offset + b * 5u;
-            let s = bitcast<f32>(W[blk_off]);
+            let sm = unpack2x16float(W[blk_off]);
             let packed_word = W[blk_off + lane_word_idx];
             let nib = (packed_word >> nib_shift) & 0x0Fu;
-            let w_val = (f32(nib) - 8.0) * s;
+            let w_val = f32(nib) * sm.x + sm.y;
             let k_idx = b * 32u + lane;
 
             acc0 = acc0 + w_val * X[x_off0 + k_idx];
