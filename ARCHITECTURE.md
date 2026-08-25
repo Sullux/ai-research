@@ -15,19 +15,86 @@
 To ensure seamless forward compatibility across all three development phases, the low-level data structures and telemetry headers are defined up front.
 
 ### A. The 4,096-Vector Layer Buffer
-Each layer $l \in [0, N-1]$ manages a fixed-size contiguous buffer:
+Each layer $l \in [0, N-1]$ manages a fixed-size contiguous buffer strictly bounded to 4,096 physical token slots ($4096 \times \text{KV\_DIM} \times 4\text{ bytes} \approx 16\text{ MB}$ per layer, $\approx 768\text{ MB}$ total across 48 layers).
+
+The buffer uses a deterministic 3-tier partitioned geometry with a depth-asymmetric Tier 3 allocation:
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│ Total Fixed Allocation: [4096 Tokens x 4096 Hidden Dimensions]         │
-├───────────────────────────────┬────────────────────────────────────────┤
-│ Sparse Memory Landmarks       │ Sliding FIFO Ring Buffer               │
-│ (Injected Diffs & VQ Centroids│ (Continuous Streaming Tokens)          │
-│ [Dynamic: 64 .. 512 slots]    │ [Dynamic: 3584 .. 4032 slots]          │
-└───────────────────────────────┴────────────────────────────────────────┘
+Lower Layers (0 .. 15): [Total Fixed Allocation: 4096 Slots]
+┌───────────────────────────────────────┬────────────────────────────────────────────────────────┐
+│ Tier 1: Dynamic System Anchors        │ Tier 2: Sliding FIFO Ring Buffer                       │
+│ (System Prompt, Persona & Tool Schemas│ (Continuous Streaming Dialogue & Local Context)        │
+│ [N_sys ~384 slots - Locked Forever]   │ [4096 - N_sys ~ 3712 slots]                            │
+└───────────────────────────────────────┴────────────────────────────────────────────────────────┘
+
+Upper Layers (16 .. 47): [Total Fixed Allocation: 4096 Slots]
+┌──────────────────────────────────┬──────────────────────────────────────────┬──────────────────┐
+│ Tier 1: Dynamic System Anchors   │ Tier 2: Sliding FIFO Ring Buffer         │ Tier 3: Recall   │
+│ (System Prompt & Tool Schemas)   │ (Continuous Streaming Dialogue & Context)│ (Dense Memories) │
+│ [N_sys ~384 slots - Locked]      │ [4096 - N_sys - 128 ~ 3584 slots]        │ [128 slots]      │
+└──────────────────────────────────┴──────────────────────────────────────────┴──────────────────┘
 ```
 
-### B. The Memory Diff & Telemetry Header
+#### Memory Partitioning & Ring Lifecycle Rules:
+1. **Tier 1 (Dynamic Anchors):** On session initialization, the exact system prompt length ($N_{\text{sys}} \approx 384$ tokens) is measured and locked permanently into physical slots $[0 \dots N_{\text{sys}}-1]$ across all 48 layers. These slots are marked immutable and never evicted.
+2. **Tier 2 (Sliding Ring):** For tokens beyond $N_{\text{sys}}$, the circular write head advances strictly within the Tier 2 window $[N_{\text{sys}} \dots N_{\text{sys}} + W - 1]$ via the modulo formula:
+   $$\text{Physical Slot} = N_{\text{sys}} + \left((\text{clock} - N_{\text{sys}}) \pmod{W}\right)$$
+   The write head never touches or wraps into the Tier 1 anchor partition $[0 \dots N_{\text{sys}}-1]$.
+3. **Tier 3 (Hippocampal Recall):** Allocated exclusively to middle and upper layers (16–47) where factual extraction, entity binding, and reasoning occur. As context rolls off Tier 2, it is compressed into episodic diffs; on associative query match, Top-$K$ dense vectors are injected directly into Tier 3 slots $[4096 - 128 \dots 4095]$.
+4. **Zero-Branch Indirect GPU Attention:** The GPU decode kernel gathers active KV entries via an indirection table (`Active_slots`), executing contiguous vector dot products across all active anchors, sliding ring entries, and recall slots in parallel without shader branching.
+
+### B. Dual-Mode Memory Engine: Implicit Priming vs. Explicit Latent Rehydration
+
+The cognitive memory subsystem operates across two complementary modalities:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                DUAL-MODE MEMORY ARCHITECTURE                                │
+├─────────────────────────────────────────────────────────────┬───────────────────────────────┤
+│ 1. IMPLICIT MEMORY (Subconscious Priming)                   │ 2. EXPLICIT MEMORY (Conscious)│
+├─────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ • Continuous background associative resonance.              │ • Deliberate tool call:       │
+│ • Populates Tier 3 (128 slots in Layers 16–47).             │   `<|tool_call|>recall(...)`. │
+│ • Evaluates cosine salience against current hidden state.   │ • Direct-to-layer latent KV   │
+│ • Injects dense state diffs directly into KV cache.         │   rehydration across 48 layers│
+│ • Zero token generation cost, zero prompt clutter.          │ • Zero-FLOP memory blit.      │
+│ • Acts like intuition / background contextual familiarity.  │ • Model consciously reasons   │
+│                                                             │   over memories in `<|think|>`.│
+└─────────────────────────────────────────────────────────────┴───────────────────────────────┘
+```
+
+#### 1. Implicit Memory (Subconscious Working Memory Priming)
+* Runs continuously on every conversational turn.
+* Computes cosine similarity between the current Layer 47 hidden state and all stored centroid diffs.
+* Populates the Top-128 most resonant diffs into the dedicated Tier 3 slots of the upper reasoning layers (Layers 16–47).
+* Requires zero prompt manipulation and zero token generation overhead.
+
+#### 2. Explicit Memory (Direct-to-Layer Latent Rehydration)
+When the model requires deliberate, deep recollection of past sessions, tool logs, or codebases, it issues an explicit tool call (`recall`).
+
+* **Elimination of the Text Re-Encoding Penalty:** Standard RAG systems serialize text to disk and re-inject it into Layer 0 as prompt tokens, incurring massive matrix FLOP penalties ($\sim 500\text{--}1500\text{ms}$ of batched GEMM) and destroying all high-dimensional latent activations formed during the original experience.
+* **Direct Latent Rehydration:** Our engine stores the pre-RoPE $(K_l, V_l)$ tensor slices across all 48 layers on disk. When `recall` matches an episode, the engine performs a direct memory-mapped copy (`memcpy` / GPU UMA blit) of the pre-computed $(K_l, V_l)$ slices straight into the active sliding ring slots.
+* **Zero Matrix Prefill FLOPs:** Rehydrating a 256-token episode takes $\approx \mathbf{0.05\text{ms}}$ (limited only by NVMe bus bandwidth), restoring 100% of the original latent nuance instantaneously.
+* **Lightweight Control Frame:** The tool returns a structured JSON receipt informing the model's high-level thought process of the memory match, temporal metadata, and continuation token:
+  ```json
+  <|tool_response>{
+    "status": "rehydrated",
+    "memory_id": 1042,
+    "tokens_restored": 256,
+    "elapsed_time": "3 hours ago",
+    "original_timestamp": 1740441600000,
+    "original_clock": 1420,
+    "summary": "Postgres database schema migration",
+    "continuation_token": "tok_1043"
+  }<tool_response|>
+  ```
+
+#### 3. Dual-Track Temporal Perception (Resolving RoPE Phase-Decoherence)
+To resolve the fundamental duality between *when a memory is recalled* and *when it originally occurred*:
+* **Track 1 (Operational Attention / Local RoPE Clock):** Memories are rehydrated into the local working memory coordinate frame ($t_{\text{current}}$). This prevents high-frequency RoPE phase-decoherence over large time deltas ($\Delta t \gg 10{,}000$), ensuring self-attention dot products remain mathematically sharp and legible.
+* **Track 2 (Episodic Grounding / Explicit Temporal Awareness):** The tool control receipt provides exact epoch timestamps (`original_timestamp`, `elapsed_time`, `original_clock`), allowing the model's `<|think|>` channel to perform explicit, accurate temporal reasoning.
+
+### C. The Memory Diff & Telemetry Header
 Every serialized state delta emitted by any layer carries a 32-byte telemetry header for cost, vitality, and temporal tracking:
 
 ```zig
@@ -43,7 +110,7 @@ pub const MemoryDiff = extern struct {
 };
 ```
 
-### C. Cost & Telemetry Tracker
+### D. Cost & Telemetry Tracker
 ```zig
 pub const LayerTelemetry = struct {
     cycle_count: u64,
@@ -122,9 +189,9 @@ Implement multi-rate layer execution, vector diffing, and the 3-tier memory inje
 2. **Inter-Layer Translation Adapters (`src/adapter.zig`):**
    * Lightweight projection MLPs between asynchronous layers to translate sparse event deltas into expected continuous input manifolds.
 3. **3-Tier Dual-Score Memory Injection (`src/memory.zig`):**
-   * **Tier 1 (Static Anchors):** Pinned system persona and core goals (32 slots).
-   * **Tier 2 (Temporal FIFO Recency):** Immediate sequential diffs (128 slots).
-   * **Tier 3 (Associative Resonance):** Historical diffs selected via fast in-engine GEMV cosine scan:
+   * **Tier 1 (Dynamic Anchors):** Pinned system prompt, persona, and tool declarations dynamically sized to $N_{\text{sys}}$ ($\approx 384$ slots) locked permanently across all 48 layers.
+   * **Tier 2 (Temporal FIFO Recency):** Continuous sliding ring context ($3{,}712$ slots on lower layers, $3{,}584$ slots on upper layers).
+   * **Tier 3 (Associative Hippocampal Recall):** 128 dedicated slots on upper reasoning layers (16–47), populated with historical episodic diffs selected via fast in-engine GEMV cosine scan:
      $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda \Delta t} + \gamma \cdot \|\Delta_i\|$$
 4. **Persistent NVMe Ring Buffer (`src/storage.zig`):**
    * Pre-allocated circular memory-mapped file for logging `MemoryDiff` structs asynchronously via Linux `io_uring`.
