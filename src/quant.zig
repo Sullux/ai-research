@@ -4,12 +4,11 @@ pub const QuantMode = enum {
     none,
     q8,
     q4,
-    mixed,
+    mixed, // alias for q4
 
     pub fn fromString(str: []const u8) QuantMode {
         if (std.mem.eql(u8, str, "q8") or std.mem.eql(u8, str, "q8_0")) return .q8;
-        if (std.mem.eql(u8, str, "q4") or std.mem.eql(u8, str, "q4_0")) return .q4;
-        if (std.mem.eql(u8, str, "mixed") or std.mem.eql(u8, str, "q4_mixed")) return .mixed;
+        if (std.mem.eql(u8, str, "q4") or std.mem.eql(u8, str, "q4_0") or std.mem.eql(u8, str, "mixed") or std.mem.eql(u8, str, "q4_mixed")) return .q4;
         return .none;
     }
 };
@@ -52,7 +51,7 @@ pub fn quantizeRowQ8_0(dst_words: []u32, src_bf16: []const u16) void {
     }
 }
 
-/// Quantize a row of BF16 weights into Q4_0 packed u32 array
+/// Quantize a row of BF16 weights into Q4_0 packed u32 array with asymmetric peak-preserving scale
 /// Each block of 32 elements takes 5 u32 words (1 float scale d + 4 words of 32 nibbles)
 pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
     const num_blocks = src_bf16.len / QK;
@@ -61,17 +60,20 @@ pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
         const src_blk = src_bf16[b * QK .. (b + 1) * QK];
         const dst_blk = dst_words[b * 5 .. (b + 1) * 5];
 
-        var amax: f32 = 0.0;
+        var v_max: f32 = 0.0;
+        var abs_v_min: f32 = 0.0;
         var vals: [QK]f32 = undefined;
         for (src_blk, 0..) |w, i| {
             const v = @as(f32, @bitCast(@as(u32, w) << 16));
             vals[i] = v;
-            const abs_v = @abs(v);
-            if (abs_v > amax) amax = abs_v;
+            if (v > v_max) v_max = v;
+            if (v < 0.0 and -v > abs_v_min) abs_v_min = -v;
         }
 
-        const d = amax / 8.0;
-        const id = if (amax > 0.0) 8.0 / amax else 0.0;
+        const d_pos = v_max / 7.0;
+        const d_neg = abs_v_min / 8.0;
+        const d = @max(d_pos, d_neg);
+        const id = if (d > 0.0) 1.0 / d else 0.0;
         dst_blk[0] = @bitCast(d);
 
         var nibbles: [32]u8 = undefined;

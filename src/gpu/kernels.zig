@@ -34,8 +34,8 @@ pub const GpuEngine = struct {
     fence: types.VkFence,
 
     pub fn init(ctx: *const context.GpuContext, mode: quant.QuantMode) !GpuEngine {
-        const attn_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8, .mixed => &shaders.GEMV_Q8_SPIRV, .q4 => &shaders.GEMV_Q4_SPIRV };
-        const mlp_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8 => &shaders.GEMV_Q8_SPIRV, .q4, .mixed => &shaders.GEMV_Q4_SPIRV };
+        const attn_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8, .q4, .mixed => &shaders.GEMV_Q8_SPIRV };
+        const mlp_spirv = switch (mode) { .none => &shaders.GEMV_BF16_SPIRV, .q8, .q4, .mixed => &shaders.GEMV_Q8_SPIRV };
         var gemv_attn = try pipeline.ComputePipeline.init(ctx, attn_spirv, 3, 16); errdefer gemv_attn.deinit();
         var gemv_mlp = try pipeline.ComputePipeline.init(ctx, mlp_spirv, 3, 16); errdefer gemv_mlp.deinit();
         var gemv_logits = try pipeline.ComputePipeline.init(ctx, &shaders.GEMV_Q8_SPIRV, 3, 16); errdefer gemv_logits.deinit();

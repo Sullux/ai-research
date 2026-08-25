@@ -169,7 +169,6 @@ pub const Server = struct {
             }
             if (cur == 101) {
                 self.in_thinking_channel = false; cur = self.advanceToken(cur);
-                if (cur == 107) cur = self.advanceToken(cur);
                 continue;
             }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur); continue; }

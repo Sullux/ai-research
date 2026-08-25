@@ -100,8 +100,9 @@ pub const GpuModelContext = struct {
         var cmds: [2]types.VkCommandBuffer = .{ null, null };
         if (ctx.api.vkAllocateCommandBuffers(ctx.device, &cb_info, &cmds) != .SUCCESS) return error.VkCmdBufferAllocFailed;
 
-        const attn_m: quant.QuantMode = if (mode == .mixed) .q8 else mode;
-        const mlp_m: quant.QuantMode = if (mode == .mixed) .q4 else mode;
+        const attn_m: quant.QuantMode = if (mode == .q4 or mode == .mixed) .q8 else mode;
+        const mlp_m: quant.QuantMode = if (mode == .q4 or mode == .mixed) .q4 else mode;
+        const down_m: quant.QuantMode = if (mode == .q4 or mode == .mixed) .q8 else mode;
 
         var gpu_layers = try allocator.alloc(GpuLayerWeights, m.layers.len);
         for (m.layers, 0..) |l, i| {
@@ -117,7 +118,7 @@ pub const GpuModelContext = struct {
                 .o_proj = try createWeightBuffer(ctx, l.o_proj, H, q_dim, attn_m),
                 .gate_proj = try createWeightBuffer(ctx, l.gate_proj, I, H, mlp_m),
                 .up_proj = try createWeightBuffer(ctx, l.up_proj, I, H, mlp_m),
-                .down_proj = try createWeightBuffer(ctx, l.down_proj, H, I, mlp_m),
+                .down_proj = try createWeightBuffer(ctx, l.down_proj, H, I, down_m),
                 .pre_ffn_norm = try createNormBuffer(ctx, l.pre_feedforward_layernorm, H),
                 .post_attn_norm = try createNormBuffer(ctx, if (l.post_attention_layernorm) |p| p else &.{}, H),
                 .post_ffn_norm = try createNormBuffer(ctx, if (l.post_feedforward_layernorm) |p| p else &.{}, H),

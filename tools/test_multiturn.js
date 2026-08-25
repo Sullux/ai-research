@@ -7,7 +7,7 @@ const framing = require('../tui/lib/protocol/framing');
 
 const modelPath = process.argv[2] || '../gemma-4-12B-it';
 const binPath = path.resolve(__dirname, '../zig-out/bin/infer');
-const child = spawn(binPath, ['--model', modelPath, '--serve', '--gpu', '--mixed'], {
+const child = spawn(binPath, ['--model', modelPath, '--serve', '--gpu', '--q4'], {
   stdio: ['pipe', 'pipe', 'inherit'],
 });
 
@@ -56,7 +56,7 @@ const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').
 
 function sendTurn1() {
   console.log('\x1b[34m--- SENDING TURN 1: "How are you doing today?" ---\x1b[0m');
-  const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n`;
+  const prompt = `<|turn>system\n<|think|>\n${kernel}<turn|>\n<|turn>user\nHow are you doing today?<turn|>\n<|turn>model\n`;
   child.stdin.write(makeConfigFrame(512, 0.0));
   child.stdin.write(framing.streamInputFrame(prompt, 1));
 }

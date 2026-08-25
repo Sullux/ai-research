@@ -2,7 +2,7 @@
   "modelPath": "../../gemma-4-12B-it",
   "extraArgs": [
     "--gpu",
-    "--mixed"
+    "--q4"
   ],
   "runtime": {
     "budget": 512,

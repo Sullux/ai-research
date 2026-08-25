@@ -121,11 +121,7 @@ pub fn gpuDispatchPrefillBatch(
         recordBarrier(gpu, prefill.cmd_buf);
 
         const pc_down = [4]u32{ N, @intCast(H), @intCast(inter), 0 };
-        if (prefill.mlp_is_q4) {
-            prefill.pipe_gemm_q4.record(prefill.cmd_buf, d.down_proj, std.mem.sliceAsBytes(&pc_down), @intCast((H + 3) / 4), n_tiles, 1);
-        } else {
-            prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.down_proj, std.mem.sliceAsBytes(&pc_down), @intCast((H + 3) / 4), n_tiles, 1);
-        }
+        prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.down_proj, std.mem.sliceAsBytes(&pc_down), @intCast((H + 3) / 4), n_tiles, 1);
         if (l_gpu.has_post_ffn_norm) {
             recordBarrier(gpu, prefill.cmd_buf);
             const pc_pfn_norm = extern struct { H: u32, eps: f32, N: u32, pad: u32 }{ .H = @intCast(H), .eps = eps, .N = N, .pad = 0 };

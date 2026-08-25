@@ -109,7 +109,7 @@ pub const BatchPrefillContext = struct {
 
         const is_q4 = (quant_mode == .q4 or quant_mode == .mixed);
         const mlp_pipe = if (is_q4) &p_mlp4 else &p_mlp8;
-        const down_pipe = if (is_q4) &p_g4 else &p_g8;
+        const down_pipe = &p_g8;
         const b_layers = try allocator.alloc(BatchLayerDescriptors, gpu_layers.len);
         for (gpu_layers, 0..) |l_gpu, i| {
             const next_norm = if (i + 1 < gpu_layers.len) &gpu_layers[i + 1].input_norm else final_norm;
