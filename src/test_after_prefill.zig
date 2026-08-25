@@ -52,7 +52,7 @@ pub fn main() !void {
     defer scratch.deinit(allocator);
 
     const bp = gpu_model.batch_prefill_ctx.?;
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, scratch.logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, scratch.logits, null, null);
 
     var s = sampler.Sampler.init(1337, 0.0, 0.95);
     const top_tok0 = s.sample(scratch.logits);
@@ -128,7 +128,7 @@ pub fn main() !void {
     std.debug.print("\nGenerated thought text:\n", .{});
     var cur_t = thought_tok;
     for (0..40) |_| {
-        std.debug.print("{s}", .{tok.decode(cur_t)});
+        std.debug.print("({d}: '{s}') ", .{ cur_t, tok.decode(cur_t) });
         if (cur_t == 101 or cur_t == 106) break;
         cur_t = m.forwardToken(&ring, &scratch, cur_t, clock, null, null, null, &gpu_model, true);
         clock += 1;

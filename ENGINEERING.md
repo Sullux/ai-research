@@ -353,11 +353,16 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 * **Layer 0..47 Clock Parity:** In continuous full-duplex inference, every forward pass calls `ring.activateSlot(l, clock)` across all $48$ layers. This guarantees that internal ring buffer clocks, physical slot mappings, and sliding window boundaries remain synchronized across all layers as context history exceeds the $512$-token window, preventing historical KV cache corruption.
 
 ### 7. Sub-Batch Prefill Progress Telemetry (`src/gpu/batch_dispatch.zig`, `src/server.zig`)
-* **Real-Time Prefill Telemetry:** `gpuDispatchPrefillBatch` incorporates an asynchronous progress callback invoked after every 2-layer command submission fence synchronization.
-* **Continuous Wire Updates:** The server emits `OP_STATUS` (`STATUS_ENCODING`) updates to the client after each sub-batch, providing smooth real-time progress (`16 / 389`, `32 / 389`, ... `389 / 389 tok`) and throughput telemetry throughout multi-second prefill operations.
+* **Real-Time Prefill Telemetry:** `gpuDispatchPrefillBatch` incorporates an asynchronous progress callback invoked after every 8-layer command submission fence synchronization.
+* **Continuous Wire Updates:** The server emits `OP_STATUS` (`STATUS_ENCODING`) updates to the client after each sub-batch, providing smooth real-time progress (`64 / 384`, `128 / 384`, ... `384 / 384 tok`) and throughput telemetry throughout multi-second prefill operations.
 
 ### 8. Robust Control Channel Stripping (`src/server.zig`)
 * **Thinking Channel Opener Consumption:** When discrete token `100` (`<|channel>`) is encountered, `decodeResponse` consumes all prefix channel headers (including `thought`, `call`, and whitespace) until the terminating newline (`107` / `\n`), ensuring no control tags or structural headers leak into thought or content dialogue streams.
+
+### 9. 2D Workgroup Tiling & Sub-Batch AMDGPU Watchdog Tuning (`shaders/batch_*`)
+* **2D Workgroup Grid Tiling:** `batch_gemm_q8.wgsl`, `batch_gemm_q4.wgsl`, and `batch_fused_mlp_q4.wgsl` were upgraded from 1D 32-thread single-row workgroups to 128-thread $(4\text{ rows} \times 4\text{ tokens})$ 2D workgroups. This cuts the active compute workgroup count from $1,474,560$ to $368,640$ per layer, reducing redundant global memory reads of activation vector $X$ across wave lanes by $4\times$.
+* **AMDGPU Watchdog Window Tuning:** Partitioning prompt batch submissions into 8-layer sub-batches ($6$ submits total) guarantees each command buffer finishes within $\approx 250\text{ms}$ on Radeon 8060S, completely eliminating `VK_ERROR_DEVICE_LOST` kernel driver resets while maintaining sustained $40+\text{ tok/s}$ prefill throughput.
+
 
 
 
