@@ -4,68 +4,40 @@ This document records the strategic order of operations for completing the Strea
 
 ---
 
-## 1. Document Architecture & Conceptual Foundations [COMPLETED]
-- [x] **`MEMORY.md`**: Document the dual-process cognitive memory architecture:
-  - Implicit peripheral resonance (Tier-3 ring buffer slots) vs. Explicit foreground mental replay (1,024-token primary stream).
-  - Hippocampal 6-second debounce consolidation window and out-of-band persistent storage.
-  - Non-destructive interruption preserving suspended cognitive threads (`is_interrupted`).
-  - Dual query modalities (`keywords` direct embedding lookup vs. `fulltext` contextual prefill).
-  - High-layer semantic targeting (Layer 47) and full-stack multi-layer KV rehydration.
-  - Cognitive provenance tagging (`<|start_recalled_memory|> ... <|end_recalled_memory|>`).
-  - Connection to Phase 4 synaptic weight plasticity ($\Delta W$).
+## 1. 4,096-Slot Layer Buffer & Dynamic 3-Tier Geometry
+- [ ] **Fixed Capacity & Dynamic Anchoring:** Update `src/ring_buffer.zig` to enforce strict 4,096-slot capacity per layer and dynamically lock initial system prompt ($N_{\text{sys}} \approx 384$) as immutable Tier 1 anchors.
+- [ ] **Depth-Asymmetric Partitioning:**
+  - Lower Layers (0–15): Tier 1 Dynamic Anchors ($N_{\text{sys}}$) $+$ Tier 2 Sliding Ring ($4096 - N_{\text{sys}}$) $+$ Tier 3 ($0$ slots).
+  - Upper Layers (16–47): Tier 1 Dynamic Anchors ($N_{\text{sys}}$) $+$ Tier 2 Sliding Ring ($4096 - N_{\text{sys}} - 128$) $+$ Tier 3 ($128$ recall slots).
+- [ ] **Confined Modulo Wrapping:** Ensure write head cycles strictly within Tier 2 $[N_{\text{sys}} \dots N_{\text{sys}} + W - 1]$ via $\text{slot} = N_{\text{sys}} + ((\text{clock} - N_{\text{sys}}) \pmod W)$, never corrupting anchors.
+- [ ] **GPU Indirection & Kernel Alignment:** Align GPU KV cache descriptor allocations, push constants, and decode attention gather kernels (`decode_attn.wgsl`) to the 4,096-slot buffer bounds.
+- [ ] **Multi-Turn Verification:** Verify multi-turn dialogue beyond token 544 without token repetition loops or prompt eviction.
 
 ---
 
-## 2. Low-Level Binary Wire Protocol Specification (`API.md`) [COMPLETED]
-- [x] Define the binary wire format over **STDIN/STDOUT** (using `--serve` mode).
-- [x] Adopt **Pure Opcode Protocol** with compact 16-byte fixed-header envelope:
-  - `magic` (4 bytes: `0x53554C58` / `'SULX'`)
-  - `version` (2 bytes: `1`)
-  - `msg_id` (2 bytes)
-  - `opcode` (2 bytes)
-  - `reserved` (2 bytes: `0`)
-  - `payload_len` (4 bytes)
-- [x] Catalog protocol opcodes:
-  - `OP_STREAM_INPUT` (`0x0001`): Multimodal streaming into primary Layer 0 pipeline (text, tokens, soft vectors, audio PCM, images, video).
-  - `OP_ABORT` (`0x0002`): Administrative emergency brake; preserves uncommitted staging buffer and tags episode `is_interrupted`.
-  - `OP_MEM_QUERY` (`0x0003`): Explicit memory search (`keywords`, `fulltext`, temporal anchor, continuation cursor).
-  - `OP_SET_CONFIG` (`0x0004`): Granular runtime parameters (thinking budget, temperature, stop tokens, quiescence threshold).
-  - `OP_TOOL_RETURN` (`0x0005`): Host response to model tool request.
-  - `OP_MEM_COMMIT` (`0x0006`): Force immediate consolidation of staging buffer to NVMe storage.
-  - `OP_PING` (`0x000E`) / `OP_SHUTDOWN` (`0x000F`).
-  - `OP_STREAM_CONTENT` (`0x0101`): Outbound conversational response token (with token type, clock $t$, active layer mask, UTF-8 text).
-  - `OP_STREAM_THOUGHT` (`0x0102`): Outbound reasoning / thought channel token (`<channel>thought`).
-  - `OP_TURN_COMPLETE` (`0x0103`): Outbound turn conclusion (token count, duration ms, tok/s, stop reason).
-  - `OP_TOOL_CALL` (`0x0104`): Model-initiated tool execution request.
-  - `OP_MEM_RESPONSE` (`0x0105`): Stream-injection memory telemetry badge (injected count, tokens, timestamps, cursor).
-  - `OP_STATUS` (`0x0106`): Engine telemetry (tok/s, active vs. quiescent layer breakdown, ring slots, VRAM).
-  - `OP_PONG` (`0x010E`) / `OP_ERROR` (`0x01FF`).
+## 2. Memory File CLI & Storage Subsystem (`--memory` & Config)
+- [ ] **CLI & Config Integration:** Add `--memory <path>` CLI parameter (defaulting to `./.episodic.mem`) in `src/main.zig` and add `"memoryPath": "./.episodic.mem"` in `tui/config.json`.
+- [ ] **Episodic Tensor Serialization:** Update `src/storage.zig` (`PersistentDiffStore`) to serialize 48-layer pre-RoPE $(K_l, V_l)$ episodic blocks alongside the 32-byte `MemoryDiff` telemetry header.
+- [ ] **Eviction-Triggered Archival:** Automatically stream compressed $(K_l, V_l)$ tensor state directly to the memory-mapped `.episodic.mem` file as context rolls off Tier 2.
+- [ ] **Storage Telemetry & Verification:** Validate file header, binary diff alignments, and persistence across server restarts.
 
 ---
 
-## 3. Engine Binary Protocol & Real-Time Memory Implementation (Zig) [COMPLETED]
-- [x] Implement binary frame serializer/deserializer and dispatch in `src/protocol.zig`.
-- [x] Implement `--serve` binary transport loop in `src/server.zig` and `src/server_queue.zig` reading from STDIN and writing to STDOUT.
-- [x] Implement Hippocampal debounce consolidation staging buffer in `src/hippocampus.zig`.
-- [x] Connect `OP_ABORT` with atomic signaling to halt generation instantly and preserve uncommitted state as `is_interrupted`.
-- [x] Wire `OP_MEM_QUERY` handling:
-  - `keywords`: Direct unquantized embedding lookup from `embed_tokens`.
-  - Associative multi-layer KV scanning across historical episodes.
-- [x] Verify unit test suite (`zig build test`) and full binary protocol integration (`tools/test_server_protocol.js`, `tools/test_server_abort.js`) on both E2B and 12B-it models.
+## 3. Implicit Memory Priming (Subconscious Cosine Resonance)
+- [ ] **Background Cosine Resonance Scan:** On each conversational turn, compute fast GEMV cosine similarity between the current Layer 47 hidden state and stored episodic memory centroids.
+- [ ] **Tier 3 Asymmetric Injection:** Populate the Top-128 most resonant latent diffs directly into Tier 3 slots of upper reasoning layers (16–47) prior to generation.
+- [ ] **Zero-Cost Priming:** Verify that implicit priming occurs with zero token generation cost and zero prompt clutter.
+- [ ] **Latency Benchmark:** Ensure background implicit resonance scan adds $< 0.1\text{ms}$ per conversational turn.
 
 ---
 
-## 4. Interactive Node.js TUI Application (`@sullux/tui`) [COMPLETED]
-- [x] Create base system prompt kernel in `PROMPT_KERNEL.md` defining model persona, dual-channel reasoning, explicit memory recall, and live terminal control plane.
-- [x] Implement pure JavaScript TUI client harness in `tui/` with zero external dependencies (linking local `@sullux/tui`).
-- [x] Built binary framing client (`tui/lib/client/index.js`, `tui/lib/protocol/framing.js`) communicating over STDIN/STDOUT binary pipe with `./zig-out/bin/infer --serve`.
-- [x] Built Virtual Terminal Buffer (VTB) with in-memory 2D active viewport ($30 \times 100$) and 5,000-line scrollback history (`tui/lib/terminal/buffer.js`, `tui/lib/terminal/session.js`).
-- [x] Implemented cognitive tool catalog & stream parser (`tui/lib/tools/index.js`, `tui/lib/tools/parser.js`):
-  - `recall`: Explicit memory queries via `OP_MEM_QUERY`.
-  - `terminal_write`, `terminal_read`, `terminal_search`, `terminal_key`, `terminal_reset`: Full virtual terminal control plane.
-  - `set_timer`, `cancel_timer`: Asynchronous cognitive wake-up notifications (`<|notification|>TIMER: note<|end_notification|>`).
-- [x] Built declarative double-buffered UI (`tui/view.yaml`, `tui/theme.yaml`) with split panels for Thinking Scratchpad, Dialogue Stream, Terminal Viewport, Input Bar, and Status Telemetry.
-- [x] Verified unit test suite with 100% pass rate (`tui/test/*.test.js`) and confirmed all JS files are strictly under 100 lines.
+## 4. Explicit Latent Recall & Dual-Track Temporal Tooling
+- [ ] **Canonical Tool Definition:** Update the `recall` tool definition in `tui/PROMPT_KERNEL.md` with full parameters (`query`, `mode`, `continuation_token`).
+- [ ] **Wire Protocol Extensions:** Support explicit memory query and rehydration opcodes in `src/protocol.zig` and `src/server.zig`.
+- [ ] **Direct-to-Layer Latent Rehydration:** Implement zero-FLOP memory-mapped copy (`memcpy` / GPU UMA blit) of pre-RoPE $(K_l, V_l)$ slices directly into active sliding ring slots.
+- [ ] **RoPE Re-Anchoring:** Apply 2D rotary position rotations at current operational clock coordinates ($t_{\text{current}}$) to maintain mathematically sharp, decoherence-free self-attention.
+- [ ] **Dual-Track Temporal Framing:** Return lightweight JSON control receipts containing exact epoch timestamps, original creation clocks, elapsed time, and continuation tokens to keep the `<|think|>` channel temporally grounded.
+- [ ] **TUI Tool Integration:** Wire `recall` tool handler in `tui/lib/tools/index.js` and controller loop.
 
 ---
 
