@@ -65,9 +65,14 @@ pub const Sampler = struct {
         }
 
         if (self.repeat_penalty > 1.0 and recent_tokens != null) {
-            for (recent_tokens.?) |tok| {
-                // Don't penalize newlines, special tokens, or single ASCII character pieces
-                if (tok < 256 or (tok >= 236736 and tok <= 236888)) continue;
+            for (recent_tokens.?, 0..) |tok, i| {
+                if (tok < 256 or tok == 236743 or tok == 236789) continue;
+
+                var already_seen = false;
+                for (recent_tokens.?[0..i]) |prev| {
+                    if (prev == tok) { already_seen = true; break; }
+                }
+                if (already_seen) continue;
 
                 if (tok < logits.len) {
                     if (logits[tok] > 0.0) {
@@ -139,10 +144,22 @@ pub const Sampler = struct {
 
         const r = self.prng.random().float(f32) * cum_p;
         var acc: f32 = 0.0;
+        var chosen_id = candidates[0].id;
         for (0..cutoff) |i| {
             acc += probs[i];
-            if (acc >= r) return candidates[i].id;
+            if (acc >= r) {
+                chosen_id = candidates[i].id;
+                break;
+            }
         }
-        return candidates[0].id;
+
+        if (candidates[0].id == 236757 or candidates[0].id == 236751 or candidates[1].id == 236757 or candidates[1].id == 236751) {
+            std.debug.print("\n[Sampler contraction choice: chosen={d} (r={d:.4} of {d:.4})]\n", .{ chosen_id, r, cum_p });
+            for (0..@min(5, cutoff)) |i| {
+                std.debug.print("  cand[{d}]: id={d:<8} raw={d:<8.4} prob={d:<8.4}\n", .{ i, candidates[i].id, candidates[i].val, probs[i] });
+            }
+        }
+
+        return chosen_id;
     }
 };

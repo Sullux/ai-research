@@ -222,8 +222,8 @@ pub const Server = struct {
                 recent_buf[63] = cur;
             }
 
-            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
-            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
+            if (cur == 100) { self.in_thinking_channel = true; recent_count = 0; cur = self.advanceToken(cur, &.{}); gen_count += 1; continue; }
+            if (cur == 101) { self.in_thinking_channel = false; recent_count = 0; cur = self.advanceToken(cur, &.{}); gen_count += 1; continue; }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
             const str = self.tok.decode(cur);
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
@@ -243,7 +243,7 @@ pub const Server = struct {
     }
 
     fn advanceToken(self: *Server, cur: u32, recent_tokens: []const u32) u32 {
-        const needs_logits = (self.sampler.temp > 0.0 or self.sampler.repeat_penalty > 1.0 or self.gpu_opt == null);
+        const needs_logits = (self.sampler.temp > 0.0 or self.gpu_opt == null);
         const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
         self.clock += 1;
         if (!needs_logits) return next_tok;

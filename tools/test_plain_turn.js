@@ -54,9 +54,9 @@ proc.stdout.on('data', (chunk) => {
     if (opcode === OP_STATUS) {
       const status = payload.readUInt8(0);
       if (status === 0 && promptStart === 0) {
-        console.log(`[ENGINE READY - SENDING PLAIN TEXT: "How are you doing?"]`);
+        console.log(`[ENGINE READY - SENDING PLAIN TEXT: "How are you today?"]`);
         promptStart = Date.now();
-        proc.stdin.write(makeStreamInputFrame("How are you doing?"));
+        proc.stdin.write(makeStreamInputFrame("How are you today?"));
       }
     } else if (opcode === OP_STREAM_THOUGHT) {
       if (firstTokenTime === 0) {
