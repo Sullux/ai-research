@@ -43,9 +43,9 @@ inline fn isExcludedFromRepeatPenalty(tok: u32) bool {
     if (tok < 256) return true;
     return switch (tok) {
         // Punctuation & Quotes
-        623, 236743, 236761, 236764, 236768, 236772, 236779, 236787, 236788, 236789, 236799, 236881 => true,
+        623, 236743, 236761, 236764, 236768, 236787, 236788, 236789, 236799, 236881 => true,
         // Common Contractions ('m, 's, 't, 'd, 're, 've, 'll)
-        236751, 236752, 236754, 236757, 236798, 236814, 236829 => true,
+        500, 560, 859, 236745, 236751, 236753, 236757 => true,
         else => false,
     };
 }

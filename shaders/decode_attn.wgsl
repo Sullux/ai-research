@@ -14,7 +14,10 @@ struct PushConstants {
 var<push_constant> pc: PushConstants;
 
 var<workgroup> s_Q: array<vec4<f32>, 128>;
-var<workgroup> s_scores: array<f32, 4096>;
+var<workgroup> s_scores: array<f32, 2048>;
+var<workgroup> s_reduce: array<f32, 32>;
+var<workgroup> s_max_val: f32;
+var<workgroup> s_inv_sum: f32;
 
 @compute @workgroup_size(32, 1, 1)
 fn main(
@@ -68,24 +71,51 @@ fn main(
     }
     workgroupBarrier();
 
-    // 2. Softmax over s_scores[0..S-1]
-    if (lane == 0u) {
-        var max_val: f32 = -1e9;
-        for (var i = 0u; i < S; i = i + 1u) {
-            if (s_scores[i] > max_val) {
-                max_val = s_scores[i];
-            }
-        }
-        var sum_exp: f32 = 0.0;
-        for (var i = 0u; i < S; i = i + 1u) {
-            let exp_v = exp(s_scores[i] - max_val);
-            s_scores[i] = exp_v;
-            sum_exp = sum_exp + exp_v;
-        }
-        let inv_sum = 1.0 / (sum_exp + 1e-9);
-        for (var i = 0u; i < S; i = i + 1u) {
-            s_scores[i] = s_scores[i] * inv_sum;
-        }
+    // 2. Wave-Parallel Softmax over s_scores[0..S-1]
+    var local_max: f32 = -1e9;
+    var i = lane;
+    while (i < S) {
+        if (s_scores[i] > local_max) { local_max = s_scores[i]; }
+        i += 32u;
+    }
+    s_reduce[lane] = local_max;
+    workgroupBarrier();
+
+    if (lane < 16u) { if (s_reduce[lane + 16u] > s_reduce[lane]) { s_reduce[lane] = s_reduce[lane + 16u]; } }
+    if (lane < 8u)  { if (s_reduce[lane + 8u] > s_reduce[lane])  { s_reduce[lane] = s_reduce[lane + 8u]; } }
+    if (lane < 4u)  { if (s_reduce[lane + 4u] > s_reduce[lane])  { s_reduce[lane] = s_reduce[lane + 4u]; } }
+    if (lane < 2u)  { if (s_reduce[lane + 2u] > s_reduce[lane])  { s_reduce[lane] = s_reduce[lane + 2u]; } }
+    if (lane < 1u)  { if (s_reduce[lane + 1u] > s_reduce[lane])  { s_reduce[lane] = s_reduce[lane + 1u]; } }
+
+    if (lane == 0u) { s_max_val = s_reduce[0]; }
+    workgroupBarrier();
+
+    let max_val = s_max_val;
+    var local_sum: f32 = 0.0;
+    i = lane;
+    while (i < S) {
+        let exp_v = exp(s_scores[i] - max_val);
+        s_scores[i] = exp_v;
+        local_sum += exp_v;
+        i += 32u;
+    }
+    s_reduce[lane] = local_sum;
+    workgroupBarrier();
+
+    if (lane < 16u) { s_reduce[lane] += s_reduce[lane + 16u]; }
+    if (lane < 8u)  { s_reduce[lane] += s_reduce[lane + 8u]; }
+    if (lane < 4u)  { s_reduce[lane] += s_reduce[lane + 4u]; }
+    if (lane < 2u)  { s_reduce[lane] += s_reduce[lane + 2u]; }
+    if (lane < 1u)  { s_reduce[lane] += s_reduce[lane + 1u]; }
+
+    if (lane == 0u) { s_inv_sum = 1.0 / (s_reduce[0] + 1e-9); }
+    workgroupBarrier();
+
+    let inv_sum = s_inv_sum;
+    i = lane;
+    while (i < S) {
+        s_scores[i] *= inv_sum;
+        i += 32u;
     }
     workgroupBarrier();
 
