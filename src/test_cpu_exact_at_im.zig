@@ -31,6 +31,8 @@ pub fn main() !void {
     try tp.init(.{ .allocator = allocator, .n_jobs = 16 });
     defer tp.deinit();
 
+    var samp = sampler.Sampler.init(42, 0.0, 1.0);
+
     const kernel_file = try std.fs.cwd().openFile("tui/PROMPT_KERNEL.md", .{});
     defer kernel_file.close();
     const kernel_size = try kernel_file.getEndPos();
@@ -56,30 +58,5 @@ pub fn main() !void {
         clock += 1;
     }
 
-    std.debug.print("\nCPU Decoded tokens:\n", .{});
-    for (0..70) |step| {
-        std.debug.print("step {}: id={} str='{s}'\n", .{ step, cur, tok.decode(cur) });
-        if (cur == tok.eos_token_id or cur == 106) break;
-        cur = m.forwardToken(&ring, &scratch, cur, clock, &tp, null, null, null, true);
-        if (step == 36 or step == 37) {
-            std.debug.print("  [Step {} CPU Logits]:\n", .{step});
-            var top_ids: [5]u32 = undefined;
-            var top_vals: [5]f32 = undefined;
-            for (0..5) |k| {
-                var max_v: f32 = -1e9;
-                var max_idx: u32 = 0;
-                for (scratch.logits, 0..) |v, i| {
-                    var already = false;
-                    for (0..k) |prev| { if (top_ids[prev] == i) { already = true; break; } }
-                    if (!already and v > max_v) { max_v = v; max_idx = @intCast(i); }
-                }
-                top_ids[k] = max_idx;
-                top_vals[k] = max_v;
-            }
-            for (0..5) |k| {
-                std.debug.print("    id={} logit={d:.4} str='{s}'\n", .{ top_ids[k], top_vals[k], tok.decode(top_ids[k]) });
-            }
-        }
-        clock += 1;
-    }
+    std.debug.print("Prefill completed. Sampling step 0: id={} str='{s}'\n", .{ cur, tok.decode(cur) });
 }

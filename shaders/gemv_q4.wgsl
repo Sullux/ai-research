@@ -37,29 +37,27 @@ fn main(
             let cur_blk = base_blk + blk_in_wave;
             let blk_off = row_word_offset + cur_blk * 5u;
 
-            let sm = unpack2x16float(W[blk_off]);
+            let s = unpack2x16float(W[blk_off]).x;
             let w_packed = W[blk_off + word_in_blk];
 
             let cur_k_vec = (cur_blk * 32u >> 2u) + vec4_base;
 
-            let n0 = f32(w_packed & 0xFu);
-            let n1 = f32((w_packed >> 4u) & 0xFu);
-            let n2 = f32((w_packed >> 8u) & 0xFu);
-            let n3 = f32((w_packed >> 12u) & 0xFu);
-            let n4 = f32((w_packed >> 16u) & 0xFu);
-            let n5 = f32((w_packed >> 20u) & 0xFu);
-            let n6 = f32((w_packed >> 24u) & 0xFu);
-            let n7 = f32(w_packed >> 28u);
+            let n0 = f32(w_packed & 0xFu) - 8.0;
+            let n1 = f32((w_packed >> 4u) & 0xFu) - 8.0;
+            let n2 = f32((w_packed >> 8u) & 0xFu) - 8.0;
+            let n3 = f32((w_packed >> 12u) & 0xFu) - 8.0;
+            let n4 = f32((w_packed >> 16u) & 0xFu) - 8.0;
+            let n5 = f32((w_packed >> 20u) & 0xFu) - 8.0;
+            let n6 = f32((w_packed >> 24u) & 0xFu) - 8.0;
+            let n7 = f32(w_packed >> 28u) - 8.0;
 
             let v_a = X[x_vec4_base + cur_k_vec + 0u];
             let v_b = X[x_vec4_base + cur_k_vec + 1u];
 
             let sum_nx = n0 * v_a.x + n1 * v_a.y + n2 * v_a.z + n3 * v_a.w +
                          n4 * v_b.x + n5 * v_b.y + n6 * v_b.z + n7 * v_b.w;
-            let sum_x  = (v_a.x + v_a.y + v_a.z + v_a.w) +
-                         (v_b.x + v_b.y + v_b.z + v_b.w);
 
-            thread_acc += (sm.x * sum_nx + sm.y * sum_x);
+            thread_acc += (s * sum_nx);
 
             base_blk += 8u;
         }

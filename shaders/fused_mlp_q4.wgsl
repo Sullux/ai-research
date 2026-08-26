@@ -42,33 +42,33 @@ fn main(
             let cur_blk = base_blk + blk_in_wave;
             let blk_off = row_word_offset + cur_blk * 5u;
 
-            let g_sm = unpack2x16float(W_gate[blk_off]);
+            let g_s = unpack2x16float(W_gate[blk_off]).x;
             let gw_packed = W_gate[blk_off + word_in_blk];
 
-            let u_sm = unpack2x16float(W_up[blk_off]);
+            let u_s = unpack2x16float(W_up[blk_off]).x;
             let uw_packed = W_up[blk_off + word_in_blk];
 
             let cur_k_vec = (cur_blk * 32u >> 2u) + vec4_base;
 
             // Gate nibbles
-            let gn0 = f32(gw_packed & 0xFu);
-            let gn1 = f32((gw_packed >> 4u) & 0xFu);
-            let gn2 = f32((gw_packed >> 8u) & 0xFu);
-            let gn3 = f32((gw_packed >> 12u) & 0xFu);
-            let gn4 = f32((gw_packed >> 16u) & 0xFu);
-            let gn5 = f32((gw_packed >> 20u) & 0xFu);
-            let gn6 = f32((gw_packed >> 24u) & 0xFu);
-            let gn7 = f32(gw_packed >> 28u);
+            let gn0 = f32(gw_packed & 0xFu) - 8.0;
+            let gn1 = f32((gw_packed >> 4u) & 0xFu) - 8.0;
+            let gn2 = f32((gw_packed >> 8u) & 0xFu) - 8.0;
+            let gn3 = f32((gw_packed >> 12u) & 0xFu) - 8.0;
+            let gn4 = f32((gw_packed >> 16u) & 0xFu) - 8.0;
+            let gn5 = f32((gw_packed >> 20u) & 0xFu) - 8.0;
+            let gn6 = f32((gw_packed >> 24u) & 0xFu) - 8.0;
+            let gn7 = f32(gw_packed >> 28u) - 8.0;
 
             // Up nibbles
-            let un0 = f32(uw_packed & 0xFu);
-            let un1 = f32((uw_packed >> 4u) & 0xFu);
-            let un2 = f32((uw_packed >> 8u) & 0xFu);
-            let un3 = f32((uw_packed >> 12u) & 0xFu);
-            let un4 = f32((uw_packed >> 16u) & 0xFu);
-            let un5 = f32((uw_packed >> 20u) & 0xFu);
-            let un6 = f32((uw_packed >> 24u) & 0xFu);
-            let un7 = f32(uw_packed >> 28u);
+            let un0 = f32(uw_packed & 0xFu) - 8.0;
+            let un1 = f32((uw_packed >> 4u) & 0xFu) - 8.0;
+            let un2 = f32((uw_packed >> 8u) & 0xFu) - 8.0;
+            let un3 = f32((uw_packed >> 12u) & 0xFu) - 8.0;
+            let un4 = f32((uw_packed >> 16u) & 0xFu) - 8.0;
+            let un5 = f32((uw_packed >> 20u) & 0xFu) - 8.0;
+            let un6 = f32((uw_packed >> 24u) & 0xFu) - 8.0;
+            let un7 = f32(uw_packed >> 28u) - 8.0;
 
             let v_a = X[cur_k_vec + 0u];
             let v_b = X[cur_k_vec + 1u];
@@ -77,11 +77,9 @@ fn main(
                            gn4 * v_b.x + gn5 * v_b.y + gn6 * v_b.z + gn7 * v_b.w;
             let sum_un_x = un0 * v_a.x + un1 * v_a.y + un2 * v_a.z + un3 * v_a.w +
                            un4 * v_b.x + un5 * v_b.y + un6 * v_b.z + un7 * v_b.w;
-            let sum_x    = (v_a.x + v_a.y + v_a.z + v_a.w) +
-                           (v_b.x + v_b.y + v_b.z + v_b.w);
 
-            gate_acc += (g_sm.x * sum_gn_x + g_sm.y * sum_x);
-            up_acc   += (u_sm.x * sum_un_x + u_sm.y * sum_x);
+            gate_acc += (g_s * sum_gn_x);
+            up_acc   += (u_s * sum_un_x);
 
             base_blk += 8u;
         }

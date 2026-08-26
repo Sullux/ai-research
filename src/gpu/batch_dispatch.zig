@@ -68,10 +68,10 @@ pub fn gpuDispatchPrefillBatch(
         }
 
         const n_tiles: u32 = (N + 7) / 8;
-        const q_tiles: u32 = (q_dim + 3) / 4;
-        const kv_tiles: u32 = (kv_dim + 3) / 4;
-        const h_tiles: u32 = @intCast((H + 3) / 4);
-        const inter_tiles: u32 = @intCast((inter + 3) / 4);
+        const q_tiles: u32 = (q_dim + 7) / 8;
+        const kv_tiles: u32 = (kv_dim + 7) / 8;
+        const h_tiles: u32 = @intCast((H + 7) / 8);
+        const inter_tiles: u32 = @intCast((inter + 7) / 8);
 
         const pc_q = [4]u32{ N, q_dim, @intCast(H), 0 };
         const pc_kv = [4]u32{ N, kv_dim, @intCast(H), 0 };
