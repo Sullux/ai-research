@@ -75,6 +75,14 @@ pub const Sampler = struct {
             if (sup < logits.len) logits[sup] = -1e9;
         }
 
+        const cap: f32 = 30.0;
+        const inv_cap: f32 = 1.0 / cap;
+        for (logits) |*l| {
+            if (l.* > -1e8) {
+                l.* = std.math.tanh(l.* * inv_cap) * cap;
+            }
+        }
+
         if (self.repeat_penalty > 1.0 and recent_tokens != null) {
             for (recent_tokens.?, 0..) |tok, i| {
                 if (isExcludedFromRepeatPenalty(tok)) continue;

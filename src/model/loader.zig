@@ -35,7 +35,7 @@ pub const Model = struct {
         for (0..config.num_hidden_layers) |l| {
             const is_full = (config.layer_types[l] == .full_attention);
             const head_dim = if (is_full) config.global_head_dim else config.head_dim;
-            const rotary_dim = if (is_full) head_dim / 4 else head_dim;
+            const rotary_dim = head_dim;
             const num_kv_heads = if (is_full) config.num_global_key_value_heads else config.num_key_value_heads;
             const q_dim = config.num_attention_heads * head_dim;
             const kv_dim = num_kv_heads * head_dim;

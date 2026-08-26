@@ -6,10 +6,10 @@
   ],
   "runtime": {
     "budget": 512,
-    "temp": 0.7,
+    "temp": 1.0,
     "topP": 0.95,
     "minP": 0.05,
-    "repeatPenalty": 1.1,
+    "repeatPenalty": 1.0,
     "repeatLastN": 64,
     "qThresh": 0.0,
     "maxTokens": 512
