@@ -5,7 +5,7 @@ import path from 'path';
 const MAGIC = 0x53554C58;
 const OP_STREAM_INPUT = 0x0001;
 const OP_SHUTDOWN = 0x000F;
-const OP_STREAM_STATUS = 0x0100;
+const OP_STATUS = 0x0106;
 const OP_STREAM_CONTENT = 0x0101;
 const OP_STREAM_THOUGHT = 0x0102;
 const OP_TURN_COMPLETE = 0x0103;
@@ -51,12 +51,19 @@ proc.stdout.on('data', (chunk) => {
     const payload = rx.subarray(16, 16 + payloadLen);
     rx = rx.subarray(16 + payloadLen);
 
-    if (opcode === OP_STREAM_STATUS) {
+    if (opcode === OP_STATUS) {
       const status = payload.readUInt8(0);
-      const tokSec = payload.readFloatLE(4);
-      const curTok = payload.readUInt32LE(16);
-      const totalTok = payload.readUInt32LE(20);
-      if (status === 1) {
+      const tokSec = payload.readFloatLE(8);
+      const curTok = payload.readUInt32LE(12);
+      const totalTok = payload.readUInt32LE(16);
+      if (status === 0 && promptStart === 0) {
+        const kernelPath = path.resolve('PROMPT_KERNEL.md');
+        const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : '';
+        const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you today?<turn|>\n<|turn>model\n`;
+        console.log(`[ENGINE READY - SENDING FULL 405-TOKEN PROMPT]`);
+        promptStart = Date.now();
+        proc.stdin.write(makeStreamInputFrame(prompt));
+      } else if (status === 1) {
         console.log(`[PREFILL PROGRESS] ${curTok}/${totalTok} tokens (${tokSec.toFixed(1)} tok/s)`);
       }
     } else if (opcode === OP_STREAM_THOUGHT) {
@@ -83,11 +90,4 @@ proc.stdout.on('data', (chunk) => {
   }
 });
 
-setTimeout(() => {
-  const kernelPath = path.resolve('PROMPT_KERNEL.md');
-  const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : '';
-  const prompt = `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\nHow are you today?<turn|>\n<|turn>model\n`;
-  console.log(`[SENDING FULL 405-TOKEN PROMPT]`);
-  promptStart = Date.now();
-  proc.stdin.write(makeStreamInputFrame(prompt));
-}, 6000);
+

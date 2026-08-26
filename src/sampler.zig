@@ -1,7 +1,7 @@
 const std = @import("std");
 const kernels = @import("kernels.zig");
 
-const IndexedLogit = struct {
+pub const IndexedLogit = struct {
     id: u32,
     val: f32,
 };
@@ -20,39 +20,45 @@ fn pushTopK(heap: []IndexedLogit, size: *usize, max_k: usize, item: IndexedLogit
                 idx = parent;
             } else break;
         }
-    } else if (item.val > heap[0].val) {
-        heap[0] = item;
-        var idx: usize = 0;
-        while (true) {
-            const left = 2 * idx + 1;
-            const right = 2 * idx + 2;
-            var smallest = idx;
-            if (left < max_k and heap[left].val < heap[smallest].val) smallest = left;
-            if (right < max_k and heap[right].val < heap[smallest].val) smallest = right;
-            if (smallest != idx) {
-                const tmp = heap[idx];
-                heap[idx] = heap[smallest];
-                heap[smallest] = tmp;
-                idx = smallest;
-            } else break;
-        }
+        return;
+    }
+    if (item.val <= heap[0].val) return;
+    heap[0] = item;
+    var idx: usize = 0;
+    while (true) {
+        const left = 2 * idx + 1;
+        const right = 2 * idx + 2;
+        var smallest = idx;
+        if (left < max_k and heap[left].val < heap[smallest].val) smallest = left;
+        if (right < max_k and heap[right].val < heap[smallest].val) smallest = right;
+        if (smallest == idx) break;
+        const tmp = heap[idx];
+        heap[idx] = heap[smallest];
+        heap[smallest] = tmp;
+        idx = smallest;
     }
 }
 
 pub const Sampler = struct {
     prng: std.Random.DefaultPrng,
-    temp: f32 = 0.7,
+    top_k: u32 = 64,
+    repeat_penalty: f32 = 1.1,
     top_p: f32 = 0.95,
+    min_p: f32 = 0.05,
+    temp: f32 = 1.0,
 
     pub fn init(seed: u64, temp: f32, top_p: f32) Sampler {
         return .{
             .prng = std.Random.DefaultPrng.init(seed),
             .temp = temp,
             .top_p = top_p,
+            .top_k = 64,
+            .repeat_penalty = 1.1,
+            .min_p = 0.05,
         };
     }
 
-    pub fn sample(self: *Sampler, logits: []f32) u32 {
+    pub fn sample(self: *Sampler, logits: []f32, recent_tokens: ?[]const u32) u32 {
         const suppress = [_]u32{ 0, 258882, 258883, 255999, 256000, 256001, 255995, 255996, 255997, 255998 };
         for (suppress) |sup| {
             if (sup < logits.len) logits[sup] = -1e9;
@@ -60,12 +66,25 @@ pub const Sampler = struct {
 
         if (self.temp <= 0.0) return kernels.sampleArgmax(logits);
 
+        if (self.repeat_penalty > 1.0 and recent_tokens != null) {
+            for (recent_tokens.?) |tok| {
+                if (tok < logits.len) {
+                    if (logits[tok] > 0.0) {
+                        logits[tok] /= self.repeat_penalty;
+                    } else {
+                        logits[tok] *= self.repeat_penalty;
+                    }
+                }
+            }
+        }
+
         var top_heap: [64]IndexedLogit = undefined;
         var heap_size: usize = 0;
+        const max_k = @min(64, @as(usize, self.top_k));
 
         for (logits, 0..) |v, i| {
             if (v > -1e8) {
-                pushTopK(&top_heap, &heap_size, 64, .{ .id = @intCast(i), .val = v });
+                pushTopK(&top_heap, &heap_size, max_k, .{ .id = @intCast(i), .val = v });
             }
         }
         if (heap_size == 0) return kernels.sampleArgmax(logits);
@@ -75,17 +94,16 @@ pub const Sampler = struct {
             fn cmp(_: void, a: IndexedLogit, b: IndexedLogit) bool { return a.val > b.val; }
         }.cmp);
 
-        // Apply 30.0 tanh soft-capping and temperature scaling to top-64
         var probs: [64]f32 = undefined;
         var max_scaled: f32 = -1e9;
+        const t = if (self.temp > 0.0) self.temp else 1.0;
         for (candidates, 0..) |cand, i| {
             const capped = 30.0 * std.math.tanh(cand.val / 30.0);
-            const scaled = capped / self.temp;
+            const scaled = capped / t;
             probs[i] = scaled;
             if (scaled > max_scaled) max_scaled = scaled;
         }
 
-        // Softmax over top-64
         var sum: f32 = 0.0;
         for (0..heap_size) |i| {
             probs[i] = @exp(probs[i] - max_scaled);
@@ -93,10 +111,24 @@ pub const Sampler = struct {
         }
         for (0..heap_size) |i| probs[i] /= sum;
 
-        // Top-P cumulative selection
+        // Min-P filter
+        const max_p = probs[0];
+        const p_thresh = max_p * self.min_p;
+        var valid_k: usize = 0;
+        var valid_sum: f32 = 0.0;
+        for (0..heap_size) |i| {
+            if (probs[i] >= p_thresh) {
+                valid_k = i + 1;
+                valid_sum += probs[i];
+            } else break;
+        }
+        if (valid_k == 0) valid_k = 1;
+        for (0..valid_k) |i| probs[i] /= valid_sum;
+
+        // Top-P filter
         var cum_p: f32 = 0.0;
         var cutoff: usize = 0;
-        for (0..heap_size) |i| {
+        for (0..valid_k) |i| {
             cum_p += probs[i];
             cutoff = i + 1;
             if (cum_p >= self.top_p) break;

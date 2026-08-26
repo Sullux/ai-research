@@ -56,7 +56,7 @@ pub fn main() !void {
     clock += tok1.len;
 
     var samp = sampler.Sampler.init(42, 0.0, 1.0);
-    var cur = samp.sample(logits1);
+    var cur = samp.sample(logits1, null);
 
     // Warmup 5 tokens
     for (0..5) |_| {

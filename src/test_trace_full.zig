@@ -71,7 +71,7 @@ pub fn main() !void {
     try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tok1, m.embed_tokens, slots1, clock, 0, logits1, null, null);
     clock += tok1.len;
 
-    var cur = samp.sample(logits1);
+    var cur = samp.sample(logits1, null);
     std.debug.print("\nDecoded tokens:\n", .{});
     for (0..150) |step| {
         std.debug.print("step {}: id={} str='{s}'\n", .{ step, cur, tok.decode(cur) });

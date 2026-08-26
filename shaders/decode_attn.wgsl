@@ -45,24 +45,17 @@ fn main(
         }
 
         sdata_dot[lane] = dot;
-        workgroupBarrier();
-
-        if (lane < 16u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 16u]; }
-        workgroupBarrier();
-        if (lane < 8u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 8u]; }
-        workgroupBarrier();
-        if (lane < 4u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 4u]; }
-        workgroupBarrier();
-        if (lane < 2u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 2u]; }
-        workgroupBarrier();
-        if (lane < 1u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 1u]; }
-        workgroupBarrier();
+        if (lane < 16u) { sdata_dot[lane] += sdata_dot[lane + 16u]; }
+        if (lane < 8u)  { sdata_dot[lane] += sdata_dot[lane + 8u]; }
+        if (lane < 4u)  { sdata_dot[lane] += sdata_dot[lane + 4u]; }
+        if (lane < 2u)  { sdata_dot[lane] += sdata_dot[lane + 2u]; }
+        if (lane < 1u)  { sdata_dot[lane] += sdata_dot[lane + 1u]; }
 
         if (lane == 0u) {
             s_scores[slot_i] = sdata_dot[0] * pc.inv_sqrt_dim;
         }
-        workgroupBarrier();
     }
+    workgroupBarrier();
 
     // 2. Softmax over s_scores[0..S-1]
     if (lane == 0u) {

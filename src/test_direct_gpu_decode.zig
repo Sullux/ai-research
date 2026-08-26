@@ -57,7 +57,7 @@ pub fn main() !void {
     try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tok1, m.embed_tokens, slots1, clock, 0, logits1, null, null);
     clock += tok1.len;
 
-    var cur = samp.sample(logits1);
+    var cur = samp.sample(logits1, null);
     var gen_tokens = std.ArrayList(u32).init(allocator);
     defer gen_tokens.deinit();
 
