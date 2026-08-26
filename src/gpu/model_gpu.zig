@@ -100,9 +100,9 @@ pub const GpuModelContext = struct {
         var cmds: [2]types.VkCommandBuffer = .{ null, null };
         if (ctx.api.vkAllocateCommandBuffers(ctx.device, &cb_info, &cmds) != .SUCCESS) return error.VkCmdBufferAllocFailed;
 
-        const attn_m: quant.QuantMode = if (mode == .q4 or mode == .mixed) .q8 else mode;
-        const mlp_m: quant.QuantMode = if (mode == .q4 or mode == .mixed) .q4 else mode;
-        const down_m: quant.QuantMode = if (mode == .q4 or mode == .mixed) .q8 else mode;
+        const attn_m: quant.QuantMode = if (mode == .mixed) .q8 else mode;
+        const mlp_m: quant.QuantMode = mode;
+        const down_m: quant.QuantMode = if (mode == .mixed) .q8 else mode;
 
         var gpu_layers = try allocator.alloc(GpuLayerWeights, m.layers.len);
         for (m.layers, 0..) |l, i| {

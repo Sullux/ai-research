@@ -112,10 +112,10 @@ pub fn recordForwardGraph(gpu: *model_gpu.GpuModelContext, config: *const model_
     gpu.engine.recordBarrier(cmd_buf);
 
     for (gpu.layers, 0..) |l_gpu, i| {
-        if (i < dense_limit) {
-            recordLayerDirect(gpu, l_gpu, layers[i], config, cmd_buf, i);
-        } else {
+        if (quiescence_thresh > 0.0 and i >= dense_limit) {
             recordLayerIndirect(gpu, l_gpu, layers[i], config, cmd_buf, i, quiescence_thresh);
+        } else {
+            recordLayerDirect(gpu, l_gpu, layers[i], config, cmd_buf, i);
         }
     }
 

@@ -17,8 +17,8 @@ fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
-    let local_row = lid.x >> 5u;
-    let lane = lid.x & 31u;
+    let local_row = lid.x >> 5u;      // 0..3 (4 rows per workgroup)
+    let lane = lid.x & 31u;            // 0..31 (lane in wave)
     let row = wgid.x * 4u + local_row;
 
     let num_blocks = pc.K / 32u;
@@ -92,6 +92,7 @@ fn main(
     s_reduce[lid.x] = thread_acc;
     workgroupBarrier();
 
+    // Reduction across the 32 lanes of this row's wave
     let base = local_row * 32u;
     if (lane < 16u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 16u]; }
     workgroupBarrier();
@@ -104,7 +105,7 @@ fn main(
     if (lane < 1u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 1u]; }
     workgroupBarrier();
 
-    if (lane == 0u && row < pc.M) {
+    if (lane == 0u and row < pc.M) {
         Y[row] = s_reduce[base];
     }
 }

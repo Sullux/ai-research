@@ -1,5 +1,5 @@
 {
-  "modelPath": "../../gemma-4-12B-it",
+  "modelPath": "../../gemma-4-12B-it-qat-q4_0-unquantized",
   "extraArgs": [
     "--gpu",
     "--q4"

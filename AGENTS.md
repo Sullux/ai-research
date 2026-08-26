@@ -91,3 +91,10 @@ If you do not see any of these files in your context, be sure to read them in th
 - `ARCHITECTURE.md`
 - `MODEL_SELECTION.md`
 - `ENGINEERING.md`
+
+## Current Project Goals
+
+- Achieve the same or nearly the same performance as llama.cpp, including ~ 2 second prompt processing and ~ 27 tok/s generation speed at Q4_0 quantization.
+- Do not deviate from llama.cpp's approach in order to ensure speed and correctness.
+- Do not deviate from the python reference implementation in order to ensure correctness with the Gemma 4 family of models.
+- Keep our `ENGINEERING.md` document in mind so that we do not accidentally repeat a failed experiment or break a necessary part of our system.

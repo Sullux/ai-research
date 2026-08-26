@@ -107,20 +107,21 @@ pub const BatchPrefillContext = struct {
         var fence: types.VkFence = null;
         if (ctx.api.vkCreateFence(ctx.device, &fence_info, null, &fence) != .SUCCESS) return error.VkFenceCreationFailed;
 
-        const is_q4 = (quant_mode == .q4 or quant_mode == .mixed);
+        const is_q4 = (quant_mode == .q4);
+        const gemm_pipe = if (is_q4) &p_g4 else &p_g8;
         const mlp_pipe = if (is_q4) &p_mlp4 else &p_mlp8;
-        const down_pipe = &p_g8;
+        const down_pipe = if (is_q4) &p_g4 else &p_g8;
         const b_layers = try allocator.alloc(BatchLayerDescriptors, gpu_layers.len);
         for (gpu_layers, 0..) |l_gpu, i| {
             const next_norm = if (i + 1 < gpu_layers.len) &gpu_layers[i + 1].input_norm else final_norm;
             const d = BatchLayerDescriptors{
                 .input_norm = try desc_mgr.allocateSet(p_rms.desc_set_layout),
-                .q_proj = try desc_mgr.allocateSet(p_g8.desc_set_layout),
-                .k_proj = try desc_mgr.allocateSet(p_g8.desc_set_layout),
-                .v_proj = try desc_mgr.allocateSet(p_g8.desc_set_layout),
+                .q_proj = try desc_mgr.allocateSet(gemm_pipe.desc_set_layout),
+                .k_proj = try desc_mgr.allocateSet(gemm_pipe.desc_set_layout),
+                .v_proj = try desc_mgr.allocateSet(gemm_pipe.desc_set_layout),
                 .qkv_rope = try desc_mgr.allocateSet(p_rope.desc_set_layout),
                 .causal_attn = try desc_mgr.allocateSet(p_attn.desc_set_layout),
-                .o_proj = try desc_mgr.allocateSet(p_g8.desc_set_layout),
+                .o_proj = try desc_mgr.allocateSet(gemm_pipe.desc_set_layout),
                 .post_attn_norm = try desc_mgr.allocateSet(p_rms.desc_set_layout),
                 .pre_ffn_norm = try desc_mgr.allocateSet(p_add.desc_set_layout),
                 .gate_up_proj = try desc_mgr.allocateSet(mlp_pipe.desc_set_layout),

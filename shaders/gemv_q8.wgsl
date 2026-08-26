@@ -10,77 +10,119 @@ struct PushConstants {
 @group(0) @binding(2) var<storage, read_write> Y: array<f32>;
 var<push_constant> pc: PushConstants;
 
-var<workgroup> sdata: array<f32, 128>;
+var<workgroup> s_reduce: array<f32, 128>;
 
 @compute @workgroup_size(128, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
-    let local_row = lid.x >> 5u;
-    let lane = lid.x & 31u;
+    let local_row = lid.x >> 5u;      // 0..3 (4 rows per workgroup)
+    let lane = lid.x & 31u;            // 0..31 (lane in wave)
     let row = wgid.x * 4u + local_row;
 
     let num_blocks = pc.K / 32u;
     let row_word_offset = row * num_blocks * 9u;
-    let lane_word_idx = 1u + (lane >> 2u);
-    let byte_shift = (lane & 3u) * 8u;
 
-    var acc: f32 = 0.0;
+    var thread_acc: f32 = 0.0;
+
     if (row < pc.M) {
-        var b = 0u;
-        while (b < num_blocks) {
-            let bb0 = row_word_offset + b * 9u;
-            let s0 = bitcast<f32>(W[bb0]);
-            let p0 = W[bb0 + lane_word_idx];
-            let raw0 = (p0 >> byte_shift) & 0xFFu;
-            let sb0 = (i32(raw0) << 24) >> 24;
-            let x0 = X[pc.x_offset + b * 32u + lane];
-            acc = acc + f32(sb0) * s0 * x0;
+        var blk = lane;
+        while (blk < num_blocks) {
+            let blk_word_off = row_word_offset + blk * 9u;
+            let s = bitcast<f32>(W[blk_word_off]);
 
-            let bb1 = bb0 + 9u;
-            let s1 = bitcast<f32>(W[bb1]);
-            let p1 = W[bb1 + lane_word_idx];
-            let raw1 = (p1 >> byte_shift) & 0xFFu;
-            let sb1 = (i32(raw1) << 24) >> 24;
-            let x1 = X[pc.x_offset + (b + 1u) * 32u + lane];
-            acc = acc + f32(sb1) * s1 * x1;
+            let w0 = W[blk_word_off + 1u];
+            let w1 = W[blk_word_off + 2u];
+            let w2 = W[blk_word_off + 3u];
+            let w3 = W[blk_word_off + 4u];
+            let w4 = W[blk_word_off + 5u];
+            let w5 = W[blk_word_off + 6u];
+            let w6 = W[blk_word_off + 7u];
+            let w7 = W[blk_word_off + 8u];
 
-            let bb2 = bb0 + 18u;
-            let s2 = bitcast<f32>(W[bb2]);
-            let p2 = W[bb2 + lane_word_idx];
-            let raw2 = (p2 >> byte_shift) & 0xFFu;
-            let sb2 = (i32(raw2) << 24) >> 24;
-            let x2 = X[pc.x_offset + (b + 2u) * 32u + lane];
-            acc = acc + f32(sb2) * s2 * x2;
+            let x_base = pc.x_offset + blk * 32u;
 
-            let bb3 = bb0 + 27u;
-            let s3 = bitcast<f32>(W[bb3]);
-            let p3 = W[bb3 + lane_word_idx];
-            let raw3 = (p3 >> byte_shift) & 0xFFu;
-            let sb3 = (i32(raw3) << 24) >> 24;
-            let x3 = X[pc.x_offset + (b + 3u) * 32u + lane];
-            acc = acc + f32(sb3) * s3 * x3;
+            var sum_wx: f32 = 0.0;
 
-            b = b + 4u;
+            // Word 0 (bytes 0..3)
+            var cur = w0;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + j];
+                cur = cur >> 8u;
+            }
+            // Word 1 (bytes 4..7)
+            cur = w1;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 4u + j];
+                cur = cur >> 8u;
+            }
+            // Word 2 (bytes 8..11)
+            cur = w2;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 8u + j];
+                cur = cur >> 8u;
+            }
+            // Word 3 (bytes 12..15)
+            cur = w3;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 12u + j];
+                cur = cur >> 8u;
+            }
+            // Word 4 (bytes 16..19)
+            cur = w4;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 16u + j];
+                cur = cur >> 8u;
+            }
+            // Word 5 (bytes 20..23)
+            cur = w5;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 20u + j];
+                cur = cur >> 8u;
+            }
+            // Word 6 (bytes 24..27)
+            cur = w6;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 24u + j];
+                cur = cur >> 8u;
+            }
+            // Word 7 (bytes 28..31)
+            cur = w7;
+            for (var j = 0u; j < 4u; j = j + 1u) {
+                let sb = f32((i32(cur & 0xFFu) << 24) >> 24);
+                sum_wx = sum_wx + sb * X[x_base + 28u + j];
+                cur = cur >> 8u;
+            }
+
+            thread_acc = thread_acc + s * sum_wx;
+            blk = blk + 32u;
         }
     }
 
-    sdata[lid.x] = acc;
+    s_reduce[lid.x] = thread_acc;
     workgroupBarrier();
 
-    if (lane < 16u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 16u]; }
+    let base = local_row * 32u;
+    if (lane < 16u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 16u]; }
     workgroupBarrier();
-    if (lane < 8u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 8u]; }
+    if (lane < 8u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 8u]; }
     workgroupBarrier();
-    if (lane < 4u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 4u]; }
+    if (lane < 4u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 4u]; }
     workgroupBarrier();
-    if (lane < 2u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 2u]; }
+    if (lane < 2u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 2u]; }
     workgroupBarrier();
-    if (lane < 1u) { sdata[lid.x] = sdata[lid.x] + sdata[lid.x + 1u]; }
+    if (lane < 1u) { s_reduce[base + lane] = s_reduce[base + lane] + s_reduce[base + lane + 1u]; }
     workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        Y[row] = sdata[lid.x];
+        Y[row] = s_reduce[base];
     }
 }

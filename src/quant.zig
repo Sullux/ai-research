@@ -62,31 +62,27 @@ pub fn quantizeRowQ4_0(dst_words: []u32, src_bf16: []const u16) void {
         const src_blk = src_bf16[b * QK .. (b + 1) * QK];
         const dst_blk = dst_words[b * 5 .. (b + 1) * 5];
 
-        var vmin: f32 = @as(f32, @bitCast(@as(u32, src_blk[0]) << 16));
-        var vmax: f32 = vmin;
+        var amax: f32 = 0.0;
         var vals: [QK]f32 = undefined;
         for (src_blk, 0..) |w, i| {
             const v = @as(f32, @bitCast(@as(u32, w) << 16));
             vals[i] = v;
-            if (v < vmin) vmin = v;
-            if (v > vmax) vmax = v;
+            const abs_v = @abs(v);
+            if (abs_v > amax) amax = abs_v;
         }
 
-        const raw_scale = (vmax - vmin) / 15.0;
-        const scale_f16: f16 = @floatCast(raw_scale);
-        const min_f16: f16 = @floatCast(vmin);
+        const d = amax / 8.0;
+        const id = if (d > 0.0) 1.0 / d else 0.0;
+        const scale_f16: f16 = @floatCast(d);
+        const min_f16: f16 = @floatCast(-8.0 * d);
         const scale_u16: u16 = @bitCast(scale_f16);
         const min_u16: u16 = @bitCast(min_f16);
-
-        const scale: f32 = @floatCast(scale_f16);
-        const min_val: f32 = @floatCast(min_f16);
-        const id = if (scale > 0.0) 1.0 / scale else 0.0;
 
         dst_blk[0] = @as(u32, scale_u16) | (@as(u32, min_u16) << 16);
 
         var nibbles: [32]u8 = undefined;
         for (vals, 0..) |v, i| {
-            const xi = std.math.clamp(@as(i32, @intFromFloat(std.math.round((v - min_val) * id))), 0, 15);
+            const xi = std.math.clamp(@as(i32, @intFromFloat(std.math.round(v * id + 8.0))), 0, 15);
             nibbles[i] = @intCast(xi);
         }
 

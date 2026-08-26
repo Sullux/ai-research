@@ -67,12 +67,18 @@ pub fn gpuDispatchPrefillBatch(
             recordBarrier(gpu, prefill.cmd_buf);
         }
 
-        const n_tiles: u32 = (N + 3) / 4;
+        const n_tiles: u32 = (N + 7) / 8;
+        const q_tiles: u32 = (q_dim + 3) / 4;
+        const kv_tiles: u32 = (kv_dim + 3) / 4;
+        const h_tiles: u32 = @intCast((H + 3) / 4);
+        const inter_tiles: u32 = @intCast((inter + 3) / 4);
+
         const pc_q = [4]u32{ N, q_dim, @intCast(H), 0 };
         const pc_kv = [4]u32{ N, kv_dim, @intCast(H), 0 };
-        prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.q_proj, std.mem.sliceAsBytes(&pc_q), (q_dim + 3) / 4, n_tiles, 1);
-        prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.k_proj, std.mem.sliceAsBytes(&pc_kv), (kv_dim + 3) / 4, n_tiles, 1);
-        prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.v_proj, std.mem.sliceAsBytes(&pc_kv), (kv_dim + 3) / 4, n_tiles, 1);
+        const gemm_pipe = if (prefill.mlp_is_q4) &prefill.pipe_gemm_q4 else &prefill.pipe_gemm_q8;
+        gemm_pipe.record(prefill.cmd_buf, d.q_proj, std.mem.sliceAsBytes(&pc_q), q_tiles, n_tiles, 1);
+        gemm_pipe.record(prefill.cmd_buf, d.k_proj, std.mem.sliceAsBytes(&pc_kv), kv_tiles, n_tiles, 1);
+        gemm_pipe.record(prefill.cmd_buf, d.v_proj, std.mem.sliceAsBytes(&pc_kv), kv_tiles, n_tiles, 1);
         recordBarrier(gpu, prefill.cmd_buf);
 
         const pc_rope = extern struct {
@@ -100,7 +106,7 @@ pub fn gpuDispatchPrefillBatch(
         recordBarrier(gpu, prefill.cmd_buf);
 
         const pc_o = [4]u32{ N, @intCast(H), q_dim, 0 };
-        prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.o_proj, std.mem.sliceAsBytes(&pc_o), @intCast((H + 3) / 4), n_tiles, 1);
+        gemm_pipe.record(prefill.cmd_buf, d.o_proj, std.mem.sliceAsBytes(&pc_o), h_tiles, n_tiles, 1);
         if (l_gpu.has_post_attn_norm) {
             recordBarrier(gpu, prefill.cmd_buf);
             const pc_pan = extern struct { H: u32, eps: f32, N: u32, pad: u32 }{ .H = @intCast(H), .eps = eps, .N = N, .pad = 0 };
@@ -114,14 +120,14 @@ pub fn gpuDispatchPrefillBatch(
 
         const pc_mlp = [4]u32{ N, @intCast(inter), @intCast(H), 0 };
         if (prefill.mlp_is_q4) {
-            prefill.pipe_fused_mlp_q4.record(prefill.cmd_buf, d.gate_up_proj, std.mem.sliceAsBytes(&pc_mlp), @intCast((inter + 3) / 4), n_tiles, 1);
+            prefill.pipe_fused_mlp_q4.record(prefill.cmd_buf, d.gate_up_proj, std.mem.sliceAsBytes(&pc_mlp), inter_tiles, n_tiles, 1);
         } else {
             prefill.pipe_fused_mlp_q8.record(prefill.cmd_buf, d.gate_up_proj, std.mem.sliceAsBytes(&pc_mlp), @intCast(inter), N, 1);
         }
         recordBarrier(gpu, prefill.cmd_buf);
 
         const pc_down = [4]u32{ N, @intCast(H), @intCast(inter), 0 };
-        prefill.pipe_gemm_q8.record(prefill.cmd_buf, d.down_proj, std.mem.sliceAsBytes(&pc_down), @intCast((H + 3) / 4), n_tiles, 1);
+        gemm_pipe.record(prefill.cmd_buf, d.down_proj, std.mem.sliceAsBytes(&pc_down), h_tiles, n_tiles, 1);
         if (l_gpu.has_post_ffn_norm) {
             recordBarrier(gpu, prefill.cmd_buf);
             const pc_pfn_norm = extern struct { H: u32, eps: f32, N: u32, pad: u32 }{ .H = @intCast(H), .eps = eps, .N = N, .pad = 0 };
@@ -133,7 +139,7 @@ pub fn gpuDispatchPrefillBatch(
         prefill.pipe_add_norm.record(prefill.cmd_buf, d.post_ffn_add, std.mem.asBytes(&pc_padd), N, 1, 1);
         recordBarrier(gpu, prefill.cmd_buf);
 
-        if ((i + 1) % 4 == 0 or i + 1 == gpu.layers.len) {
+        if ((i + 1) % 12 == 0 or i + 1 == gpu.layers.len) {
             if (i + 1 == gpu.layers.len and logits_out.len > 0) {
                 const last_tok_off = (N - 1) * H * 4;
                 const copy_region = types_dispatch.VkBufferCopy{ .srcOffset = last_tok_off, .dstOffset = 0, .size = H * 4 };
