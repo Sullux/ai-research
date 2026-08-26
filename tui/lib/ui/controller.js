@@ -19,18 +19,6 @@ const getTerminal = () => session?.buffer.screenText() || ''
 const getStatus = () => store?.state.status || 'Status: Ready'
 const getInput = () => `> ${store?.state.input || ''}█`
 
-const formattedTurn = (text) => {
-  if (isFirstTurn) {
-    isFirstTurn = false
-    const kernelPath = path.resolve(__dirname, '../../PROMPT_KERNEL.md')
-    const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : ''
-    return kernel.length > 0
-      ? `<|turn>system\n<|think|>\n${kernel}\n<turn|>\n<|turn>user\n${text}<turn|>\n<|turn>model\n`
-      : `<|turn>system\n<|think|>\n<turn|>\n<|turn>user\n${text}<turn|>\n<|turn>model\n`
-  }
-  return `<|turn>user\n${text}<turn|>\n<|turn>model\n`
-}
-
 const submitPrompt = () => {
   const text = store?.state.input?.trim()
   if (!text || !client) return
@@ -38,7 +26,7 @@ const submitPrompt = () => {
   store.appendDialogue(`\n> ${text}\n`)
   store.setInput('')
   store.setGenerating(true)
-  client.sendInput(formattedTurn(text))
+  client.sendInput(text)
 }
 
 const abortGeneration = () => {

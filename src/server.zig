@@ -150,8 +150,51 @@ pub const Server = struct {
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
 
+    fn readPromptKernel(self: *Server) ?[]const u8 {
+        const paths = [_][]const u8{ "tui/PROMPT_KERNEL.md", "PROMPT_KERNEL.md" };
+        for (paths) |p| {
+            const file = std.fs.cwd().openFile(p, .{}) catch continue;
+            defer file.close();
+            const size = file.getEndPos() catch continue;
+            if (size > 0 and size < 65536) {
+                const buf = self.allocator.alloc(u8, size) catch continue;
+                const bytes_read = file.readAll(buf) catch { self.allocator.free(buf); continue; };
+                return buf[0..bytes_read];
+            }
+        }
+        return null;
+    }
+
     fn parseTokens(self: *Server, p: []const u8) ![]u32 {
-        if (p[0] == protocol.MODE_TEXT) return self.tok.encode(self.allocator, p[8..], self.clock == 0);
+        if (p[0] == protocol.MODE_TEXT) {
+            const raw_text = p[8..];
+            var pb = std.ArrayList(u8).init(self.allocator);
+            defer pb.deinit();
+
+            if (std.mem.indexOf(u8, raw_text, "<|turn>") != null) {
+                try pb.appendSlice(raw_text);
+                if (std.mem.endsWith(u8, raw_text, "<|turn>model\n") or std.mem.endsWith(u8, raw_text, "<|turn>model")) {
+                    if (!std.mem.endsWith(u8, raw_text, "\n")) try pb.appendSlice("\n");
+                    try pb.appendSlice("<|channel>thought\n");
+                }
+            } else {
+                if (self.clock == 0) {
+                    if (self.readPromptKernel()) |kernel| {
+                        defer self.allocator.free(kernel);
+                        const trimmed = std.mem.trim(u8, kernel, " \t\r\n");
+                        if (trimmed.len > 0) {
+                            try pb.appendSlice("<|turn>system\n<|think|>\n");
+                            try pb.appendSlice(trimmed);
+                            try pb.appendSlice("\n<turn|>\n");
+                        }
+                    }
+                }
+                try pb.appendSlice("<|turn>user\n");
+                try pb.appendSlice(raw_text);
+                try pb.appendSlice("<turn|>\n<|turn>model\n<|channel>thought\n");
+            }
+            return self.tok.encode(self.allocator, pb.items, self.clock == 0);
+        }
         const count = std.mem.readInt(u16, p[2..4], .little);
         const slice: []const u32 = @alignCast(std.mem.bytesAsSlice(u32, p[8 .. 8 + count * 4]));
         const copy = try self.allocator.alloc(u32, slice.len); @memcpy(copy, slice); return copy;
@@ -168,14 +211,9 @@ pub const Server = struct {
                 _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                 self.clock += 1; break;
             }
-            if (cur == 100) {
-                self.in_thinking_channel = true; cur = self.advanceToken(cur);
-                while (cur != 107 and cur != self.tok.eos_token_id and cur != 106 and !self.is_aborted.load(.monotonic)) cur = self.advanceToken(cur);
-                if (cur == 107) cur = self.advanceToken(cur);
-                continue;
-            }
-            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur); continue; }
-            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur); continue; }
+            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur); gen_count += 1; continue; }
+            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur); gen_count += 1; continue; }
+            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur); gen_count += 1; continue; }
             const str = self.tok.decode(cur);
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
