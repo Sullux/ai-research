@@ -5,26 +5,30 @@ struct PushConstants {
 
 @group(0) @binding(0) var<storage, read> W_gate: array<u32>;
 @group(0) @binding(1) var<storage, read> W_up: array<u32>;
-@group(0) @binding(2) var<storage, read> X: array<f32>;
+@group(0) @binding(2) var<storage, read> X: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> Y: array<f32>;
 var<push_constant> pc: PushConstants;
 
-var<workgroup> s_reduce_gate: array<f32, 128>;
-var<workgroup> s_reduce_up: array<f32, 128>;
+var<workgroup> s_reduce_gate: array<f32, 256>;
+var<workgroup> s_reduce_up: array<f32, 256>;
 
 fn gelu_tanh(x: f32) -> f32 {
     let inner = 0.7978845608 * (x + 0.044715 * x * x * x);
     return 0.5 * x * (1.0 + tanh(inner));
 }
 
-@compute @workgroup_size(128, 1, 1)
+@compute @workgroup_size(256, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
-    let local_row = lid.x >> 5u;      // 0..3 (4 rows per workgroup)
+    let local_row = lid.x >> 5u;      // 0..7 (8 rows per workgroup)
     let lane = lid.x & 31u;            // 0..31 (lane in wave)
-    let row = wgid.x * 4u + local_row;
+    let row = wgid.x * 8u + local_row;
+
+    let blk_in_wave = lane >> 2u;     // 0..7 (which of the 8 blocks)
+    let word_in_blk = (lane & 3u) + 1u; // 1..4 (which word in the 32-weight block)
+    let vec4_base = (lane & 3u) * 2u;   // 0, 2, 4, 6 (vec4 offset in 32-float block)
 
     let num_blocks = pc.K / 32u;
     let row_word_offset = row * num_blocks * 5u;
@@ -33,87 +37,53 @@ fn main(
     var up_acc: f32 = 0.0;
 
     if (row < pc.M) {
-        var blk = lane;
-        while (blk < num_blocks) {
-            let blk_word_off = row_word_offset + blk * 5u;
+        var base_blk = 0u;
+        while (base_blk < num_blocks) {
+            let cur_blk = base_blk + blk_in_wave;
+            let blk_off = row_word_offset + cur_blk * 5u;
 
-            let g_sm = unpack2x16float(W_gate[blk_word_off]);
-            let gw0 = W_gate[blk_word_off + 1u];
-            let gw1 = W_gate[blk_word_off + 2u];
-            let gw2 = W_gate[blk_word_off + 3u];
-            let gw3 = W_gate[blk_word_off + 4u];
+            let g_sm = unpack2x16float(W_gate[blk_off]);
+            let gw_packed = W_gate[blk_off + word_in_blk];
 
-            let u_sm = unpack2x16float(W_up[blk_word_off]);
-            let uw0 = W_up[blk_word_off + 1u];
-            let uw1 = W_up[blk_word_off + 2u];
-            let uw2 = W_up[blk_word_off + 3u];
-            let uw3 = W_up[blk_word_off + 4u];
+            let u_sm = unpack2x16float(W_up[blk_off]);
+            let uw_packed = W_up[blk_off + word_in_blk];
 
-            let x_base = blk * 32u;
+            let cur_k_vec = (cur_blk * 32u >> 2u) + vec4_base;
 
-            var sum_g: f32 = 0.0;
-            var sum_u: f32 = 0.0;
-            var sum_x: f32 = 0.0;
+            // Gate nibbles
+            let gn0 = f32(gw_packed & 0xFu);
+            let gn1 = f32((gw_packed >> 4u) & 0xFu);
+            let gn2 = f32((gw_packed >> 8u) & 0xFu);
+            let gn3 = f32((gw_packed >> 12u) & 0xFu);
+            let gn4 = f32((gw_packed >> 16u) & 0xFu);
+            let gn5 = f32((gw_packed >> 20u) & 0xFu);
+            let gn6 = f32((gw_packed >> 24u) & 0xFu);
+            let gn7 = f32(gw_packed >> 28u);
 
-            // Word 0 (0..7)
-            var cur_gw = gw0;
-            var cur_uw = uw0;
-            for (var j = 0u; j < 8u; j = j + 1u) {
-                let gn = f32(cur_gw & 0x0Fu);
-                let un = f32(cur_uw & 0x0Fu);
-                let xv = X[x_base + j];
-                sum_g = sum_g + gn * xv;
-                sum_u = sum_u + un * xv;
-                sum_x = sum_x + xv;
-                cur_gw = cur_gw >> 4u;
-                cur_uw = cur_uw >> 4u;
-            }
+            // Up nibbles
+            let un0 = f32(uw_packed & 0xFu);
+            let un1 = f32((uw_packed >> 4u) & 0xFu);
+            let un2 = f32((uw_packed >> 8u) & 0xFu);
+            let un3 = f32((uw_packed >> 12u) & 0xFu);
+            let un4 = f32((uw_packed >> 16u) & 0xFu);
+            let un5 = f32((uw_packed >> 20u) & 0xFu);
+            let un6 = f32((uw_packed >> 24u) & 0xFu);
+            let un7 = f32(uw_packed >> 28u);
 
-            // Word 1 (8..15)
-            cur_gw = gw1;
-            cur_uw = uw1;
-            for (var j = 0u; j < 8u; j = j + 1u) {
-                let gn = f32(cur_gw & 0x0Fu);
-                let un = f32(cur_uw & 0x0Fu);
-                let xv = X[x_base + 8u + j];
-                sum_g = sum_g + gn * xv;
-                sum_u = sum_u + un * xv;
-                sum_x = sum_x + xv;
-                cur_gw = cur_gw >> 4u;
-                cur_uw = cur_uw >> 4u;
-            }
+            let v_a = X[cur_k_vec + 0u];
+            let v_b = X[cur_k_vec + 1u];
 
-            // Word 2 (16..23)
-            cur_gw = gw2;
-            cur_uw = uw2;
-            for (var j = 0u; j < 8u; j = j + 1u) {
-                let gn = f32(cur_gw & 0x0Fu);
-                let un = f32(cur_uw & 0x0Fu);
-                let xv = X[x_base + 16u + j];
-                sum_g = sum_g + gn * xv;
-                sum_u = sum_u + un * xv;
-                sum_x = sum_x + xv;
-                cur_gw = cur_gw >> 4u;
-                cur_uw = cur_uw >> 4u;
-            }
+            let sum_gn_x = gn0 * v_a.x + gn1 * v_a.y + gn2 * v_a.z + gn3 * v_a.w +
+                           gn4 * v_b.x + gn5 * v_b.y + gn6 * v_b.z + gn7 * v_b.w;
+            let sum_un_x = un0 * v_a.x + un1 * v_a.y + un2 * v_a.z + un3 * v_a.w +
+                           un4 * v_b.x + un5 * v_b.y + un6 * v_b.z + un7 * v_b.w;
+            let sum_x    = (v_a.x + v_a.y + v_a.z + v_a.w) +
+                           (v_b.x + v_b.y + v_b.z + v_b.w);
 
-            // Word 3 (24..31)
-            cur_gw = gw3;
-            cur_uw = uw3;
-            for (var j = 0u; j < 8u; j = j + 1u) {
-                let gn = f32(cur_gw & 0x0Fu);
-                let un = f32(cur_uw & 0x0Fu);
-                let xv = X[x_base + 24u + j];
-                sum_g = sum_g + gn * xv;
-                sum_u = sum_u + un * xv;
-                sum_x = sum_x + xv;
-                cur_gw = cur_gw >> 4u;
-                cur_uw = cur_uw >> 4u;
-            }
+            gate_acc += (g_sm.x * sum_gn_x + g_sm.y * sum_x);
+            up_acc   += (u_sm.x * sum_un_x + u_sm.y * sum_x);
 
-            gate_acc = gate_acc + (g_sm.x * sum_g + g_sm.y * sum_x);
-            up_acc = up_acc + (u_sm.x * sum_u + u_sm.y * sum_x);
-            blk = blk + 32u;
+            base_blk += 8u;
         }
     }
 
@@ -123,34 +93,32 @@ fn main(
 
     let base = local_row * 32u;
     if (lane < 16u) {
-        s_reduce_gate[base + lane] = s_reduce_gate[base + lane] + s_reduce_gate[base + lane + 16u];
-        s_reduce_up[base + lane] = s_reduce_up[base + lane] + s_reduce_up[base + lane + 16u];
+        s_reduce_gate[base + lane] += s_reduce_gate[base + lane + 16u];
+        s_reduce_up[base + lane] += s_reduce_up[base + lane + 16u];
     }
     workgroupBarrier();
     if (lane < 8u) {
-        s_reduce_gate[base + lane] = s_reduce_gate[base + lane] + s_reduce_gate[base + lane + 8u];
-        s_reduce_up[base + lane] = s_reduce_up[base + lane] + s_reduce_up[base + lane + 8u];
+        s_reduce_gate[base + lane] += s_reduce_gate[base + lane + 8u];
+        s_reduce_up[base + lane] += s_reduce_up[base + lane + 8u];
     }
     workgroupBarrier();
     if (lane < 4u) {
-        s_reduce_gate[base + lane] = s_reduce_gate[base + lane] + s_reduce_gate[base + lane + 4u];
-        s_reduce_up[base + lane] = s_reduce_up[base + lane] + s_reduce_up[base + lane + 4u];
+        s_reduce_gate[base + lane] += s_reduce_gate[base + lane + 4u];
+        s_reduce_up[base + lane] += s_reduce_up[base + lane + 4u];
     }
     workgroupBarrier();
     if (lane < 2u) {
-        s_reduce_gate[base + lane] = s_reduce_gate[base + lane] + s_reduce_gate[base + lane + 2u];
-        s_reduce_up[base + lane] = s_reduce_up[base + lane] + s_reduce_up[base + lane + 2u];
+        s_reduce_gate[base + lane] += s_reduce_gate[base + lane + 2u];
+        s_reduce_up[base + lane] += s_reduce_up[base + lane + 2u];
     }
     workgroupBarrier();
     if (lane < 1u) {
-        s_reduce_gate[base + lane] = s_reduce_gate[base + lane] + s_reduce_gate[base + lane + 1u];
-        s_reduce_up[base + lane] = s_reduce_up[base + lane] + s_reduce_up[base + lane + 1u];
+        s_reduce_gate[base + lane] += s_reduce_gate[base + lane + 1u];
+        s_reduce_up[base + lane] += s_reduce_up[base + lane + 1u];
     }
     workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        let g_val = s_reduce_gate[base];
-        let u_val = s_reduce_up[base];
-        Y[row] = gelu_tanh(g_val) * u_val;
+        Y[row] = gelu_tanh(s_reduce_gate[base]) * s_reduce_up[base];
     }
 }

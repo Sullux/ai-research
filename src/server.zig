@@ -194,7 +194,10 @@ pub const Server = struct {
     }
 
     fn advanceToken(self: *Server, cur: u32) u32 {
-        _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1; return self.sampler.sample(self.scratch.logits);
+        const needs_logits = (self.sampler.temp > 0.0 or self.gpu_opt == null);
+        const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
+        self.clock += 1;
+        if (!needs_logits) return next_tok;
+        return self.sampler.sample(self.scratch.logits);
     }
 };

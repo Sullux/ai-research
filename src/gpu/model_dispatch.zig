@@ -60,16 +60,16 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
         .targets = std.mem.zeroes([16]u32),
     };
     pc_gate.targets[0] = 1;
-    pc_gate.targets[1] = @intCast((q_dim + 3) / 4);
-    pc_gate.targets[2] = @intCast((kv_dim + 3) / 4);
-    pc_gate.targets[3] = @intCast((kv_dim + 3) / 4);
+    pc_gate.targets[1] = @intCast((q_dim + 7) / 8);
+    pc_gate.targets[2] = @intCast((kv_dim + 7) / 8);
+    pc_gate.targets[3] = @intCast((kv_dim + 7) / 8);
     pc_gate.targets[4] = @intCast(config.num_attention_heads + l_cpu.num_kv_heads);
     pc_gate.targets[5] = @intCast(config.num_attention_heads);
-    pc_gate.targets[6] = @intCast((H + 3) / 4);
+    pc_gate.targets[6] = @intCast((H + 7) / 8);
     pc_gate.targets[7] = 1;
     pc_gate.targets[8] = 1;
-    pc_gate.targets[9] = @intCast((inter + 3) / 4);
-    pc_gate.targets[10] = @intCast((H + 3) / 4);
+    pc_gate.targets[9] = @intCast((inter + 7) / 8);
+    pc_gate.targets[10] = @intCast((H + 7) / 8);
     pc_gate.targets[11] = 1;
     pc_gate.targets[12] = 1;
 
@@ -140,7 +140,7 @@ pub fn gpuDispatchForwardToken(gpu: *model_gpu.GpuModelContext, config: *const m
     params[2] = @intCast(active_slots.len);
     params[3] = 0;
 
-    const cmd_buf = if (logits.len >= V) gpu.cmd_buf_decode else gpu.cmd_buf_prefill;
+    const cmd_buf = if (logits.len == 0 or logits.len >= V) gpu.cmd_buf_decode else gpu.cmd_buf_prefill;
     gpu.engine.submitPreRecorded(cmd_buf) catch return 0;
-    return if (logits.len >= V) gpu.buf_sampled_token.asSlice(u32)[0] else 0;
+    return gpu.buf_sampled_token.asSlice(u32)[0];
 }

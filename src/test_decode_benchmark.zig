@@ -26,7 +26,7 @@ pub fn main() !void {
     var gpu_ctx = try context.GpuContext.init(allocator);
     defer gpu_ctx.deinit();
 
-    var gpu_model = try model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .q4, 0.0);
+    var gpu_model = try model_gpu.GpuModelContext.init(allocator, &gpu_ctx, &m, config, .q4, 0.001);
     defer gpu_model.deinit();
 
     const max_kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
@@ -35,8 +35,6 @@ pub fn main() !void {
 
     var scratch = try model.ForwardScratch.init(allocator, config);
     defer scratch.deinit(allocator);
-
-    var samp = sampler.Sampler.init(42, 0.0, 1.0);
 
     const p1 = "<|turn>user\nHow are you today?<turn|>\n<|turn>model\n<|channel>thought\n";
     const tok1 = try tok.encode(allocator, p1, true);
@@ -57,25 +55,29 @@ pub fn main() !void {
     try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tok1, m.embed_tokens, slots1, clock, 0, logits1, null, null);
     clock += tok1.len;
 
+    var samp = sampler.Sampler.init(42, 0.0, 1.0);
     var cur = samp.sample(logits1);
-    var gen_tokens = std.ArrayList(u32).init(allocator);
-    defer gen_tokens.deinit();
 
-    std.debug.print("\n=== Direct GPU Decode Loop ===\n", .{});
-    const start_gen = std.time.nanoTimestamp();
-    for (0..150) |_| {
-        try gen_tokens.append(cur);
-        if (cur == tok.eos_token_id or cur == 106) break;
+    // Warmup 5 tokens
+    for (0..5) |_| {
         cur = m.forwardToken(&ring, &scratch, cur, clock, null, null, null, &gpu_model, false);
         clock += 1;
     }
-    const end_gen = std.time.nanoTimestamp();
 
-    for (gen_tokens.items) |t| {
-        std.debug.print("{s}", .{tok.decode(t)});
+    const NUM_TOKENS: usize = 100;
+    const start_ns = std.time.nanoTimestamp();
+    for (0..NUM_TOKENS) |_| {
+        cur = m.forwardToken(&ring, &scratch, cur, clock, null, null, null, &gpu_model, false);
+        clock += 1;
     }
+    const end_ns = std.time.nanoTimestamp();
 
-    const gen_ms = @as(f64, @floatFromInt(end_gen - start_gen)) / 1e6;
-    const tps = (@as(f64, @floatFromInt(gen_tokens.items.len)) / gen_ms) * 1000.0;
-    std.debug.print("\n\nGenerated {} tokens in {d:.2} ms ({d:.2} tok/s)\n", .{ gen_tokens.items.len, gen_ms, tps });
+    const elapsed_ms = @as(f64, @floatFromInt(end_ns - start_ns)) / 1e6;
+    const tok_per_sec = (@as(f64, @floatFromInt(NUM_TOKENS)) / elapsed_ms) * 1000.0;
+    const ms_per_tok = elapsed_ms / @as(f64, @floatFromInt(NUM_TOKENS));
+
+    std.debug.print("\n=== Pure Decode Benchmark (100 tokens) ===\n", .{});
+    std.debug.print("Total Time: {d:.2} ms\n", .{elapsed_ms});
+    std.debug.print("Per-Token Latency: {d:.2} ms\n", .{ms_per_tok});
+    std.debug.print("Decode Speed: {d:.2} tok/s\n", .{tok_per_sec});
 }

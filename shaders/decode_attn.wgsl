@@ -74,11 +74,11 @@ fn main(
         }
         var sum_exp: f32 = 0.0;
         for (var i = 0u; i < S; i = i + 1u) {
-            let exp_val = exp(s_scores[i] - max_val);
-            s_scores[i] = exp_val;
-            sum_exp = sum_exp + exp_val;
+            let exp_v = exp(s_scores[i] - max_val);
+            s_scores[i] = exp_v;
+            sum_exp = sum_exp + exp_v;
         }
-        let inv_sum = 1.0 / sum_exp;
+        let inv_sum = 1.0 / (sum_exp + 1e-9);
         for (var i = 0u; i < S; i = i + 1u) {
             s_scores[i] = s_scores[i] * inv_sum;
         }
@@ -88,23 +88,23 @@ fn main(
     // 3. Weighted sum of V_cache vectors
     var d = lane;
     while (d < D) {
-        var out_val0: f32 = 0.0;
-        var out_val1: f32 = 0.0;
-        var out_val2: f32 = 0.0;
-        var out_val3: f32 = 0.0;
-        for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
-            let physical_slot = Active_slots[slot_i];
+        var acc0: f32 = 0.0;
+        var acc1: f32 = 0.0;
+        var acc2: f32 = 0.0;
+        var acc3: f32 = 0.0;
+        for (var i = 0u; i < S; i = i + 1u) {
+            let physical_slot = Active_slots[i];
             let kv_offset = physical_slot * pc.kv_dim + kv_h * D;
-            let sc = s_scores[slot_i];
-            out_val0 = out_val0 + sc * V_cache[kv_offset + d];
-            out_val1 = out_val1 + sc * V_cache[kv_offset + d + 32u];
-            out_val2 = out_val2 + sc * V_cache[kv_offset + d + 64u];
-            out_val3 = out_val3 + sc * V_cache[kv_offset + d + 96u];
+            let weight = s_scores[i];
+            acc0 = acc0 + weight * V_cache[kv_offset + d];
+            acc1 = acc1 + weight * V_cache[kv_offset + d + 32u];
+            acc2 = acc2 + weight * V_cache[kv_offset + d + 64u];
+            acc3 = acc3 + weight * V_cache[kv_offset + d + 96u];
         }
-        Attn_out[q_offset + d] = out_val0;
-        Attn_out[q_offset + d + 32u] = out_val1;
-        Attn_out[q_offset + d + 64u] = out_val2;
-        Attn_out[q_offset + d + 96u] = out_val3;
+        Attn_out[q_offset + d] = acc0;
+        Attn_out[q_offset + d + 32u] = acc1;
+        Attn_out[q_offset + d + 64u] = acc2;
+        Attn_out[q_offset + d + 96u] = acc3;
         d = d + 128u;
     }
 }

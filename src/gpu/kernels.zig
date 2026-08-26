@@ -81,11 +81,11 @@ pub const GpuEngine = struct {
 
     pub fn recordGemv(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
-        self.gemv_attn_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
+        self.gemv_attn_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 7) / 8), 1, 1);
     }
     pub fn recordGemvMlp(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
-        self.gemv_mlp_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
+        self.gemv_mlp_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 7) / 8), 1, 1);
     }
     pub fn recordGemvIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize, ind: types.VkBuffer, off: u64) void {
         const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
@@ -97,11 +97,11 @@ pub const GpuEngine = struct {
     }
     pub fn recordGemvLogits(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize, x_offset: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k), @intCast(x_offset), 0 };
-        self.gemv_logits_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
+        self.gemv_logits_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 7) / 8), 1, 1);
     }
     pub fn recordGateUpSwiGlu(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };
-        self.gate_up_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 3) / 4), 1, 1);
+        self.gate_up_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 7) / 8), 1, 1);
     }
     pub fn recordGateUpSwiGluIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize, ind: types.VkBuffer, off: u64) void {
         const pc = [_]u32{ @intCast(m), @intCast(k) };

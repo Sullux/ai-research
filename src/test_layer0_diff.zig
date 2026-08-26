@@ -46,7 +46,7 @@ pub fn main() !void {
     const bp = gpu_model.batch_prefill_ctx.?;
     const batch_logits = try allocator.alloc(f32, config.vocab_size);
     defer allocator.free(batch_logits);
-    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits);
+    try batch_dispatch.gpuDispatchPrefillBatch(bp, &gpu_model, &config, m.layers, tokens, m.embed_tokens, slots, 0, 0, batch_logits, null, null);
 
     // Now run serial single-token forward for the same tokens
     var ring2 = try ring_buffer.DynamicRingBuffer.init(allocator, config.num_hidden_layers, max_kv_dim, 32, 512, 96);
