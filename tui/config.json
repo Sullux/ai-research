@@ -6,7 +6,7 @@
   ],
   "runtime": {
     "budget": 512,
-    "temp": 1.0,
+    "temp": 0.7,
     "topP": 0.95,
     "minP": 0.05,
     "repeatPenalty": 1.0,

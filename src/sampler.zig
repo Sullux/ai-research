@@ -125,8 +125,7 @@ pub const Sampler = struct {
         var max_scaled: f32 = -1e9;
         const t = if (self.temp > 0.0) self.temp else 1.0;
         for (candidates, 0..) |cand, i| {
-            const capped = 30.0 * std.math.tanh(cand.val / 30.0);
-            const scaled = capped / t;
+            const scaled = cand.val / t;
             probs[i] = scaled;
             if (scaled > max_scaled) max_scaled = scaled;
         }
