@@ -17,6 +17,19 @@ fn gelu_tanh(x: f32) -> f32 {
     return 0.5 * x * (1.0 + tanh(inner));
 }
 
+fn unpack_dot2(w: u32, v_a: vec4<f32>, v_b: vec4<f32>) -> f32 {
+    let n0 = f32(w & 0xFu) - 8.0;
+    let n1 = f32((w >> 4u) & 0xFu) - 8.0;
+    let n2 = f32((w >> 8u) & 0xFu) - 8.0;
+    let n3 = f32((w >> 12u) & 0xFu) - 8.0;
+    let n4 = f32((w >> 16u) & 0xFu) - 8.0;
+    let n5 = f32((w >> 20u) & 0xFu) - 8.0;
+    let n6 = f32((w >> 24u) & 0xFu) - 8.0;
+    let n7 = f32(w >> 28u) - 8.0;
+    return n0 * v_a.x + n1 * v_a.y + n2 * v_a.z + n3 * v_a.w +
+           n4 * v_b.x + n5 * v_b.y + n6 * v_b.z + n7 * v_b.w;
+}
+
 @compute @workgroup_size(256, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
@@ -26,10 +39,6 @@ fn main(
     let lane = lid.x & 31u;            // 0..31 (lane in wave)
     let row = wgid.x * 8u + local_row;
 
-    let blk_in_wave = lane >> 2u;     // 0..7 (which of the 8 blocks)
-    let word_in_blk = (lane & 3u) + 1u; // 1..4 (which word in the 32-weight block)
-    let vec4_base = (lane & 3u) * 2u;   // 0, 2, 4, 6 (vec4 offset in 32-float block)
-
     let num_blocks = pc.K / 32u;
     let row_word_offset = row * num_blocks * 5u;
 
@@ -37,51 +46,46 @@ fn main(
     var up_acc: f32 = 0.0;
 
     if (row < pc.M) {
-        var base_blk = 0u;
-        while (base_blk < num_blocks) {
-            let cur_blk = base_blk + blk_in_wave;
+        var cur_blk = lane;
+        while (cur_blk < num_blocks) {
             let blk_off = row_word_offset + cur_blk * 5u;
 
             let g_s = unpack2x16float(W_gate[blk_off]).x;
-            let gw_packed = W_gate[blk_off + word_in_blk];
+            let gw0 = W_gate[blk_off + 1u];
+            let gw1 = W_gate[blk_off + 2u];
+            let gw2 = W_gate[blk_off + 3u];
+            let gw3 = W_gate[blk_off + 4u];
 
             let u_s = unpack2x16float(W_up[blk_off]).x;
-            let uw_packed = W_up[blk_off + word_in_blk];
+            let uw0 = W_up[blk_off + 1u];
+            let uw1 = W_up[blk_off + 2u];
+            let uw2 = W_up[blk_off + 3u];
+            let uw3 = W_up[blk_off + 4u];
 
-            let cur_k_vec = (cur_blk * 32u >> 2u) + vec4_base;
+            let x_base = cur_blk * 8u;
+            let va0 = X[x_base + 0u];
+            let vb0 = X[x_base + 1u];
+            let va1 = X[x_base + 2u];
+            let vb1 = X[x_base + 3u];
+            let va2 = X[x_base + 4u];
+            let vb2 = X[x_base + 5u];
+            let va3 = X[x_base + 6u];
+            let vb3 = X[x_base + 7u];
 
-            // Gate nibbles
-            let gn0 = f32(gw_packed & 0xFu) - 8.0;
-            let gn1 = f32((gw_packed >> 4u) & 0xFu) - 8.0;
-            let gn2 = f32((gw_packed >> 8u) & 0xFu) - 8.0;
-            let gn3 = f32((gw_packed >> 12u) & 0xFu) - 8.0;
-            let gn4 = f32((gw_packed >> 16u) & 0xFu) - 8.0;
-            let gn5 = f32((gw_packed >> 20u) & 0xFu) - 8.0;
-            let gn6 = f32((gw_packed >> 24u) & 0xFu) - 8.0;
-            let gn7 = f32(gw_packed >> 28u) - 8.0;
+            let g_dot = unpack_dot2(gw0, va0, vb0) +
+                        unpack_dot2(gw1, va1, vb1) +
+                        unpack_dot2(gw2, va2, vb2) +
+                        unpack_dot2(gw3, va3, vb3);
 
-            // Up nibbles
-            let un0 = f32(uw_packed & 0xFu) - 8.0;
-            let un1 = f32((uw_packed >> 4u) & 0xFu) - 8.0;
-            let un2 = f32((uw_packed >> 8u) & 0xFu) - 8.0;
-            let un3 = f32((uw_packed >> 12u) & 0xFu) - 8.0;
-            let un4 = f32((uw_packed >> 16u) & 0xFu) - 8.0;
-            let un5 = f32((uw_packed >> 20u) & 0xFu) - 8.0;
-            let un6 = f32((uw_packed >> 24u) & 0xFu) - 8.0;
-            let un7 = f32(uw_packed >> 28u) - 8.0;
+            let u_dot = unpack_dot2(uw0, va0, vb0) +
+                        unpack_dot2(uw1, va1, vb1) +
+                        unpack_dot2(uw2, va2, vb2) +
+                        unpack_dot2(uw3, va3, vb3);
 
-            let v_a = X[cur_k_vec + 0u];
-            let v_b = X[cur_k_vec + 1u];
+            gate_acc += (g_s * g_dot);
+            up_acc   += (u_s * u_dot);
 
-            let sum_gn_x = gn0 * v_a.x + gn1 * v_a.y + gn2 * v_a.z + gn3 * v_a.w +
-                           gn4 * v_b.x + gn5 * v_b.y + gn6 * v_b.z + gn7 * v_b.w;
-            let sum_un_x = un0 * v_a.x + un1 * v_a.y + un2 * v_a.z + un3 * v_a.w +
-                           un4 * v_b.x + un5 * v_b.y + un6 * v_b.z + un7 * v_b.w;
-
-            gate_acc += (g_s * sum_gn_x);
-            up_acc   += (u_s * sum_un_x);
-
-            base_blk += 8u;
+            cur_blk += 32u;
         }
     }
 
@@ -117,6 +121,8 @@ fn main(
     workgroupBarrier();
 
     if (lane == 0u && row < pc.M) {
-        Y[row] = gelu_tanh(s_reduce_gate[base]) * s_reduce_up[base];
+        let g_val = gelu_tanh(s_reduce_gate[base]);
+        let u_val = s_reduce_up[base];
+        Y[row] = g_val * u_val;
     }
 }

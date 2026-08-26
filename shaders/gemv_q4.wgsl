@@ -12,6 +12,19 @@ var<push_constant> pc: PushConstants;
 
 var<workgroup> s_reduce: array<f32, 256>;
 
+fn unpack_dot2(w: u32, v_a: vec4<f32>, v_b: vec4<f32>) -> f32 {
+    let n0 = f32(w & 0xFu) - 8.0;
+    let n1 = f32((w >> 4u) & 0xFu) - 8.0;
+    let n2 = f32((w >> 8u) & 0xFu) - 8.0;
+    let n3 = f32((w >> 12u) & 0xFu) - 8.0;
+    let n4 = f32((w >> 16u) & 0xFu) - 8.0;
+    let n5 = f32((w >> 20u) & 0xFu) - 8.0;
+    let n6 = f32((w >> 24u) & 0xFu) - 8.0;
+    let n7 = f32(w >> 28u) - 8.0;
+    return n0 * v_a.x + n1 * v_a.y + n2 * v_a.z + n3 * v_a.w +
+           n4 * v_b.x + n5 * v_b.y + n6 * v_b.z + n7 * v_b.w;
+}
+
 @compute @workgroup_size(256, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
@@ -21,10 +34,6 @@ fn main(
     let lane = lid.x & 31u;            // 0..31 (lane in wave)
     let row = wgid.x * 8u + local_row;
 
-    let blk_in_wave = lane >> 2u;     // 0..7 (which of the 8 blocks)
-    let word_in_blk = (lane & 3u) + 1u; // 1..4 (which word in the 32-weight block)
-    let vec4_base = (lane & 3u) * 2u;   // 0, 2, 4, 6 (vec4 offset in 32-float block)
-
     let num_blocks = pc.K / 32u;
     let row_word_offset = row * num_blocks * 5u;
     let x_vec4_base = pc.x_offset >> 2u;
@@ -32,34 +41,34 @@ fn main(
     var thread_acc: f32 = 0.0;
 
     if (row < pc.M) {
-        var base_blk = 0u;
-        while (base_blk < num_blocks) {
-            let cur_blk = base_blk + blk_in_wave;
+        var cur_blk = lane;
+        while (cur_blk < num_blocks) {
             let blk_off = row_word_offset + cur_blk * 5u;
-
             let s = unpack2x16float(W[blk_off]).x;
-            let w_packed = W[blk_off + word_in_blk];
 
-            let cur_k_vec = (cur_blk * 32u >> 2u) + vec4_base;
+            let w0 = W[blk_off + 1u];
+            let w1 = W[blk_off + 2u];
+            let w2 = W[blk_off + 3u];
+            let w3 = W[blk_off + 4u];
 
-            let n0 = f32(w_packed & 0xFu) - 8.0;
-            let n1 = f32((w_packed >> 4u) & 0xFu) - 8.0;
-            let n2 = f32((w_packed >> 8u) & 0xFu) - 8.0;
-            let n3 = f32((w_packed >> 12u) & 0xFu) - 8.0;
-            let n4 = f32((w_packed >> 16u) & 0xFu) - 8.0;
-            let n5 = f32((w_packed >> 20u) & 0xFu) - 8.0;
-            let n6 = f32((w_packed >> 24u) & 0xFu) - 8.0;
-            let n7 = f32(w_packed >> 28u) - 8.0;
+            let x_base = x_vec4_base + cur_blk * 8u;
+            let va0 = X[x_base + 0u];
+            let vb0 = X[x_base + 1u];
+            let va1 = X[x_base + 2u];
+            let vb1 = X[x_base + 3u];
+            let va2 = X[x_base + 4u];
+            let vb2 = X[x_base + 5u];
+            let va3 = X[x_base + 6u];
+            let vb3 = X[x_base + 7u];
 
-            let v_a = X[x_vec4_base + cur_k_vec + 0u];
-            let v_b = X[x_vec4_base + cur_k_vec + 1u];
+            let dot_sum = unpack_dot2(w0, va0, vb0) +
+                          unpack_dot2(w1, va1, vb1) +
+                          unpack_dot2(w2, va2, vb2) +
+                          unpack_dot2(w3, va3, vb3);
 
-            let sum_nx = n0 * v_a.x + n1 * v_a.y + n2 * v_a.z + n3 * v_a.w +
-                         n4 * v_b.x + n5 * v_b.y + n6 * v_b.z + n7 * v_b.w;
+            thread_acc += (s * dot_sum);
 
-            thread_acc += (s * sum_nx);
-
-            base_blk += 8u;
+            cur_blk += 32u;
         }
     }
 
