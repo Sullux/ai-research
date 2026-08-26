@@ -36,11 +36,14 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     proc.stdout.on('data', (chunk) => {
       rxBuf = Buffer.concat([rxBuf, chunk])
       let parsed = parsedFrame(rxBuf)
+      let count = 0
       while (parsed) {
         rxBuf = parsed.rest
         handleFrame(parsed.header, parsed.payload)
+        count++
         parsed = parsedFrame(rxBuf)
       }
+      if (count > 0) emitter.emit('drain')
     })
     proc.on('close', (code) => emitter.emit('exit', { code }))
     proc.on('error', (err) => emitter.emit('error', { error: err.message }))

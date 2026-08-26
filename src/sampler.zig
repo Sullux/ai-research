@@ -153,13 +153,6 @@ pub const Sampler = struct {
             }
         }
 
-        if (candidates[0].id == 236757 or candidates[0].id == 236751 or candidates[1].id == 236757 or candidates[1].id == 236751) {
-            std.debug.print("\n[Sampler contraction choice: chosen={d} (r={d:.4} of {d:.4})]\n", .{ chosen_id, r, cum_p });
-            for (0..@min(5, cutoff)) |i| {
-                std.debug.print("  cand[{d}]: id={d:<8} raw={d:<8.4} prob={d:<8.4}\n", .{ i, candidates[i].id, candidates[i].val, probs[i] });
-            }
-        }
-
         return chosen_id;
     }
 };

@@ -48,16 +48,29 @@ const main = () => {
     truecolor: true,
   })
 
+  let isDirty = false
+  let redrawPending = false
+  const requestRedraw = () => {
+    isDirty = true
+    if (redrawPending) return
+    redrawPending = true
+    setImmediate(() => {
+      redrawPending = false
+      if (isDirty) {
+        isDirty = false
+        app.redraw()
+      }
+    })
+  }
+
   client.on('thought', ({ text }) => {
     store.appendThought(text.replaceAll('\u2581', ' '))
-    app.redraw()
   })
 
   client.on('content', ({ text }) => {
     const clean = text.replaceAll('\u2581', ' ')
     store.appendDialogue(clean)
     parser.ingestChunk(clean)
-    app.redraw()
   })
 
   client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, tokSec, currentTok, totalTok }) => {
@@ -69,19 +82,20 @@ const main = () => {
       : (status === 2 ? ` (${currentTok} tok)` : '')
     const rate = tokSec > 0 ? ` | ${tokSec.toFixed(1)} tok/s` : ''
     store.setStatus(`[${devTag}] ${sName}${prog}${rate} | Slots: ${activeSlots} | Memory: ${archivedDiffs} diffs`)
-    app.redraw()
   })
 
   client.on('turnComplete', ({ tokSec, elapsedMs, totalTok }) => {
     store.setGenerating(false)
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
-    app.redraw()
+    requestRedraw()
   })
 
   client.on('memResponse', ({ count, status }) => {
     store.setStatus(`Memory retrieved: ${count} episodes (status: ${status})`)
-    app.redraw()
+    requestRedraw()
   })
+
+  client.on('drain', requestRedraw)
 
   app.onExit(() => {
     session.kill()
