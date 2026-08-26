@@ -39,6 +39,17 @@ fn pushTopK(heap: []IndexedLogit, size: *usize, max_k: usize, item: IndexedLogit
     }
 }
 
+inline fn isExcludedFromRepeatPenalty(tok: u32) bool {
+    if (tok < 256) return true;
+    return switch (tok) {
+        // Punctuation & Quotes
+        623, 236743, 236761, 236764, 236768, 236772, 236779, 236787, 236788, 236789, 236799, 236881 => true,
+        // Common Contractions ('m, 's, 't, 'd, 're, 've, 'll)
+        236751, 236752, 236754, 236757, 236798, 236814, 236829 => true,
+        else => false,
+    };
+}
+
 pub const Sampler = struct {
     prng: std.Random.DefaultPrng,
     top_k: u32 = 64,
@@ -66,7 +77,7 @@ pub const Sampler = struct {
 
         if (self.repeat_penalty > 1.0 and recent_tokens != null) {
             for (recent_tokens.?, 0..) |tok, i| {
-                if (tok < 256 or tok == 236743 or tok == 236789) continue;
+                if (isExcludedFromRepeatPenalty(tok)) continue;
 
                 var already_seen = false;
                 for (recent_tokens.?[0..i]) |prev| {

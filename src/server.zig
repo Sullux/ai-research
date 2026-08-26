@@ -93,9 +93,16 @@ pub const Server = struct {
 
     fn handleSetConfig(self: *Server, p: []const u8) void {
         if (p.len < 20) return;
-        self.temp = @bitCast(std.mem.readInt(u32, p[4..8], .little)); self.top_p = @bitCast(std.mem.readInt(u32, p[8..12], .little));
-        self.sampler.temp = self.temp; self.sampler.top_p = self.top_p;
-        self.q_tracker.config.threshold = @bitCast(std.mem.readInt(u32, p[12..16], .little)); self.max_tokens = std.mem.readInt(u32, p[16..20], .little);
+        self.temp = @bitCast(std.mem.readInt(u32, p[4..8], .little));
+        self.top_p = @bitCast(std.mem.readInt(u32, p[8..12], .little));
+        self.sampler.temp = self.temp;
+        self.sampler.top_p = self.top_p;
+        self.q_tracker.config.threshold = @bitCast(std.mem.readInt(u32, p[12..16], .little));
+        self.max_tokens = std.mem.readInt(u32, p[16..20], .little);
+        if (p.len >= 28) {
+            self.sampler.min_p = @bitCast(std.mem.readInt(u32, p[20..24], .little));
+            self.sampler.repeat_penalty = @bitCast(std.mem.readInt(u32, p[24..28], .little));
+        }
     }
 
     fn handleMemQuery(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
@@ -227,7 +234,7 @@ pub const Server = struct {
 
     fn decodeResponse(self: *Server, msg_id: u16, first_token: u32, writer: anytype, diff_count: u16, is_gpu: u8) !void {
         var cur = first_token;
-        const start = std.time.milliTimestamp();
+        var start: i64 = 0;
         var gen_count: u32 = 0;
         var reason: u8 = protocol.STOP_END_OF_TURN;
         var recent_buf: [64]u32 = undefined;
@@ -239,6 +246,8 @@ pub const Server = struct {
                 _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                 self.clock += 1; break;
             }
+
+            if (start == 0) start = std.time.milliTimestamp();
 
             if (recent_count < 64) {
                 recent_buf[recent_count] = cur;
@@ -258,13 +267,16 @@ pub const Server = struct {
             gen_count += 1;
             if (gen_count % 8 == 0) {
                 const el = @max(1, std.time.milliTimestamp() - start);
-                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(gen_count)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, gen_count, @intCast(self.max_tokens), is_gpu);
+                const dividend = if (gen_count > 1) gen_count - 1 else gen_count;
+                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, gen_count, @intCast(self.max_tokens), is_gpu);
                 writer.flush();
             }
             cur = self.advanceToken(cur, recent_buf[0..recent_count]);
         }
-        const elapsed: u32 = @intCast(@max(1, std.time.milliTimestamp() - start));
-        const tok_sec = (@as(f32, @floatFromInt(gen_count)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
+        const now = std.time.milliTimestamp();
+        const elapsed: u32 = @intCast(@max(1, now - (if (start > 0) start else now)));
+        const dividend = if (gen_count > 1) gen_count - 1 else gen_count;
+        const tok_sec = (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
         try protocol.writeTurnComplete(writer, msg_id, gen_count, elapsed, tok_sec, reason);
         try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, gen_count, gen_count, is_gpu);
         writer.flush();
