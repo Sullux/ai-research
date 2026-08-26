@@ -64,10 +64,11 @@ pub const Sampler = struct {
             if (sup < logits.len) logits[sup] = -1e9;
         }
 
-        if (self.temp <= 0.0) return kernels.sampleArgmax(logits);
-
         if (self.repeat_penalty > 1.0 and recent_tokens != null) {
             for (recent_tokens.?) |tok| {
+                // Don't penalize newlines, special tokens, or single ASCII character pieces
+                if (tok < 256 or (tok >= 236736 and tok <= 236888)) continue;
+
                 if (tok < logits.len) {
                     if (logits[tok] > 0.0) {
                         logits[tok] /= self.repeat_penalty;
@@ -77,6 +78,8 @@ pub const Sampler = struct {
                 }
             }
         }
+
+        if (self.temp <= 0.0) return kernels.sampleArgmax(logits);
 
         var top_heap: [64]IndexedLogit = undefined;
         var heap_size: usize = 0;

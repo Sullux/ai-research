@@ -173,9 +173,8 @@ pub const Server = struct {
 
             if (std.mem.indexOf(u8, raw_text, "<|turn>") != null) {
                 try pb.appendSlice(raw_text);
-                if (std.mem.endsWith(u8, raw_text, "<|turn>model\n") or std.mem.endsWith(u8, raw_text, "<|turn>model")) {
-                    if (!std.mem.endsWith(u8, raw_text, "\n")) try pb.appendSlice("\n");
-                    try pb.appendSlice("<|channel>thought\n");
+                if (std.mem.endsWith(u8, raw_text, "<|turn>model")) {
+                    try pb.appendSlice("\n");
                 }
             } else {
                 if (self.clock == 0) {
@@ -205,15 +204,27 @@ pub const Server = struct {
         const start = std.time.milliTimestamp();
         var gen_count: u32 = 0;
         var reason: u8 = protocol.STOP_END_OF_TURN;
+        var recent_buf: [64]u32 = undefined;
+        var recent_count: usize = 0;
+
         for (0..self.max_tokens) |_| {
             if (self.is_aborted.load(.monotonic)) { reason = protocol.STOP_ABORTED; break; }
             if (cur == self.tok.eos_token_id or cur == 106) {
                 _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                 self.clock += 1; break;
             }
-            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur); gen_count += 1; continue; }
-            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur); gen_count += 1; continue; }
-            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur); gen_count += 1; continue; }
+
+            if (recent_count < 64) {
+                recent_buf[recent_count] = cur;
+                recent_count += 1;
+            } else {
+                for (0..63) |i| recent_buf[i] = recent_buf[i + 1];
+                recent_buf[63] = cur;
+            }
+
+            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
+            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
+            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
             const str = self.tok.decode(cur);
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
@@ -222,7 +233,7 @@ pub const Server = struct {
                 const el = @max(1, std.time.milliTimestamp() - start);
                 try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(gen_count)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, gen_count, @intCast(self.max_tokens), is_gpu);
             }
-            cur = self.advanceToken(cur);
+            cur = self.advanceToken(cur, recent_buf[0..recent_count]);
         }
         const elapsed: u32 = @intCast(@max(1, std.time.milliTimestamp() - start));
         const tok_sec = (@as(f32, @floatFromInt(gen_count)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
@@ -231,11 +242,11 @@ pub const Server = struct {
         if (self.archive != null and self.hippo != null) _ = self.hippo.?.commit(self.archive.?, self.ring, self.store);
     }
 
-    fn advanceToken(self: *Server, cur: u32) u32 {
-        const needs_logits = (self.sampler.temp > 0.0 or self.gpu_opt == null);
+    fn advanceToken(self: *Server, cur: u32, recent_tokens: []const u32) u32 {
+        const needs_logits = (self.sampler.temp > 0.0 or self.sampler.repeat_penalty > 1.0 or self.gpu_opt == null);
         const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
         self.clock += 1;
         if (!needs_logits) return next_tok;
-        return self.sampler.sample(self.scratch.logits, null);
+        return self.sampler.sample(self.scratch.logits, recent_tokens);
     }
 };

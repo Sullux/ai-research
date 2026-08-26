@@ -5,11 +5,11 @@ struct PushConstants {
     inv_sqrt_dim: f32,
 };
 
-@group(0) @binding(0) var<storage, read> Q: array<f32>;
-@group(0) @binding(1) var<storage, read> K_cache: array<f32>;
-@group(0) @binding(2) var<storage, read> V_cache: array<f32>;
+@group(0) @binding(0) var<storage, read> Q: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> K_cache: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> V_cache: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> Active_slots: array<u32>;
-@group(0) @binding(4) var<storage, read_write> Attn_out: array<f32>;
+@group(0) @binding(4) var<storage, read_write> Attn_out: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> Step_params: array<u32>;
 var<push_constant> pc: PushConstants;
 
@@ -23,33 +23,43 @@ fn main(
 ) {
     let q_head = wgid.x;
     let lane = lid.x;
-    let D = pc.head_dim;
+    let D_vec4 = pc.head_dim >> 2u;
+    let kv_vec4 = pc.kv_dim >> 2u;
     let kv_h = q_head / pc.gqa_ratio;
-    let q_offset = q_head * D;
+    let q_offset = q_head * D_vec4;
 
     let S = Step_params[2];
+
+    // Pre-load Q into registers once for the entire slot sequence
+    let q0 = Q[q_offset + lane];
+    let q1 = Q[q_offset + lane + 32u];
+    var q2 = vec4<f32>(0.0);
+    var q3 = vec4<f32>(0.0);
+    if (D_vec4 == 128u) {
+        q2 = Q[q_offset + lane + 64u];
+        q3 = Q[q_offset + lane + 96u];
+    }
 
     // 1. Compute dot product scores for all active slots
     for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
         let physical_slot = Active_slots[slot_i];
-        let kv_offset = physical_slot * pc.kv_dim + kv_h * D;
+        let kv_offset = physical_slot * kv_vec4 + kv_h * D_vec4;
 
-        var dot: f32 = 0.0;
-        var d = lane;
-        while (d < D) {
-            dot = dot + Q[q_offset + d] * K_cache[kv_offset + d]
-                      + Q[q_offset + d + 32u] * K_cache[kv_offset + d + 32u]
-                      + Q[q_offset + d + 64u] * K_cache[kv_offset + d + 64u]
-                      + Q[q_offset + d + 96u] * K_cache[kv_offset + d + 96u];
-            d = d + 128u;
+        let k0 = K_cache[kv_offset + lane];
+        let k1 = K_cache[kv_offset + lane + 32u];
+        var dot_val = dot(q0, k0) + dot(q1, k1);
+        if (D_vec4 == 128u) {
+            let k2 = K_cache[kv_offset + lane + 64u];
+            let k3 = K_cache[kv_offset + lane + 96u];
+            dot_val = dot_val + dot(q2, k2) + dot(q3, k3);
         }
 
-        sdata_dot[lane] = dot;
-        if (lane < 16u) { sdata_dot[lane] += sdata_dot[lane + 16u]; }
-        if (lane < 8u)  { sdata_dot[lane] += sdata_dot[lane + 8u]; }
-        if (lane < 4u)  { sdata_dot[lane] += sdata_dot[lane + 4u]; }
-        if (lane < 2u)  { sdata_dot[lane] += sdata_dot[lane + 2u]; }
-        if (lane < 1u)  { sdata_dot[lane] += sdata_dot[lane + 1u]; }
+        sdata_dot[lane] = dot_val;
+        if (lane < 16u) { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 16u]; }
+        if (lane < 8u)  { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 8u]; }
+        if (lane < 4u)  { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 4u]; }
+        if (lane < 2u)  { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 2u]; }
+        if (lane < 1u)  { sdata_dot[lane] = sdata_dot[lane] + sdata_dot[lane + 1u]; }
 
         if (lane == 0u) {
             s_scores[slot_i] = sdata_dot[0] * pc.inv_sqrt_dim;
@@ -79,25 +89,33 @@ fn main(
     workgroupBarrier();
 
     // 3. Weighted sum of V_cache vectors
-    var d = lane;
-    while (d < D) {
-        var acc0: f32 = 0.0;
-        var acc1: f32 = 0.0;
-        var acc2: f32 = 0.0;
-        var acc3: f32 = 0.0;
-        for (var i = 0u; i < S; i = i + 1u) {
-            let physical_slot = Active_slots[i];
-            let kv_offset = physical_slot * pc.kv_dim + kv_h * D;
-            let weight = s_scores[i];
-            acc0 = acc0 + weight * V_cache[kv_offset + d];
-            acc1 = acc1 + weight * V_cache[kv_offset + d + 32u];
-            acc2 = acc2 + weight * V_cache[kv_offset + d + 64u];
-            acc3 = acc3 + weight * V_cache[kv_offset + d + 96u];
+    var acc0 = vec4<f32>(0.0);
+    var acc1 = vec4<f32>(0.0);
+    var acc2 = vec4<f32>(0.0);
+    var acc3 = vec4<f32>(0.0);
+
+    for (var slot_i = 0u; slot_i < S; slot_i = slot_i + 1u) {
+        let physical_slot = Active_slots[slot_i];
+        let kv_offset = physical_slot * kv_vec4 + kv_h * D_vec4;
+        let weight = vec4<f32>(s_scores[slot_i]);
+
+        let v0 = V_cache[kv_offset + lane];
+        let v1 = V_cache[kv_offset + lane + 32u];
+        acc0 = fma(weight, v0, acc0);
+        acc1 = fma(weight, v1, acc1);
+
+        if (D_vec4 == 128u) {
+            let v2 = V_cache[kv_offset + lane + 64u];
+            let v3 = V_cache[kv_offset + lane + 96u];
+            acc2 = fma(weight, v2, acc2);
+            acc3 = fma(weight, v3, acc3);
         }
-        Attn_out[q_offset + d] = acc0;
-        Attn_out[q_offset + d + 32u] = acc1;
-        Attn_out[q_offset + d + 64u] = acc2;
-        Attn_out[q_offset + d + 96u] = acc3;
-        d = d + 128u;
+    }
+
+    Attn_out[q_offset + lane] = acc0;
+    Attn_out[q_offset + lane + 32u] = acc1;
+    if (D_vec4 == 128u) {
+        Attn_out[q_offset + lane + 64u] = acc2;
+        Attn_out[q_offset + lane + 96u] = acc3;
     }
 }

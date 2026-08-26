@@ -151,8 +151,8 @@ pub const GpuEngine = struct {
         self.argmax_pipe.record(cmd, set, std.mem.asBytes(&pc), 1, 1, 1);
     }
     pub fn recordBarrier(self: *const GpuEngine, cmd: types.VkCommandBuffer) void {
-        const b = types_dispatch.VkMemoryBarrier{ .srcAccessMask = 0x00008000 | 0x00004000 | 0x00000800 | 0x00000040 | 0x00000020, .dstAccessMask = 0x00008000 | 0x00004000 | 0x00000800 | 0x00000040 | 0x00000020 };
-        self.ctx.api.vkCmdPipelineBarrier(cmd, 0x00010000, 0x00010000, 0, 1, (&b)[0..1].ptr, 0, null, 0, null);
+        const b = types_dispatch.VkMemoryBarrier{ .srcAccessMask = 0x00000020 | 0x00000040, .dstAccessMask = 0x00000020 | 0x00000040 };
+        self.ctx.api.vkCmdPipelineBarrier(cmd, 0x00000800, 0x00000800, 0, 1, (&b)[0..1].ptr, 0, null, 0, null);
     }
     pub fn submitPreRecorded(self: *const GpuEngine, cmd_buf: types.VkCommandBuffer) !void {
         _ = self.ctx.api.vkResetFences(self.ctx.device, 1, (&self.fence)[0..1].ptr);

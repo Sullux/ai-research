@@ -31,7 +31,7 @@ fn main(
     if (q_head >= pc.num_q_heads || t >= pc.N) {
         return;
     }
-    let d = lid.x; // 0..63 (64 x vec4 = 256 dimensions)
+    let d = lid.x; // 0..63
     let kv_h = q_head / pc.gqa_ratio;
 
     // Offsets in units of vec4<f32>
@@ -39,19 +39,21 @@ fn main(
     let q_dim_vec4 = (pc.num_q_heads * pc.head_dim) >> 2u;
     let kv_dim_vec4 = pc.kv_dim >> 2u;
 
-    let q_vec_off = t * q_dim_vec4 + q_head * d_vec4 + d;
-    let q_vec = select(vec4<f32>(0.0), Q[q_vec_off], d < d_vec4);
+    let q_base = t * q_dim_vec4 + q_head * d_vec4;
+    let q0 = select(vec4<f32>(0.0), Q[q_base + d], d < d_vec4);
+    let q1 = select(vec4<f32>(0.0), Q[q_base + d + 64u], (d + 64u) < d_vec4);
 
     let S = pc.num_prev_slots + t + 1u;
 
     // 1. Vectorized Q-K Dot Products
     for (var slot_idx = 0u; slot_idx < S; slot_idx = slot_idx + 1u) {
         let physical_slot = Slots[slot_idx];
-        let k_vec_off = physical_slot * kv_dim_vec4 + kv_h * d_vec4 + d;
-        let k_vec = select(vec4<f32>(0.0), K_cache[k_vec_off], d < d_vec4);
+        let k_base = physical_slot * kv_dim_vec4 + kv_h * d_vec4;
+        let k0 = select(vec4<f32>(0.0), K_cache[k_base + d], d < d_vec4);
+        let k1 = select(vec4<f32>(0.0), K_cache[k_base + d + 64u], (d + 64u) < d_vec4);
 
-        let dot = q_vec.x * k_vec.x + q_vec.y * k_vec.y + q_vec.z * k_vec.z + q_vec.w * k_vec.w;
-        sdata[d] = dot;
+        let dot_val = dot(q0, k0) + dot(q1, k1);
+        sdata[d] = dot_val;
         workgroupBarrier();
 
         if (d < 32u) { sdata[d] += sdata[d + 32u]; }
@@ -109,15 +111,24 @@ fn main(
     }
     workgroupBarrier();
 
-    // 3. Weighted Sum of V cache (64 threads compute 64 x vec4 = 256 dimensions)
-    if (d < d_vec4) {
-        var acc = vec4<f32>(0.0);
-        for (var i = 0u; i < S; i = i + 1u) {
-            let physical_slot = Slots[i];
-            let v_vec_off = physical_slot * kv_dim_vec4 + kv_h * d_vec4 + d;
-            let v_val = V_cache[v_vec_off];
-            acc += s_scores[i] * v_val;
+    // 3. Weighted Sum of V cache (64 threads compute up to 128 x vec4 = 512 dimensions)
+    var acc0 = vec4<f32>(0.0);
+    var acc1 = vec4<f32>(0.0);
+    for (var i = 0u; i < S; i = i + 1u) {
+        let physical_slot = Slots[i];
+        let v_base = physical_slot * kv_dim_vec4 + kv_h * d_vec4;
+        let weight = vec4<f32>(s_scores[i]);
+        if (d < d_vec4) {
+            acc0 = fma(weight, V_cache[v_base + d], acc0);
         }
-        Attn_out[q_vec_off] = acc;
+        if ((d + 64u) < d_vec4) {
+            acc1 = fma(weight, V_cache[v_base + d + 64u], acc1);
+        }
+    }
+    if (d < d_vec4) {
+        Attn_out[q_base + d] = acc0;
+    }
+    if ((d + 64u) < d_vec4) {
+        Attn_out[q_base + d + 64u] = acc1;
     }
 }
