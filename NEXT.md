@@ -14,7 +14,7 @@ This document records the strategic order of operations for completing the Strea
 - [x] **Fused QKV Projection Dispatch in Decode (High ROI ⭐⭐):**
   - Combine separate $Q$, $K$, and $V$ GEMV dispatches into a single fused QKV projection dispatch per layer (using `shaders/fused_qkv_q4.wgsl`).
   - Eliminates 96 Vulkan dispatches and 96 pipeline execution barriers per step, reducing raw GPU decode latency by $\approx 1.5\text{–}2.0\text{ ms}$ (reaching $\approx 26.5\text{–}27.0\text{ tok/s}$).
-- [ ] **2D Shared-Memory Block Tiling in Batch GEMM (High ROI for Prefill ⭐⭐):**
+- [x] **2D Shared-Memory Block Tiling in Batch GEMM (High ROI for Prefill ⭐⭐):**
   - Introduce $16 \times 32$ / $32 \times 32$ 2D block tiling using workgroup shared memory (`var<workgroup>`) in `shaders/batch_gemm_q4.wgsl`.
   - Reuses loaded activation vectors across multiple weight columns, delivering a $2\times\text{–}3\times$ prefill speedup on multi-token prompts and multi-turn prefill without vendor-specific extensions.
 
