@@ -4,14 +4,23 @@ This document records the strategic order of operations for completing the Strea
 
 ---
 
-## 1. 4,096-Slot Layer Buffer & Dynamic 3-Tier Geometry
-- [x] **Fixed Capacity & Dynamic Anchoring:** Update `src/ring_buffer.zig` to enforce strict 4,096-slot capacity per layer and dynamically lock initial system prompt ($N_{\text{sys}} \approx 384$) as immutable Tier 1 anchors.
-- [x] **Depth-Asymmetric Partitioning:**
-  - Lower Layers (0–15): Tier 1 Dynamic Anchors ($N_{\text{sys}}$) $+$ Tier 2 Sliding Ring ($4096 - N_{\text{sys}}$) $+$ Tier 3 ($0$ slots).
-  - Upper Layers (16–47): Tier 1 Dynamic Anchors ($N_{\text{sys}}$) $+$ Tier 2 Sliding Ring ($4096 - N_{\text{sys}} - 128$) $+$ Tier 3 ($128$ recall slots).
-- [x] **Confined Modulo Wrapping:** Ensure write head cycles strictly within Tier 2 $[N_{\text{sys}} \dots N_{\text{sys}} + W - 1]$ via $\text{slot} = N_{\text{sys}} + ((\text{clock} - N_{\text{sys}}) \pmod W)$, never corrupting anchors.
-- [x] **GPU Indirection & Kernel Alignment:** Align GPU KV cache descriptor allocations, push constants, and decode attention gather kernels (`decode_attn.wgsl`) to the 4,096-slot buffer bounds.
-- [x] **Multi-Turn Verification:** Verify multi-turn dialogue beyond token 544 without token repetition loops or prompt eviction.
+## 1. Performance Optimizations
+
+### Recommended High-ROI Optimizations
+- [ ] **GPU-Side Top-64 Logit Softcapping & Reduction (Highest ROI ⭐⭐⭐):**
+  - Apply $\tanh$ logit softcapping directly on GPU and implement a lightweight 2-pass GPU Top-64 reduction shader.
+  - Transfer only 64 candidate token IDs and logits (512 bytes) to the host per step instead of copying the full 1.0 MB (262k floats) logits buffer.
+  - Eliminates host CPU softcapping and 262k-entry heap insertion latency (~10–12 ms per token), boosting end-to-end decode throughput from $\approx 19.4\text{ tok/s}$ to $\approx 25.0\text{ tok/s}$.
+- [ ] **Fused QKV Projection Dispatch in Decode (High ROI ⭐⭐):**
+  - Combine separate $Q$, $K$, and $V$ GEMV dispatches into a single fused QKV projection dispatch per layer (using `shaders/fused_qkv_q4.wgsl`).
+  - Eliminates 96 Vulkan dispatches and 96 pipeline execution barriers per step, reducing raw GPU decode latency by $\approx 1.5\text{–}2.0\text{ ms}$ (reaching $\approx 26.5\text{–}27.0\text{ tok/s}$).
+- [ ] **2D Shared-Memory Block Tiling in Batch GEMM (High ROI for Prefill ⭐⭐):**
+  - Introduce $16 \times 32$ / $32 \times 32$ 2D block tiling using workgroup shared memory (`var<workgroup>`) in `shaders/batch_gemm_q4.wgsl`.
+  - Reuses loaded activation vectors across multiple weight columns, delivering a $2\times\text{–}3\times$ prefill speedup on multi-token prompts and multi-turn prefill without vendor-specific extensions.
+
+### Approaches to Avoid (Low ROI / High Complexity)
+- **Vendor-Specific Cooperative Matrix Extensions (`VK_KHR_cooperative_matrix`):** Avoid driver-specific SPIR-V cooperative matrix intrinsics. They introduce fragile driver dependencies, platform fragmentation across Vulkan implementations, and high maintenance overhead for negligible gain over clean workgroup shared-memory tiling.
+- **Complex Multi-Queue Pipelining:** Avoid overlapping next-token command graph recording and execution across multiple concurrent Vulkan queues. It introduces subtle race condition risks, fence/semaphore synchronization hazards, and high cognitive load for a marginal theoretical latency reduction ($\le 0.5\text{ ms}$).
 
 ---
 
