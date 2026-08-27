@@ -24,6 +24,7 @@ shaders = [
     ("batch_fused_mlp_q8", "BATCH_FUSED_MLP_Q8_SPIRV", "src/gpu/shaders_batch_fused_mlp_q8.zig"),
     ("batch_qkv_rope", "BATCH_QKV_ROPE_SPIRV", "src/gpu/shaders_batch_qkv_rope.zig"),
     ("batch_causal_attn", "BATCH_CAUSAL_ATTN_SPIRV", "src/gpu/shaders_batch_causal_attn.zig"),
+    ("fused_qkv_q4", "FUSED_QKV_Q4_SPIRV", "src/gpu/shaders_fused_qkv_q4.zig"),
     ("topk_pass1", "TOPK_PASS1_SPIRV", "src/gpu/shaders_topk_pass1.zig"),
     ("topk_pass2", "TOPK_PASS2_SPIRV", "src/gpu/shaders_topk_pass2.zig"),
 ]

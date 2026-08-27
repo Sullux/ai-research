@@ -6,6 +6,7 @@ pub const buffer = @import("buffer.zig");
 
 pub const LayerDescriptorSets = struct {
     input_norm: types.VkDescriptorSet,
+    fused_qkv: types.VkDescriptorSet,
     q_proj: types.VkDescriptorSet,
     k_proj: types.VkDescriptorSet,
     v_proj: types.VkDescriptorSet,
@@ -31,6 +32,7 @@ pub const DescriptorManager = struct {
     pub fn allocateLayerSets(self: *DescriptorManager, engine: anytype) !LayerDescriptorSets {
         return .{
             .input_norm = try self.allocateSet(engine.rmsnorm_pipe.desc_set_layout),
+            .fused_qkv = try self.allocateSet(engine.fused_qkv_pipe.desc_set_layout),
             .q_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),
             .k_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),
             .v_proj = try self.allocateSet(engine.gemv_attn_pipe.desc_set_layout),

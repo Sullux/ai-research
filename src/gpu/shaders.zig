@@ -14,6 +14,7 @@ pub const argmax = @import("shaders_argmax.zig");
 pub const quiescence = @import("shaders_quiescence.zig");
 pub const qkv_prep = @import("shaders_qkv_prep.zig");
 pub const qkv_rope = @import("shaders_qkv_rope.zig");
+pub const fused_qkv_q4 = @import("shaders_fused_qkv_q4.zig");
 pub const topk_pass1 = @import("shaders_topk_pass1.zig");
 pub const topk_pass2 = @import("shaders_topk_pass2.zig");
 
@@ -33,5 +34,6 @@ pub const ARGMAX_SPIRV = argmax.ARGMAX_SPIRV;
 pub const QUIESCENCE_GATE_SPIRV = quiescence.QUIESCENCE_GATE_SPIRV;
 pub const QKV_PREP_SPIRV = qkv_prep.QKV_PREP_SPIRV;
 pub const QKV_ROPE_SPIRV = qkv_rope.QKV_ROPE_SPIRV;
+pub const FUSED_QKV_Q4_SPIRV = fused_qkv_q4.FUSED_QKV_Q4_SPIRV;
 pub const TOPK_PASS1_SPIRV = topk_pass1.TOPK_PASS1_SPIRV;
 pub const TOPK_PASS2_SPIRV = topk_pass2.TOPK_PASS2_SPIRV;

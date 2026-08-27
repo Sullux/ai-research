@@ -25,6 +25,7 @@ pub const GpuEngine = struct {
     gate_up_pipe: pipeline.ComputePipeline,
     add_rmsnorm_pipe: pipeline.ComputePipeline,
     rmsnorm_pipe: pipeline.ComputePipeline,
+    fused_qkv_pipe: pipeline.ComputePipeline,
     attn_pipe: pipeline.ComputePipeline,
     qkv_rope_pipe: pipeline.ComputePipeline,
     argmax_pipe: pipeline.ComputePipeline,
@@ -46,6 +47,7 @@ pub const GpuEngine = struct {
         var gate_up = try pipeline.ComputePipeline.init(ctx, gate_up_spirv, 4, 8); errdefer gate_up.deinit();
         var add_rms = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_ADD_RMSNORM_SPIRV, 4, 12); errdefer add_rms.deinit();
         var rms = try pipeline.ComputePipeline.init(ctx, &shaders.RMSNORM_SPIRV, 3, 8); errdefer rms.deinit();
+        var fused_qkv = try pipeline.ComputePipeline.init(ctx, &shaders.FUSED_QKV_Q4_SPIRV, 7, 16); errdefer fused_qkv.deinit();
         var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 6, 16); errdefer attn.deinit();
         var qkv_rope = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_ROPE_SPIRV, 9, 32); errdefer qkv_rope.deinit();
         var argmax = try pipeline.ComputePipeline.init(ctx, &shaders.ARGMAX_SPIRV, 2, 4); errdefer argmax.deinit();
@@ -67,7 +69,7 @@ pub const GpuEngine = struct {
         return .{
             .ctx = ctx, .mode = mode, .gemv_attn_pipe = gemv_attn, .gemv_mlp_pipe = gemv_mlp, .gemv_logits_pipe = gemv_logits,
             .swiglu_pipe = swiglu, .gate_up_pipe = gate_up, .add_rmsnorm_pipe = add_rms,
-            .rmsnorm_pipe = rms, .attn_pipe = attn, .qkv_rope_pipe = qkv_rope,
+            .rmsnorm_pipe = rms, .fused_qkv_pipe = fused_qkv, .attn_pipe = attn, .qkv_rope_pipe = qkv_rope,
             .argmax_pipe = argmax, .topk_pass1_pipe = topk_pass1, .topk_pass2_pipe = topk_pass2, .quiescence_pipe = quiescence,
             .cmd_pool = pool, .cmd_buf = cmd, .fence = fence,
         };
@@ -77,7 +79,7 @@ pub const GpuEngine = struct {
         _ = self.ctx.api.vkQueueWaitIdle(self.ctx.queue);
         self.ctx.api.vkDestroyFence(self.ctx.device, self.fence, null);
         self.ctx.api.vkDestroyCommandPool(self.ctx.device, self.cmd_pool, null);
-        self.qkv_rope_pipe.deinit(); self.attn_pipe.deinit(); self.rmsnorm_pipe.deinit();
+        self.qkv_rope_pipe.deinit(); self.attn_pipe.deinit(); self.fused_qkv_pipe.deinit(); self.rmsnorm_pipe.deinit();
         self.add_rmsnorm_pipe.deinit(); self.gate_up_pipe.deinit(); self.swiglu_pipe.deinit();
         self.gemv_logits_pipe.deinit(); self.gemv_mlp_pipe.deinit(); self.gemv_attn_pipe.deinit(); self.argmax_pipe.deinit();
         self.topk_pass1_pipe.deinit(); self.topk_pass2_pipe.deinit();
@@ -87,6 +89,20 @@ pub const GpuEngine = struct {
     pub fn recordGemv(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };
         self.gemv_attn_pipe.record(cmd, set, std.mem.sliceAsBytes(&pc), @intCast((m + 7) / 8), 1, 1);
+    }
+    pub fn recordFusedQkv(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, q_dim: usize, kv_dim: usize, K: usize) void {
+        const pc = extern struct { q_dim: u32, kv_dim: u32, K: u32, pad: u32 }{
+            .q_dim = @intCast(q_dim), .kv_dim = @intCast(kv_dim), .K = @intCast(K), .pad = 0,
+        };
+        const total_rows = q_dim + kv_dim + kv_dim;
+        const workgroups = (total_rows + 7) / 8;
+        self.fused_qkv_pipe.record(cmd, set, std.mem.asBytes(&pc), @intCast(workgroups), 1, 1);
+    }
+    pub fn recordFusedQkvIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, q_dim: usize, kv_dim: usize, K: usize, ind: types.VkBuffer, off: u64) void {
+        const pc = extern struct { q_dim: u32, kv_dim: u32, K: u32, pad: u32 }{
+            .q_dim = @intCast(q_dim), .kv_dim = @intCast(kv_dim), .K = @intCast(K), .pad = 0,
+        };
+        self.fused_qkv_pipe.recordIndirect(cmd, set, std.mem.asBytes(&pc), ind, off);
     }
     pub fn recordGemvMlp(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, m: usize, k: usize) void {
         const pc = [_]u32{ @intCast(m), @intCast(k), 0, 0 };

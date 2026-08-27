@@ -22,9 +22,7 @@ fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerW
         gpu.engine.recordRmsNorm(cmd, l_gpu.desc.input_norm, H, eps);
         gpu.engine.recordBarrier(cmd);
     }
-    gpu.engine.recordGemv(cmd, l_gpu.desc.q_proj, q_dim, H);
-    gpu.engine.recordGemv(cmd, l_gpu.desc.k_proj, kv_dim, H);
-    gpu.engine.recordGemv(cmd, l_gpu.desc.v_proj, kv_dim, H);
+    gpu.engine.recordFusedQkv(cmd, l_gpu.desc.fused_qkv, q_dim, kv_dim, H);
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordQkvRope(cmd, l_gpu.desc.qkv_rope, config.num_attention_heads, l_cpu.num_kv_heads, head_dim, rot_dim, l_cpu.k_eq_v, theta, eps);
     gpu.engine.recordBarrier(cmd);
@@ -56,22 +54,20 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
     const gqa_ratio: u32 = @intCast(config.num_attention_heads / l_cpu.num_kv_heads);
 
     var pc_gate = kernels.QuiescenceGatePushConstants{
-        .hidden_size = @intCast(H), .threshold_sq = thresh, .base_cmd_idx = @intCast(idx * 16), .num_cmds = 13,
+        .hidden_size = @intCast(H), .threshold_sq = thresh, .base_cmd_idx = @intCast(idx * 16), .num_cmds = 11,
         .targets = std.mem.zeroes([16]u32),
     };
     pc_gate.targets[0] = 1;
-    pc_gate.targets[1] = @intCast((q_dim + 7) / 8);
-    pc_gate.targets[2] = @intCast((kv_dim + 7) / 8);
-    pc_gate.targets[3] = @intCast((kv_dim + 7) / 8);
-    pc_gate.targets[4] = @intCast(config.num_attention_heads + l_cpu.num_kv_heads);
-    pc_gate.targets[5] = @intCast(config.num_attention_heads);
-    pc_gate.targets[6] = @intCast((H + 7) / 8);
-    pc_gate.targets[7] = 1;
-    pc_gate.targets[8] = 1;
-    pc_gate.targets[9] = @intCast((inter + 7) / 8);
-    pc_gate.targets[10] = @intCast((H + 7) / 8);
-    pc_gate.targets[11] = 1;
-    pc_gate.targets[12] = 1;
+    pc_gate.targets[1] = @intCast((q_dim + kv_dim + kv_dim + 7) / 8);
+    pc_gate.targets[2] = @intCast(config.num_attention_heads + l_cpu.num_kv_heads);
+    pc_gate.targets[3] = @intCast(config.num_attention_heads);
+    pc_gate.targets[4] = @intCast((H + 7) / 8);
+    pc_gate.targets[5] = 1;
+    pc_gate.targets[6] = 1;
+    pc_gate.targets[7] = @intCast((inter + 7) / 8);
+    pc_gate.targets[8] = @intCast((H + 7) / 8);
+    pc_gate.targets[9] = 1;
+    pc_gate.targets[10] = 1;
 
     gpu.engine.recordQuiescenceGate(cmd, l_gpu.desc.quiescence_gate, &pc_gate);
     gpu.engine.recordBarrier(cmd);
@@ -80,25 +76,23 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
     const base: u64 = @intCast(idx * 16 * 12);
     gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.input_norm, H, eps, buf, base + 0 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.q_proj, q_dim, H, buf, base + 1 * 12);
-    gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.k_proj, kv_dim, H, buf, base + 2 * 12);
-    gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.v_proj, kv_dim, H, buf, base + 3 * 12);
+    gpu.engine.recordFusedQkvIndirect(cmd, l_gpu.desc.fused_qkv, q_dim, kv_dim, H, buf, base + 1 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordQkvRopeIndirect(cmd, l_gpu.desc.qkv_rope, config.num_attention_heads, l_cpu.num_kv_heads, head_dim, rot_dim, l_cpu.k_eq_v, theta, eps, buf, base + 4 * 12);
+    gpu.engine.recordQkvRopeIndirect(cmd, l_gpu.desc.qkv_rope, config.num_attention_heads, l_cpu.num_kv_heads, head_dim, rot_dim, l_cpu.k_eq_v, theta, eps, buf, base + 2 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordDecodeAttnIndirect(cmd, l_gpu.desc.attn, head_dim, kv_dim, gqa_ratio, 1.0, buf, base + 5 * 12);
+    gpu.engine.recordDecodeAttnIndirect(cmd, l_gpu.desc.attn, head_dim, kv_dim, gqa_ratio, 1.0, buf, base + 3 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.o_proj, H, q_dim, buf, base + 6 * 12);
-    if (l_gpu.has_post_attn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.post_attn_norm, H, eps, buf, base + 7 * 12); }
+    gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.o_proj, H, q_dim, buf, base + 4 * 12);
+    if (l_gpu.has_post_attn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.post_attn_norm, H, eps, buf, base + 5 * 12); }
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordAddRmsNormIndirect(cmd, l_gpu.desc.pre_ffn_norm, H, eps, 1.0, buf, base + 8 * 12);
+    gpu.engine.recordAddRmsNormIndirect(cmd, l_gpu.desc.pre_ffn_norm, H, eps, 1.0, buf, base + 6 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordGateUpSwiGluIndirect(cmd, l_gpu.desc.gate_up_swiglu, inter, H, buf, base + 9 * 12);
+    gpu.engine.recordGateUpSwiGluIndirect(cmd, l_gpu.desc.gate_up_swiglu, inter, H, buf, base + 7 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordGemvMlpIndirect(cmd, l_gpu.desc.down_proj, H, inter, buf, base + 10 * 12);
-    if (l_gpu.has_post_ffn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.post_ffn_norm, H, eps, buf, base + 11 * 12); }
+    gpu.engine.recordGemvMlpIndirect(cmd, l_gpu.desc.down_proj, H, inter, buf, base + 8 * 12);
+    if (l_gpu.has_post_ffn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.post_ffn_norm, H, eps, buf, base + 9 * 12); }
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordAddRmsNormIndirect(cmd, l_gpu.desc.post_ffn_add, H, eps, l_gpu.layer_scalar, buf, base + 12 * 12);
+    gpu.engine.recordAddRmsNormIndirect(cmd, l_gpu.desc.post_ffn_add, H, eps, l_gpu.layer_scalar, buf, base + 10 * 12);
     gpu.engine.recordBarrier(cmd);
 }
 

@@ -135,6 +135,7 @@ pub const GpuModelContext = struct {
                 .has_post_ffn_norm = (l.post_feedforward_layernorm != null), .desc = d,
             };
             desc_mgr.bindBuffers(w.desc.input_norm, &.{ &buf_x, &w.input_norm, &buf_normed_x });
+            desc_mgr.bindBuffers(w.desc.fused_qkv, &.{ &w.q_proj, &w.k_proj, &w.v_proj, &buf_normed_x, &buf_q, &buf_k, &buf_v });
             desc_mgr.bindBuffers(w.desc.q_proj, &.{ &w.q_proj, &buf_normed_x, &buf_q });
             desc_mgr.bindBuffers(w.desc.k_proj, &.{ &w.k_proj, &buf_normed_x, &buf_k });
             desc_mgr.bindBuffers(w.desc.v_proj, &.{ &w.v_proj, &buf_normed_x, &buf_v });
