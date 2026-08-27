@@ -1,5 +1,7 @@
 const std = @import("std");
 pub const memory = @import("memory.zig");
+pub const ring_buffer = @import("ring_buffer.zig");
+pub const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
 pub const FILE_MAGIC = [4]u8{ 'E', 'M', 'E', 'M' };
 pub const FILE_VERSION: u32 = 1;
@@ -257,16 +259,56 @@ pub const PersistentDiffStore = struct {
             const slot = i % self.max_episodes;
             const ep = self.getEpisodeHeader(slot);
             self.getEpisodeCentroid(slot, temp_vec);
-            archive.appendWithMeta(
-                ep.created_timestamp,
-                ep.salience_norm,
-                0,
-                ep.flags & EpisodeFlags.IS_INTERRUPTED != 0,
-                ep.continuation_token,
-                temp_vec,
-            );
+            archive.appendFullMeta(.{
+                .episode_id = ep.episode_id,
+                .parent_episode_id = ep.parent_episode_id,
+                .timestamp = ep.created_timestamp,
+                .last_accessed = ep.last_accessed,
+                .start_clock = ep.start_clock,
+                .token_count = ep.token_count,
+                .access_count = ep.access_count,
+                .child_count = ep.child_count,
+                .salience_norm = ep.salience_norm,
+                .layer_id = 0,
+                .is_interrupted = (ep.flags & EpisodeFlags.IS_INTERRUPTED) != 0,
+                .token_id = ep.continuation_token,
+            }, temp_vec);
         }
         return archive.count;
+    }
+
+    pub fn rehydrateEpisode(
+        self: *const PersistentDiffStore,
+        slot: usize,
+        ring: *DynamicRingBuffer,
+        target_clock: usize,
+        out_kv_temp: []f32,
+    ) usize {
+        const ep_hdr = self.getEpisodeHeader(slot);
+        const tokens_in_ep = ep_hdr.token_count;
+        if (tokens_in_ep == 0 or (ep_hdr.flags & EpisodeFlags.SLAB_PRUNED) != 0) return 0;
+
+        const total_elems = self.num_layers * 2 * tokens_in_ep * self.kv_dim;
+        const read_count = self.getEpisodeKVSlab(slot, out_kv_temp[0..total_elems]);
+        if (read_count < total_elems) return 0;
+
+        const num_layers = self.num_layers;
+        const kv_dim = self.kv_dim;
+
+        for (0..tokens_in_ep) |t| {
+            const cur_c = target_clock + t;
+            for (0..num_layers) |l| {
+                const s = ring.activateSlot(l, cur_c);
+                const r_slot = l * ring.total_slots + s;
+                const r_off = r_slot * ring.max_kv_dim;
+                const l_base = l * 2 * tokens_in_ep * kv_dim;
+                const k_src = l_base + 0 * (tokens_in_ep * kv_dim) + t * kv_dim;
+                const v_src = l_base + 1 * (tokens_in_ep * kv_dim) + t * kv_dim;
+                @memcpy(ring.k[r_off .. r_off + kv_dim], out_kv_temp[k_src .. k_src + kv_dim]);
+                @memcpy(ring.v[r_off .. r_off + kv_dim], out_kv_temp[v_src .. v_src + kv_dim]);
+            }
+        }
+        return tokens_in_ep;
     }
 
     pub fn saveFromArchive(self: *PersistentDiffStore, archive: *const memory.DiffArchive) void {
@@ -368,4 +410,56 @@ test "persistent store round-trip with DiffArchive" {
     try std.testing.expectEqual(@as(u64, 2000), arch2.metas[1].timestamp);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), arch2.metas[0].salience_norm, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 0.9), arch2.metas[1].salience_norm, 0.01);
+}
+
+test "persistent store rehydrateEpisode loads KV slab into dynamic ring buffer" {
+    const test_path = "/tmp/test_rehydrate.mem";
+    std.fs.cwd().deleteFile(test_path) catch {};
+    defer std.fs.cwd().deleteFile(test_path) catch {};
+
+    var store = try PersistentDiffStore.open(test_path, 4, 2, 4, 2, 2);
+    defer store.close();
+
+    const ep = EpisodeHeader{
+        .episode_id = 1,
+        .parent_episode_id = 0,
+        .created_timestamp = 1000,
+        .last_accessed = 1000,
+        .start_clock = 0,
+        .token_count = 2,
+        .access_count = 0,
+        .child_count = 0,
+        .salience_norm = 1.0,
+        .continuation_token = 42,
+        .flags = 0,
+        .summary_len = 0,
+    };
+    const centroid = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    // 2 layers * 2 (K, V) * 2 tokens * 2 kv_dim = 16 floats
+    const kv_slab = [_]f32{
+        1.1, 1.2, 2.1, 2.2, // L0 K
+        3.1, 3.2, 4.1, 4.2, // L0 V
+        5.1, 5.2, 6.1, 6.2, // L1 K
+        7.1, 7.2, 8.1, 8.2, // L1 V
+    };
+    store.appendEpisode(ep, &centroid, "", &kv_slab);
+
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 2, 4, 16, 4);
+    defer ring.deinit();
+
+    var temp_kv: [16]f32 = undefined;
+    const rehydrated = store.rehydrateEpisode(0, &ring, 10, &temp_kv);
+    try std.testing.expectEqual(@as(usize, 2), rehydrated);
+
+    // Verify ring slot activation and values at clock 10 and 11
+    const s0 = ring.getSlotIndex(10);
+    const s1 = ring.getSlotIndex(11);
+    const l0_s0 = 0 * ring.total_slots + s0;
+    const l0_s1 = 0 * ring.total_slots + s1;
+    const l1_s0 = 1 * ring.total_slots + s0;
+
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), ring.k[l0_s0 * 2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.1), ring.k[l0_s1 * 2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.1), ring.k[l1_s0 * 2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.1), ring.v[l1_s0 * 2], 0.01);
 }

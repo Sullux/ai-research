@@ -31,6 +31,21 @@ test('ToolRegistry executes terminal_write and key tools', async () => {
   const res2 = await registry.execute('terminal_key', { key: 'ctrl+c' })
   assert.strictEqual(res2.status, 'key_sent')
   assert.strictEqual(keySent, 'ctrl+c')
+
+  let memQueried = ''
+  let memTopK = 0
+  const mockClient2 = {
+    sendInput: () => {},
+    sendMemQuery: (q, k) => {
+      memQueried = q
+      memTopK = k
+    },
+  }
+  const registry2 = ToolRegistry(mockSession, mockClient2, mockTimers)
+  const res3 = await registry2.execute('recall', { query: 'archived thoughts on memory', top_k: 3 })
+  assert.strictEqual(res3.status, 'query_submitted')
+  assert.strictEqual(memQueried, 'archived thoughts on memory')
+  assert.strictEqual(memTopK, 3)
 })
 
 test('ToolParser intercepts streaming tool call and pushes response', async () => {
