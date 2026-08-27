@@ -39,14 +39,15 @@ pub const Server = struct {
 
     pub fn run(self: *Server, reader: anytype, writer: anytype) !void {
         var in_queue = server_queue.MessageQueue.init(self.allocator); defer in_queue.deinit();
-        var out_queue = server_queue.OutboundQueue.init(self.allocator); defer out_queue.deinit();
+        var out_queue = try server_queue.OutboundQueue.init(self.allocator); defer out_queue.deinit();
 
         const WriterThread = struct {
             fn run(q: *server_queue.OutboundQueue, w: @TypeOf(writer)) void {
+                var chunk_buf: [16384]u8 = undefined;
                 while (true) {
-                    const buf = q.pop() orelse break;
-                    defer q.allocator.free(buf);
-                    w.writeAll(buf) catch break;
+                    const n = q.readChunk(&chunk_buf);
+                    if (n == 0) break;
+                    w.writeAll(chunk_buf[0..n]) catch break;
                 }
             }
         };
