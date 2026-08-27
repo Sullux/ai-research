@@ -3,25 +3,44 @@ pub const ring_buffer = @import("ring_buffer.zig");
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
 pub const SalienceConfig = struct {
-    alpha: f32 = 1.0, beta: f32 = 0.5, gamma: f32 = 1.0, lambda: f32 = 1.0 / 2048.0,
+    alpha: f32 = 1.0,
+    beta: f32 = 0.5,
+    gamma: f32 = 0.3,
+    delta: f32 = 0.2,
+    lambda: f32 = 1.0 / 86400000.0,
 };
 
 pub const MemoryMeta = struct {
-    timestamp: u64,
-    last_accessed: u64,
-    access_count: u32,
-    salience_norm: f32,
-    layer_id: u8,
+    episode_id: u64 = 0,
+    parent_episode_id: u64 = 0,
+    timestamp: u64 = 0,
+    last_accessed: u64 = 0,
+    start_clock: u64 = 0,
+    token_count: u32 = 1,
+    access_count: u32 = 0,
+    child_count: u32 = 0,
+    salience_norm: f32 = 1.0,
+    layer_id: u8 = 0,
     is_interrupted: bool = false,
     token_id: u32 = 0,
 };
 
 pub const DiffArchive = struct {
     allocator: std.mem.Allocator,
-    dim: usize, capacity: usize, count: usize = 0, write_head: usize = 0,
-    num_layers: usize, max_kv_dim: usize, kv_stride: usize,
+    dim: usize,
+    capacity: usize,
+    count: usize = 0,
+    write_head: usize = 0,
+    num_layers: usize,
+    max_kv_dim: usize,
+    kv_stride: usize,
     config: SalienceConfig,
-    vectors: []f32, metas: []MemoryMeta, scan_scores: []f32, scan_indices: []usize, kv_cache: []f32,
+
+    vectors: []f32,
+    metas: []MemoryMeta,
+    scan_scores: []f32,
+    scan_indices: []usize,
+    kv_cache: []f32,
 
     pub fn init(allocator: std.mem.Allocator, dim: usize, capacity: usize, config: SalienceConfig) !DiffArchive {
         return initWithKV(allocator, dim, capacity, 0, 0, config);
@@ -47,10 +66,18 @@ pub const DiffArchive = struct {
         @memset(vectors, 0);
 
         return .{
-            .allocator = allocator, .dim = dim, .capacity = capacity,
-            .num_layers = num_layers, .max_kv_dim = max_kv_dim, .kv_stride = kv_stride,
-            .config = config, .vectors = vectors, .metas = metas,
-            .scan_scores = scores, .scan_indices = indices, .kv_cache = kv_cache,
+            .allocator = allocator,
+            .dim = dim,
+            .capacity = capacity,
+            .num_layers = num_layers,
+            .max_kv_dim = max_kv_dim,
+            .kv_stride = kv_stride,
+            .config = config,
+            .vectors = vectors,
+            .metas = metas,
+            .scan_scores = scores,
+            .scan_indices = indices,
+            .kv_cache = kv_cache,
         };
     }
 
@@ -63,7 +90,8 @@ pub const DiffArchive = struct {
     }
 
     pub fn reset(self: *DiffArchive) void {
-        self.count = 0; self.write_head = 0;
+        self.count = 0;
+        self.write_head = 0;
         if (self.kv_cache.len > 0) @memset(self.kv_cache, 0);
     }
 
@@ -93,6 +121,17 @@ pub const DiffArchive = struct {
     }
 
     pub fn appendWithMeta(self: *DiffArchive, timestamp: u64, salience_norm: f32, layer_id: u8, is_interrupted: bool, token_id: u32, vector: []const f32) void {
+        self.appendFullMeta(.{
+            .timestamp = timestamp,
+            .last_accessed = timestamp,
+            .salience_norm = salience_norm,
+            .layer_id = layer_id,
+            .is_interrupted = is_interrupted,
+            .token_id = token_id,
+        }, vector);
+    }
+
+    pub fn appendFullMeta(self: *DiffArchive, meta: MemoryMeta, vector: []const f32) void {
         std.debug.assert(vector.len == self.dim);
         var sum_sq: f32 = 0.0;
         for (vector) |v| sum_sq += v * v;
@@ -101,11 +140,7 @@ pub const DiffArchive = struct {
         const row = self.vectors[idx * self.dim .. (idx + 1) * self.dim];
         for (row, vector) |*dst, v| dst.* = v * inv;
 
-        self.metas[idx] = .{
-            .timestamp = timestamp, .last_accessed = timestamp, .access_count = 0,
-            .salience_norm = salience_norm, .layer_id = layer_id,
-            .is_interrupted = is_interrupted, .token_id = token_id,
-        };
+        self.metas[idx] = meta;
         self.write_head = (idx + 1) % self.capacity;
         if (self.count < self.capacity) self.count += 1;
     }
@@ -135,9 +170,28 @@ pub const DiffArchive = struct {
 
         for (out_indices[0..k]) |idx| {
             self.metas[idx].last_accessed = now;
-            self.metas[idx].access_count += 1;
+            self.metas[idx].access_count +%= 1;
         }
         return k;
+    }
+
+    pub fn primeTier3(self: *DiffArchive, query: []const f32, now: u64, ring: *DynamicRingBuffer, scratch_recall_indices: []usize) usize {
+        const max_recall = ring_buffer.UPPER_RECALL_SLOTS;
+        const to_fetch = @min(max_recall, scratch_recall_indices.len);
+        if (to_fetch == 0 or self.count == 0) {
+            ring.clearRecall();
+            return 0;
+        }
+
+        const selected = self.scan(query, now, scratch_recall_indices[0..to_fetch], to_fetch);
+        ring.clearRecall();
+
+        for (0..selected) |rank| {
+            const mi = scratch_recall_indices[rank];
+            const mem_ts = self.metas[mi].timestamp;
+            self.copyKVToRing(mi, ring, rank, @intCast(mem_ts));
+        }
+        return selected;
     }
 
     fn score(self: *const DiffArchive, query: []const f32, now: u64, i: usize) f32 {
@@ -145,9 +199,10 @@ pub const DiffArchive = struct {
         const row = self.vectors[i * self.dim .. (i + 1) * self.dim];
         var dot: f32 = 0.0;
         for (query, row) |q, r| dot += q * r;
-        const dt = now -| meta.timestamp;
+        const dt = now -| meta.last_accessed;
         const recency = @exp(-self.config.lambda * @as(f32, @floatFromInt(dt)));
-        return self.config.alpha * dot + self.config.beta * recency + self.config.gamma * meta.salience_norm;
+        const prominence = @log(1.0 + @as(f32, @floatFromInt(meta.child_count + meta.access_count)));
+        return self.config.alpha * dot + self.config.beta * recency + self.config.gamma * prominence + self.config.delta * meta.salience_norm;
     }
 };
 
@@ -171,4 +226,34 @@ test "archive wraps circularly and caps count at capacity" {
     arch.append(3, 0, 0, &[_]f32{ -1, 0 });
     try std.testing.expectEqual(@as(usize, 3), arch.count);
     try std.testing.expectEqual(@as(usize, 1), arch.write_head);
+}
+
+test "archive multi-factor salience weights child count and prominence" {
+    var arch = try DiffArchive.init(std.testing.allocator, 4, 8, .{});
+    defer arch.deinit();
+
+    // Node 0: weak match but high child count / foundational schema
+    arch.appendFullMeta(.{
+        .episode_id = 1,
+        .timestamp = 1000,
+        .last_accessed = 1000,
+        .salience_norm = 1.0,
+        .child_count = 50,
+        .access_count = 20,
+    }, &[_]f32{ 0.7, 0.7, 0.0, 0.0 });
+
+    // Node 1: zero children, ephemeral
+    arch.appendFullMeta(.{
+        .episode_id = 2,
+        .timestamp = 1000,
+        .last_accessed = 1000,
+        .salience_norm = 0.1,
+        .child_count = 0,
+        .access_count = 0,
+    }, &[_]f32{ 0.7, 0.7, 0.0, 0.0 });
+
+    var idx: [2]usize = undefined;
+    const k = arch.scan(&[_]f32{ 0.7, 0.7, 0.0, 0.0 }, 1000, &idx, 2);
+    try std.testing.expectEqual(@as(usize, 2), k);
+    try std.testing.expectEqual(@as(usize, 0), idx[0]); // Node 0 ranked higher due to prominence
 }

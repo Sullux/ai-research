@@ -5,44 +5,45 @@ pub const memory = @import("../memory.zig");
 pub const types = @import("types.zig");
 pub const loader = @import("loader.zig");
 pub const ring_buffer = @import("../ring_buffer.zig");
+pub const gpu = @import("../gpu.zig");
 
 const Model = loader.Model;
 const ForwardScratch = types.ForwardScratch;
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
-const LANDMARK_SIMILARITY_THRESHOLD: f32 = 0.98;
+pub fn syncRecallToGpu(ring: *const DynamicRingBuffer, gpu_ctx: *gpu.model_gpu.GpuModelContext) void {
+    const total_slots = ring.total_slots;
+    for (0..gpu_ctx.layers.len) |l| {
+        const recall_count = ring.recallSlots(l);
+        if (recall_count == 0) continue;
+        const r_start = ring.recallStart(l);
+        const gpu_k = gpu_ctx.layers[l].buf_k_cache.asSlice(f32);
+        const gpu_v = gpu_ctx.layers[l].buf_v_cache.asSlice(f32);
+        for (0..recall_count) |r| {
+            const slot = r_start + r;
+            const r_slot = l * total_slots + slot;
+            const r_off = r_slot * ring.max_kv_dim;
+            const g_off = slot * ring.max_kv_dim;
+            @memcpy(gpu_k[g_off .. g_off + ring.max_kv_dim], ring.k[r_off .. r_off + ring.max_kv_dim]);
+            @memcpy(gpu_v[g_off .. g_off + ring.max_kv_dim], ring.v[r_off .. r_off + ring.max_kv_dim]);
+        }
+    }
+}
 
-/// Phase 2 (Step 2.1): commit salient state transitions to the diff archive
-/// and repopulate the Tier-3 associative recall slots from cached KV states.
+pub fn primeSubconsciousMemory(mem: *memory.DiffArchive, ring: *DynamicRingBuffer, scratch: *ForwardScratch, query_vec: []const f32, now_ts: u64, gpu_opt: ?*gpu.model_gpu.GpuModelContext) usize {
+    const selected = mem.primeTier3(query_vec, now_ts, ring, scratch.recall_indices);
+    if (selected > 0 and gpu_opt != null) {
+        syncRecallToGpu(ring, gpu_opt.?);
+    }
+    return selected;
+}
+
 pub fn integrateMemory(self: *const Model, mem: *memory.DiffArchive, ring: *DynamicRingBuffer, scratch: *ForwardScratch, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
     _ = self;
     _ = tp;
     _ = H;
-    const delta = diff.computeDelta(scratch.delta_x, scratch.normed_x, scratch.prev_normed_x, 0.0);
-    const similarity = diff.cosineSimilarity(scratch.prev_normed_x, scratch.normed_x);
-
-    if (similarity < LANDMARK_SIMILARITY_THRESHOLD) {
-        const mem_idx = mem.write_head;
-        mem.append(@intCast(clock), delta.norm, 0, scratch.normed_x);
-        const slot = ring.getSlotIndex(clock);
-        mem.copyKVFromRing(mem_idx, ring, slot);
-    }
-    @memcpy(scratch.prev_normed_x, scratch.normed_x);
-
-    const recall_count = @min(ring_buffer.UPPER_RECALL_SLOTS, scratch.recall_indices.len);
-    if (recall_count == 0) {
-        ring.clearRecall();
-        return;
-    }
-
-    const selected = mem.scan(scratch.normed_x, @intCast(clock), scratch.recall_indices[0..recall_count], recall_count);
-    ring.clearRecall();
-
-    for (0..selected) |rank| {
-        const mi = scratch.recall_indices[rank];
-        const mem_ts = mem.metas[mi].timestamp;
-        mem.copyKVToRing(mi, ring, rank, @intCast(mem_ts));
-    }
+    const now_ts: u64 = @intCast(clock);
+    _ = primeSubconsciousMemory(mem, ring, scratch, scratch.normed_x, now_ts, null);
 }
 
 pub fn computeKeywordQueryVector(self: *const Model, token_ids: []const u32, out_vector: []f32) bool {
