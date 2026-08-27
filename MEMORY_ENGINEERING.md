@@ -71,17 +71,17 @@ Each stored episodic entry begins with a 64-byte fixed descriptor:
 ```zig
 pub const EpisodeHeader = extern struct {
     episode_id: u64,         // Monotonic globally unique episode index
+    parent_episode_id: u64,  // Lineage pointer to ancestor episode active during formation
     created_timestamp: u64,  // Real-world epoch timestamp (Date.now() ms)
-    last_accessed: u64,      // Epoch timestamp of most recent recall
+    last_accessed: u64,      // Epoch timestamp of most recent recall/citation
     start_clock: u64,        // Monotonic token clock t at episode inception
-    token_count: u32,        // Number of sequential token slots in KV slab (e.g., 1..64)
-    access_count: u32,       // Total times recalled into working memory
+    token_count: u32,        // Number of sequential token slots in KV slab (0 if slab pruned)
+    access_count: u32,       // Total times recalled/cited into working memory
+    child_count: u32,        // Number of subsequent episodes derived from this record
     salience_norm: f32,      // Directional activation magnitude ||Δx||
-    prediction_error: f32,   // Surprise / entropy delta when generated
     continuation_token: u32, // Next predicted token ID after episode boundary
-    flags: u32,              // Bit 0: is_interrupted, Bit 1: has_tool_call, Bit 2: pinned
+    flags: u16,              // Bit 0: is_interrupted, Bit 1: has_tool, Bit 2: pinned, Bit 3: slab_pruned
     summary_len: u16,        // Length of UTF-8 summary / keyword tag slice (≤ 256 B)
-    reserved: [6]u8,         // 64-bit alignment padding
 };
 ```
 
@@ -89,12 +89,12 @@ pub const EpisodeHeader = extern struct {
 Immediately following each `EpisodeHeader`:
 1. **Centroid Semantic Vector:** `[3840]f16` ($7{,}680\text{ bytes}$) unit-normalized final hidden state vector for background GEMV cosine scanning.
 2. **Text / Summary Tag:** `[summary_len]u8` UTF-8 slice (up to 256 bytes) describing the topic or tool invocation.
-3. **Multi-Layer KV Tensor Slab:** Contiguous memory block holding the multi-layer activation matrices:
+3. **Multi-Layer KV Tensor Slab:** Contiguous memory block holding the multi-layer activation matrices (if `flags & 0x08 == 0` and `token_count > 0`):
    $$\text{Shape: } [48\text{ layers}][2\text{ (K, V)}][\text{token\_count}][1024\text{ elements}] \times \text{sizeof(f16)}$$
 
 ---
 
-## 3. In-Memory Staging & GPU-to-Disk Lifecycle
+## 3. In-Memory Staging, Centroid Caching & Storage Lifecycle
 
 ```
 [ Active Autoregressive Decode Loop (GPU) ]
@@ -106,6 +106,7 @@ Immediately following each `EpisodeHeader`:
 │  Stage 1: Hippocampus Consolidation Staging Buffer     │
 │  - In-memory circular staging ring (capacity: 64 toks) │
 │  - Tracks state velocities: Δx = x_t - x_{t-1}         │
+│  - Tracks active parent context (current_parent_id)    │
 │  - Tracks elapsed activity time (debounce: 6,000 ms)   │
 └─────────────────────┬──────────────────────────────────┘
                       │
@@ -117,14 +118,21 @@ Immediately following each `EpisodeHeader`:
 │  1. Compute unit-normalized centroid vector            │
 │  2. Copy 48-layer (K, V) slices from GPU UMA buffer    │
 │  3. Insert metadata & centroid into RAM DiffArchive    │
-│  4. Async-append binary record to memory-mapped NVMe   │
+│  4. Increment parent_episode.child_count in RAM/Disk   │
+│  5. Async-append binary record to memory-mapped NVMe   │
 └────────────────────────────────────────────────────────┘
 ```
+
+### 100% In-RAM Centroid Indexing (Zero NVMe Read Overhead for Subconscious Priming)
+* **Resident Index:** All `EpisodeHeader` descriptors and $3{,}840$-D Centroid vectors are loaded into RAM upon initialization.
+* **Footprint:** $10{,}000$ episodes require only **$\approx 78\text{ MB}$ of RAM** ($64\text{ B meta} + 7{,}680\text{ B vector} \approx 7.8\text{ KB/entry}$).
+* **Zero Disk I/O:** Implicit subconscious priming scans operate 100% against in-memory RAM buffers ($< 0.15\text{ ms}$). The NVMe storage device is **never accessed** during normal conversational decoding, reserving drive bandwidth exclusively for explicit KV rehydration.
 
 ### Staging & Debounce Rules:
 1. **Intra-Turn Transient Isolation:** Sub-tokens within an ongoing sentence are buffered in RAM without touching disk or stalling the GPU queue.
 2. **Turn Boundary Commit:** Encountering `<turn|>` (token `106`) or reaching 64 buffered tokens triggers immediate background consolidation.
 3. **Non-Destructive Abort (`OP_ABORT`):** If generation is halted mid-stream, the buffered tokens are committed with `flags |= 0x01` (`is_interrupted = true`), preserving partial cognitive reasoning trajectories.
+4. **Reconsolidation & Slab Aging:** When an older memory is recalled and built upon, the newly created episode naturally encapsulates the synthesized context. Unreinforced older episodes (`child_count == 0`, `access_count == 0`) can have their heavy $12.5\text{ MB}$ KV slabs stripped (`flags |= 0x08`, `token_count = 0`), retaining only the $7.8\text{ KB}$ centroid index permanently in RAM.
 
 ---
 
@@ -132,12 +140,12 @@ Immediately following each `EpisodeHeader`:
 
 ### A. Implicit Memory Priming (Subconscious Cosine Resonance)
 * **Trigger:** Invoked once per conversational turn immediately after prompt prefill.
-* **Algorithm:**
-  1. Compute dot product between current Layer 47 normalized hidden state $x_{\text{final}}$ and all active centroid vectors in `DiffArchive`:
-     $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{final}}, M_i) + \beta \cdot e^{-\lambda \Delta t} + \gamma \cdot \|\Delta_i\|$$
+* **Multi-Factor Salience Algorithm:**
+  1. Compute holistic salience against all resident in-memory centroids in `DiffArchive`:
+     $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{final}}, C_i) + \beta \cdot e^{-\lambda (t_{\text{now}} - t_{\text{last}})} + \gamma \cdot \log(1 + \text{child\_count}_i + \text{access\_count}_i) + \delta \cdot \|\Delta x_i\|$$
   2. Select Top-$K$ ($K \le 128$) highest-scoring memory entries.
   3. Blit the selected historical $(K_l, V_l)$ vectors into the dedicated Tier 3 slots of reasoning layers ($L_{16} \dots L_{47}$).
-* **Performance Budget:** $< 0.15\text{ ms}$ on CPU/GPU SIMD across 10,000 centroids.
+* **Performance Budget:** $< 0.15\text{ ms}$ on CPU/GPU SIMD across 10,000 in-memory centroids.
 
 ### B. Explicit Latent Recall (Conscious Rehydration)
 * **Trigger:** Model emits tool call `<|channel>call\nrecall({"query": "...", "mode": "semantic"})\n<channel|>`.

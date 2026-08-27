@@ -110,12 +110,14 @@ When the host application or human user explicitly triggers an immediate stop (e
 
 ### 1. Implicit Memory (Subconscious Resonance)
 - **Target:** Tier-3 peripheral slots in the active GPU ring buffer.
+- **100% In-RAM Subconscious Priming (Zero Disk I/O):** Because 10,000 landmark centroids require only $\approx 78\text{ MB}$ of host RAM, the entire implicit associative index is permanently resident in memory. No NVMe disk I/O or filesystem seeks are ever performed during regular conversational decoding.
 - **Trigger:** Autonomous per-step background salience scan:
-  $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda \Delta t} + \gamma \cdot \|\Delta_i\|$$
+  $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, C_i) + \beta \cdot e^{-\lambda (t_{\text{now}} - t_{\text{last}})} + \gamma \cdot \log(1 + \text{child\_count}_i + \text{access\_count}_i) + \delta \cdot \|\Delta x_i\|$$
 - **Behavior:** Operates quietly in the background without user intervention or conversational interruption. Injects top-matched KV representations into Tier-3 slots, providing subtle associative priming.
 
 ### 2. Explicit Memory (Foreground Mental Replay)
 - **Target:** The primary 1,024-token streaming ingestion pipeline (Layer 0 $\to$ Layer 47).
+- **NVMe Zero-FLOP Rehydration:** Only explicit retrospection accesses the NVMe storage file, streaming the target 12.5 MB multi-layer KV slab directly into GPU VRAM in $< 1.0\text{ ms}$.
 - **Trigger:** Host or model-directed `OP_MEM_QUERY` (via tool calling or user command).
 - **Behavior:** When the model deliberately stops to "think back", memory retrieval **takes over the primary stream of attention**, exactly like human mental imagery.
 
@@ -161,7 +163,34 @@ $$\text{Score}(M_i) = w_{\text{kw}} \cdot \cos(E_{\text{kw}}, M_i) + w_{\text{se
 
 ---
 
-## 6. High-Layer Semantic Search & Multi-Layer KV Rehydration
+## 6. Memory Reconsolidation, Cognitive Provenance & Slab Pruning
+
+### 1. Memory Reconsolidation: Active Re-Encoding vs. Immutable Replay
+In biological cognition, retrieving a memory does not read from an immutable tape. When a memory from days or weeks ago is recalled into working memory, the brain reasons over it in the context of the present goal and **re-consolidates a fresh memory trace**.
+
+In our architecture:
+* When Memory $A$ is recalled into the active ring buffer to help solve a current task, the forward passes of the new conversation attend across both current tokens and Memory $A$.
+* When the turn completes, the Hippocampus consolidates **Memory $B$**. Memory $B$'s newly minted KV slab naturally encodes the synthesized, modernized essence of Memory $A$.
+* Because recent memories naturally encapsulate the active essence of older recalled memories, old unreinforced KV slabs can safely be aged out and pruned without losing cognitive continuity.
+
+### 2. The Cognitive Provenance DAG (Directed Acyclic Graph)
+Each consolidated episode records its structural lineage directly in its metadata:
+* **`parent_episode_id`**: The memory record that was active in working context when this memory was formed.
+* **`access_count`**: Incremented each time a memory is recalled or cited.
+* **`child_count`**: Incremented when a subsequent memory derives from this record.
+
+This forms a real-time **Cognitive Provenance Graph**:
+* Nodes with high `child_count` and `access_count` represent **Foundational Knowledge Schemas** (core project guidelines, architecture, user conventions). Their high structural prominence boosts their baseline salience in subconscious priming.
+* Nodes with zero children and low access counts represent ephemeral conversational transients.
+
+### 3. Tiered KV Slab Pruning & Space Efficiency
+To maintain sub-linear disk usage across months of continuous operation:
+* **Active / High-Traffic Memories:** Retain both the lightweight 7.8 KB Landmark Centroid in RAM and the full 12.5 MB KV Slab on NVMe.
+* **Dormant / Low-Prominence Memories:** After a configurable retention window (e.g. 14 days without recall), the heavy 12.5 MB KV Slab is pruned from disk, while the 7.8 KB Landmark Centroid remains permanently in RAM for associative priming and semantic search.
+
+---
+
+## 7. High-Layer Semantic Search & Multi-Layer KV Rehydration
 
 ### High-Layer Semantic Targeting
 In our hierarchical model with temporal quiescence, lower layers process lexical and syntactic details, while upper layers (e.g. Layers 32–47 in Gemma 4 12B) process abstract concepts, intent, and causal structure.
@@ -175,7 +204,7 @@ When an episodic memory is selected:
 
 ---
 
-## 7. The Bridge to Phase 4: Synaptic Weight Consolidation ($\Delta W$)
+## 8. The Bridge to Phase 4: Synaptic Weight Consolidation ($\Delta W$)
 
 Biological brains physically consolidate memories into synaptic wiring when the energetic cost of repeatedly re-processing an idea in working memory exceeds the metabolic cost of permanent consolidation:
 
