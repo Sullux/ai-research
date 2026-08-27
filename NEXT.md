@@ -7,7 +7,7 @@ This document records the strategic order of operations for completing the Strea
 ## 1. Performance Optimizations
 
 ### Recommended High-ROI Optimizations
-- [ ] **GPU-Side Top-64 Logit Softcapping & Reduction (Highest ROI ⭐⭐⭐):**
+- [x] **GPU-Side Top-64 Logit Softcapping & Reduction (Highest ROI ⭐⭐⭐):**
   - Apply $\tanh$ logit softcapping directly on GPU and implement a lightweight 2-pass GPU Top-64 reduction shader.
   - Transfer only 64 candidate token IDs and logits (512 bytes) to the host per step instead of copying the full 1.0 MB (262k floats) logits buffer.
   - Eliminates host CPU softcapping and 262k-entry heap insertion latency (~10–12 ms per token), boosting end-to-end decode throughput from $\approx 19.4\text{ tok/s}$ to $\approx 25.0\text{ tok/s}$.
