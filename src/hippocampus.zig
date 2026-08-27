@@ -92,7 +92,21 @@ pub const Hippocampus = struct {
             }
 
             if (storage) |s| {
-                s.append(item.timestamp, item.salience_norm, item.layer_id, row);
+                const ep = @import("storage.zig").EpisodeHeader{
+                    .episode_id = @intCast(s.getHeader().total_episodes + 1),
+                    .parent_episode_id = 0,
+                    .created_timestamp = item.timestamp,
+                    .last_accessed = item.timestamp,
+                    .start_clock = 0,
+                    .token_count = 1,
+                    .access_count = 0,
+                    .child_count = 0,
+                    .salience_norm = item.salience_norm,
+                    .continuation_token = item.token_id,
+                    .flags = if (item.is_interrupted) @import("storage.zig").EpisodeFlags.IS_INTERRUPTED else 0,
+                    .summary_len = 0,
+                };
+                s.appendEpisode(ep, row, "", null);
             }
         }
 

@@ -51,7 +51,13 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--anchors") and arg_idx + 1 < args.len) { num_anchors = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 32; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--window") and arg_idx + 1 < args.len) { window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--recall") and arg_idx + 1 < args.len) { num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96; arg_idx += 1;
-        } else if (std.mem.eql(u8, arg, "--storage") and arg_idx + 1 < args.len) { storage_path = args[arg_idx + 1]; arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "--memory") or std.mem.eql(u8, arg, "--storage")) {
+            if (arg_idx + 1 < args.len and !std.mem.startsWith(u8, args[arg_idx + 1], "-")) {
+                storage_path = args[arg_idx + 1];
+                arg_idx += 1;
+            } else {
+                storage_path = ".episodic.mem";
+            }
         } else if (std.mem.eql(u8, arg, "--quiescence-threshold") and arg_idx + 1 < args.len) { quiescence_threshold = std.fmt.parseFloat(f32, args[arg_idx + 1]) catch 0.001; quiescence_enabled = true; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--quiescence")) { quiescence_enabled = true; quiescence_threshold = 0.001;
         } else if (std.mem.eql(u8, arg, "--serve")) { serve_mode = true;
@@ -110,7 +116,7 @@ pub fn main() !void {
     if (memory_enabled) {
         var arch = try memory.DiffArchive.initWithKV(allocator, config.hidden_size, MEMORY_CAPACITY, config.num_hidden_layers, max_kv_dim, .{});
         if (storage_path) |sp| {
-            var s = try storage.PersistentDiffStore.open(sp, MEMORY_CAPACITY, config.hidden_size);
+            var s = try storage.PersistentDiffStore.open(sp, MEMORY_CAPACITY, config.num_hidden_layers, config.hidden_size, max_kv_dim, 64);
             _ = s.loadIntoArchive(&arch);
             store = s;
         }
