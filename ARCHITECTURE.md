@@ -104,9 +104,9 @@ pub const MemoryDiff = extern struct {
     access_count: u32,       // Number of times recalled into working memory
     salience_norm: f32,      // Initial directional magnitude ||Δ||
     prediction_error: f32,   // Surprise / entropy delta when generated
-    layer_id: u8,            // Originating layer depth (0..31)
+    layer_id: u8,            // Originating layer depth (0..47)
     reserved: [7]u8,         // Alignment padding / future reward telemetry
-    vector: [4096]f16,       // The 4096-D state delta vector
+    vector: [3840]f16,       // The 3840-D state delta vector (Gemma 4 12B)
 };
 ```
 
@@ -168,7 +168,7 @@ Implement multi-rate layer execution, vector diffing, and the 3-tier memory inje
 ┌────────────────────────────────────────────────────────────────────────┐
 │ PHASE 2 ARCHITECTURE                                                   │
 │                                                                        │
-│ Layer 31 (Slow / Abstract)  ◄── [ High-Entropy Delta ] ─── (Sparse)    │
+│ Layer 47 (Slow / Abstract)  ◄── [ High-Entropy Delta ] ─── (Sparse)    │
 │         ▲                                                    ▲         │
 │         │ (Diffs)                                            │ (Diffs) │
 │ Layer 0 (Fast / Sensory)    ◄── [ Continuous Ingress ] ────────────────┤

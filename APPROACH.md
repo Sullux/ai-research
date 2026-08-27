@@ -9,15 +9,15 @@ Rather than attempting to scale monolithic Transformer context windows to infini
 Each layer in the network operates as an independent computational region with its own fixed-size working memory. Information propagates upward through the layer hierarchy not as dense raw activations on every clock cycle, but as **compressed temporal state differences (diffs)** when lower layers detect novel or unpredicted patterns.
 
 ```
-                           [ Layer 31: Abstract Semantic State ]
+                           [ Layer 47: Abstract Semantic & Reasoning State ]
                                           ▲
                                    (Sparse Diffs: e.g. every 20 cycles)
                                           ▲
-                           [ Layer 16: Syntactic & Relational State ]
+                           [ Layer 24: Relational & Syntactic State ]
                                           ▲
                                    (Moderate Diffs: e.g. every 5 cycles)
                                           ▲
-                           [ Layer 0: Local High-Frequency State ]
+                           [ Layer 0..5: Local High-Frequency State ]
                                           ▲
                                    (Frequent Streaming Inputs)
                                           ▲
@@ -51,11 +51,11 @@ This design eliminates `memcpy` overhead between sub-partitions while dynamicall
 In the mammalian neocortex, primary sensory areas (V1/A1) process high-frequency raw transients, while association areas (prefrontal cortex) track slow, abstract causal sequences.
 
 Our architecture replicates this hierarchy:
-* **Lower Layers (0–6):** Run frequently on incoming token chunks to resolve local phonetics, morphology, and syntax.
+* **Lower Layers (0–5):** Run frequently on incoming token chunks to resolve local phonetics, morphology, and syntax.
 * **Vector Diffing & Gating:** At the end of each layer's cycle, the engine computes the state velocity/derivative:
   $$\Delta_{\text{state}} = \text{State}_{\text{new}} - \text{State}_{\text{old}}$$
   If the angular change or magnitude $\|\Delta_{\text{state}}\|$ falls below a threshold $\tau$, the state is deemed predictable/redundant.
-* **Higher Layers (7–31):** Upper layers remain quiescent (idle) during redundant input. They are only activated when lower layers emit a significant delta event, allowing higher layers to operate across vastly larger temporal horizons.
+* **Higher Layers (6–47):** Upper layers remain quiescent (idle) during redundant input. They are only activated when lower layers emit a significant delta event, allowing higher layers to operate across vastly larger temporal horizons.
 
 ### 3. Continuous Asynchronous Streaming
 Input does not arrive as an isolated monolithic prompt. Instead, tokens (text, audio codec frames, log events) stream continuously into Layer 0 in fixed blocks (e.g., 1,024 tokens per cycle). The model continuously evaluates new input against its retained and injected state, producing real-time output streams or alerts without pipeline resets.
@@ -75,7 +75,7 @@ State diffs emitted by layers on each cycle are serialized and appended to an as
 
 $$\text{Salience}(M_i) = \alpha \cdot \cos(x_{\text{current}}, M_i) + \beta \cdot e^{-\lambda \Delta t} + \gamma \cdot \| \Delta_i \|$$
 
-* **Zero Tokenization / Text Overhead:** Recall operates directly in the native 4,096-D vector space in milliseconds (<2ms for 10,000 diffs).
+* **Zero Tokenization / Text Overhead:** Recall operates directly in the native hidden vector space in milliseconds (<0.15ms for 10,000 diffs).
 * **Revisited Concepts Stay Active:** Important topics that are periodically referenced appear in recent layer diffs, naturally remaining in the high-layer injected context.
 * **Historical Retrieval:** Deep historical diff archives can be rehydrated back into the injected context buffer using fast vector quantization (VQ) centroid clustering.
 * *For complete details on the dual-process memory architecture, 6-second debounce consolidation window, non-destructive interruption handling, and explicit foreground replay, see [MEMORY.md](MEMORY.md).*

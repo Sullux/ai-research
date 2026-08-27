@@ -15,12 +15,12 @@ To ensure rigorous engineering discipline, Phase 1 is divided into two distinct,
 
 ## 1. Core Engineering Decisions
 
-### A. Model Precision & Format: Unquantized 16-Bit (`bfloat16` / `float16`)
-* **Decision:** We will use unquantized, vanilla 16-bit floating-point weights (`bfloat16` / `float16`) in standard `.safetensors` or unquantized GGUF format.
-* **Rationale:** 
-  * With **96 GB of shared compute memory**, we have ample headroom to load the full unquantized weights of Gemma 4 12B (~24 GB) while maintaining ~72 GB of free RAM.
-  * Avoids quantization artifacts, dequantization overhead in shaders, and loss of numerical precision during initial development.
-  * Quantization (`Q8_0`, `Q4_K_M`, `FP8`) will be treated as an orthogonal, trivial optimization to be added after research validation.
+### A. Model Precision & Format: From Initial FP16 to High-Performance Pure Q4_0
+* **Decision:** We transitioned from initial exploratory FP16 development to **Pure Zero-Centered Q4_0 Quantization** across all linear projections ($Q, K, V, O$, `gate_proj`, `up_proj`, `down_proj`), while maintaining the output vocabulary classifier in **Q8_0** and input token embeddings in **BF16**, matching official Google QAT weights and standard `llama.cpp` performance.
+* **Rationale:**
+  * In $N=1$ autoregressive decoding on AMD UMA hardware (Radeon 8060S with LPDDR5X-8000), throughput is strictly bound by memory bus bandwidth.
+  * Reading 48 layers in FP16 requires reading ~24 GB per token (capping throughput at $\approx 6\text{ tok/s}$).
+  * In pure Q4_0, weight memory read per token drops to $\approx 6.00\text{ GB}$, driving sustained throughput directly to $\ge 24\text{ tok/s}$ ($24.47\text{ tok/s}$ raw GPU compute).
 
 ### B. Micro-Model Bootstrapping for Rapid Iteration
 * **Decision:** We will bootstrap and debug the Zig engine using a lightweight sibling model (e.g., Gemma 4 E2B / small test checkpoints) before scaling to the primary target (**Gemma 4 12B Unified**).
@@ -390,6 +390,27 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
   $$w_i = \text{f32}(\text{nibble}_i) \cdot \text{scale} + \text{min}$$
   $$\text{acc} += w_i \cdot x_i$$
 * **Zero Host/DRAM Overhead:** Retains the exact 5-word-per-32-weight memory stride (20 bytes per 32 weights $\approx 5.0\text{ bits/weight}$), achieving full 75% memory bandwidth reduction with near-lossless numerical fidelity.
+
+---
+
+## 12. GPU Top-64 Reduction, LDS Prefill Tiling & Thinking Budget Governance (Stage G11)
+
+### 1. GPU-Side Top-64 Logit Softcapping & Bitonic Reduction (`shaders/topk_pass1.wgsl`, `shaders/topk_pass2.wgsl`)
+* **Elimination of Host 1MB Logit Transfer:** Replaced the expensive host-side 1.0 MB (262k floats) logits readback and CPU heap insertion with a 2-pass GPU reduction.
+* **Pass 1:** 256 workgroups of 256 threads apply tanh softcapping ($30.0$) and locally extract their top-64 candidates.
+* **Pass 2:** A single 256-thread workgroup merges the $256 \times 64$ candidates down to the global Top-64 candidates.
+* **Impact:** Only 512 bytes (64 candidate pairs) are transferred to the host per step, eliminating CPU sorting latency and raising end-to-end decode speed to $24+\text{ tok/s}$.
+
+### 2. LDS Cooperative Tiling in Batch Prefill (`shaders/batch_gemm_q4.wgsl`, `shaders/batch_fused_mlp_q4.wgsl`)
+* **$32\text{ rows} \times 64\text{ tokens}$ Workgroup Tiling:** Uses 256 threads with workgroup shared memory (LDS: 8 KB `s_X`, 640 B `s_W`) to cooperatively stage activations and weights.
+* **Bandwidth Reuse:** Reuses each weight block across 64 concurrent prompt tokens, cutting global weight memory read passes by $\approx 7\times$ and dropping 405-token prefill latency from $4.38\text{s} \rightarrow 2.63\text{s}$.
+
+### 3. $8\times$ Vectorized Unrolling in Attention Decode (`shaders/decode_attn.wgsl`)
+* **128-Bit Burst Reads:** Unrolled inner loop accumulation across 8 heads/elements simultaneously (`s0..s7`), reducing 48-layer attention decode time from $8.60\text{ ms}$ to $2.97\text{ ms}$ at $S=405$.
+
+### 4. Independent Thinking Budget & Response Enforcement (`src/server.zig`)
+* **Thinking Channel Governance:** Added `thinking_budget` parsing from `OP_SET_CONFIG` (`[0..4]`). When reasoning tokens reach `thinking_budget`, the engine injects `<channel|>` (token 101) to cleanly transition the model into generating visible response dialogue, bounded separately by `max_tokens`.
+
 
 
 
