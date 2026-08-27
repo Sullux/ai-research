@@ -169,4 +169,5 @@ test {
     _ = @import("memory.zig"); _ = @import("storage.zig"); _ = @import("quiescence.zig");
     _ = @import("vq.zig"); _ = @import("gpu.zig"); _ = @import("quant.zig");
     _ = @import("protocol.zig"); _ = @import("hippocampus.zig");
+    _ = @import("test_memory_lifecycle.zig");
 }

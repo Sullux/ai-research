@@ -82,6 +82,10 @@ pub const Hippocampus = struct {
         self.last_activity_ms = now_ms;
     }
 
+    pub fn setCurrentParent(self: *Hippocampus, parent_id: u64) void {
+        self.current_parent_id = parent_id;
+    }
+
     pub fn markInterrupted(self: *Hippocampus) void {
         for (self.items[0..self.count]) |*item| {
             item.is_interrupted = true;
