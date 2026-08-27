@@ -32,9 +32,16 @@ pub const Server = struct {
             @memset(g.buf_logits.asSlice(f32), 0.0); @memset(g.buf_x.asSlice(f32), 0.0);
             if (g.batch_prefill_ctx) |bp| { @memset(bp.buf_x.asSlice(f32), 0.0); @memset(bp.buf_normed_x.asSlice(f32), 0.0); }
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = null, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
+        var hippo_inst: ?hippocampus.Hippocampus = null;
+        if (archive != null or store != null) {
+            const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
+            hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
+        }
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
     }
-    pub fn deinit(self: *Server) void { _ = self; }
+    pub fn deinit(self: *Server) void {
+        if (self.hippo) |*h| h.deinit();
+    }
     inline fn slots(self: *Server) u16 { return @intCast(self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots)); }
 
     pub fn run(self: *Server, reader: anytype, writer: anytype) !void {
@@ -251,7 +258,11 @@ pub const Server = struct {
         var recent_count: usize = 0;
 
         while (true) {
-            if (self.is_aborted.load(.monotonic)) { reason = protocol.STOP_ABORTED; break; }
+            if (self.is_aborted.load(.monotonic)) {
+                reason = protocol.STOP_ABORTED;
+                if (self.hippo) |*h| h.markInterrupted();
+                break;
+            }
             if (cur == self.tok.eos_token_id or cur == 106) {
                 _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                 self.clock += 1; break;
@@ -310,13 +321,26 @@ pub const Server = struct {
         try protocol.writeTurnComplete(writer, msg_id, total_gen, elapsed, tok_sec, reason);
         try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, total_gen, total_gen, is_gpu);
         writer.flush();
-        if (self.archive != null and self.hippo != null) _ = self.hippo.?.commit(self.archive.?, self.ring, self.store);
+        if (self.hippo) |*h| {
+            const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
+            _ = h.commit(self.archive, self.ring, self.store, start_clock);
+        }
     }
 
     fn advanceToken(self: *Server, cur: u32, recent_tokens: []const u32) u32 {
         const needs_logits = (self.sampler.temp > 0.0 or self.sampler.repeat_penalty != 1.0 or self.gpu_opt == null);
         const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
         self.clock += 1;
+        if (self.hippo) |*h| {
+            const x_vec = if (self.gpu_opt) |g| g.buf_x.asSlice(f32)[0..self.config.hidden_size] else self.scratch.x[0..self.config.hidden_size];
+            const now_ms = std.time.milliTimestamp();
+            const slot_idx = self.ring.getSlotIndex(self.clock - 1);
+            h.stage(x_vec, @intCast(@max(0, now_ms)), 1.0, @intCast(self.config.num_hidden_layers - 1), cur, slot_idx, now_ms);
+            if (h.shouldFlush(now_ms, false)) {
+                const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
+                _ = h.commit(self.archive, self.ring, self.store, start_clock);
+            }
+        }
         if (!needs_logits) return next_tok;
         if (self.gpu_opt != null) {
             return self.sampler.sampleTopK(&self.scratch.topk_candidates, recent_tokens);

@@ -211,6 +211,35 @@ pub const PersistentDiffStore = struct {
         return to_copy;
     }
 
+    pub fn incrementChildCount(self: *PersistentDiffStore, episode_id: u64) void {
+        const header = self.getHeader();
+        if (header.total_episodes == 0) return;
+        const total: usize = @intCast(header.total_episodes);
+        const count = @min(total, self.max_episodes);
+        for (0..count) |slot| {
+            const ep = self.getEpisodeHeader(slot);
+            if (ep.episode_id == episode_id) {
+                ep.child_count +%= 1;
+                break;
+            }
+        }
+    }
+
+    pub fn incrementAccessCount(self: *PersistentDiffStore, episode_id: u64, now_ts: u64) void {
+        const header = self.getHeader();
+        if (header.total_episodes == 0) return;
+        const total: usize = @intCast(header.total_episodes);
+        const count = @min(total, self.max_episodes);
+        for (0..count) |slot| {
+            const ep = self.getEpisodeHeader(slot);
+            if (ep.episode_id == episode_id) {
+                ep.access_count +%= 1;
+                ep.last_accessed = now_ts;
+                break;
+            }
+        }
+    }
+
     pub fn loadIntoArchive(self: *const PersistentDiffStore, archive: *memory.DiffArchive) usize {
         const header = self.getHeader();
         const total: usize = @intCast(header.total_episodes);
