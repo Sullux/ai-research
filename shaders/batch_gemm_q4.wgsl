@@ -10,201 +10,170 @@ struct PushConstants {
 @group(0) @binding(2) var<storage, read_write> Y: array<f32>;
 var<push_constant> pc: PushConstants;
 
-var<workgroup> s_reduce0: array<f32, 256>;
-var<workgroup> s_reduce1: array<f32, 256>;
-var<workgroup> s_reduce2: array<f32, 256>;
-var<workgroup> s_reduce3: array<f32, 256>;
-var<workgroup> s_reduce4: array<f32, 256>;
-var<workgroup> s_reduce5: array<f32, 256>;
-var<workgroup> s_reduce6: array<f32, 256>;
-var<workgroup> s_reduce7: array<f32, 256>;
+// Shared memory for cooperative X loading: 8 tokens x 16 vec4<f32> (64 floats) = 128 vec4
+var<workgroup> s_X: array<vec4<f32>, 128>;
+// Shared memory for 8-thread reduction per row
+var<workgroup> s_reduce: array<f32, 256>;
+
+fn unpack_dot2(w: u32, v_a: vec4<f32>, v_b: vec4<f32>) -> f32 {
+    let n0 = f32(w & 0xFu) - 8.0;
+    let n1 = f32((w >> 4u) & 0xFu) - 8.0;
+    let n2 = f32((w >> 8u) & 0xFu) - 8.0;
+    let n3 = f32((w >> 12u) & 0xFu) - 8.0;
+    let n4 = f32((w >> 16u) & 0xFu) - 8.0;
+    let n5 = f32((w >> 20u) & 0xFu) - 8.0;
+    let n6 = f32((w >> 24u) & 0xFu) - 8.0;
+    let n7 = f32(w >> 28u) - 8.0;
+    return n0 * v_a.x + n1 * v_a.y + n2 * v_a.z + n3 * v_a.w +
+           n4 * v_b.x + n5 * v_b.y + n6 * v_b.z + n7 * v_b.w;
+}
 
 @compute @workgroup_size(256, 1, 1)
 fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
-    let local_row = lid.x >> 5u;      // 0..7 (8 rows per workgroup)
-    let lane = lid.x & 31u;            // 0..31 (lane in wave)
-    let row = wgid.x * 8u + local_row;
+    let row_base = wgid.x * 32u;
     let t_base = wgid.y * 8u;
 
-    let blk_in_wave = lane >> 2u;     // 0..7 (which of the 8 blocks)
-    let word_in_blk = (lane & 3u) + 1u; // 1..4 (which word in the 32-weight block)
-    let vec4_base = (lane & 3u) * 2u;   // 0, 2, 4, 6 (vec4 offset in 32-float block)
+    let local_row = lid.x >> 3u;      // 0..31 (32 rows per workgroup)
+    let lane8 = lid.x & 7u;            // 0..7  (8 threads per row)
+    let row = row_base + local_row;
 
     let num_blocks = pc.K / 32u;
+    let k_vec4 = pc.K >> 2u;
     let valid_row = (row < pc.M);
-
-    let t0 = t_base + 0u; let t1 = t_base + 1u; let t2 = t_base + 2u; let t3 = t_base + 3u;
-    let t4 = t_base + 4u; let t5 = t_base + 5u; let t6 = t_base + 6u; let t7 = t_base + 7u;
-
-    let has_t0 = (t0 < pc.N); let has_t1 = (t1 < pc.N); let has_t2 = (t2 < pc.N); let has_t3 = (t3 < pc.N);
-    let has_t4 = (t4 < pc.N); let has_t5 = (t5 < pc.N); let has_t6 = (t6 < pc.N); let has_t7 = (t7 < pc.N);
 
     let row_word_offset = row * num_blocks * 5u;
 
-    let k_vec4 = pc.K >> 2u;
-    let x_vec_off0 = t0 * k_vec4; let x_vec_off1 = t1 * k_vec4;
-    let x_vec_off2 = t2 * k_vec4; let x_vec_off3 = t3 * k_vec4;
-    let x_vec_off4 = t4 * k_vec4; let x_vec_off5 = t5 * k_vec4;
-    let x_vec_off6 = t6 * k_vec4; let x_vec_off7 = t7 * k_vec4;
+    let blk_in_k = lane8 >> 2u;       // 0 or 1
+    let word_idx = 1u + (lane8 & 3u); // 1..4
 
     var acc0: f32 = 0.0; var acc1: f32 = 0.0; var acc2: f32 = 0.0; var acc3: f32 = 0.0;
     var acc4: f32 = 0.0; var acc5: f32 = 0.0; var acc6: f32 = 0.0; var acc7: f32 = 0.0;
 
-    if (valid_row && has_t0) {
-        var base_blk = 0u;
-        while (base_blk < num_blocks) {
-            let cur_blk = base_blk + blk_in_wave;
-            let blk_off = row_word_offset + cur_blk * 5u;
-
-            let s = unpack2x16float(W[blk_off]).x;
-            let w_packed = W[blk_off + word_in_blk];
-
-            let cur_k_vec = (cur_blk * 32u >> 2u) + vec4_base;
-
-            let n0 = f32(w_packed & 0xFu) - 8.0;
-            let n1 = f32((w_packed >> 4u) & 0xFu) - 8.0;
-            let n2 = f32((w_packed >> 8u) & 0xFu) - 8.0;
-            let n3 = f32((w_packed >> 12u) & 0xFu) - 8.0;
-            let n4 = f32((w_packed >> 16u) & 0xFu) - 8.0;
-            let n5 = f32((w_packed >> 20u) & 0xFu) - 8.0;
-            let n6 = f32((w_packed >> 24u) & 0xFu) - 8.0;
-            let n7 = f32(w_packed >> 28u) - 8.0;
-
-            // Token 0
-            let v0_a = X[x_vec_off0 + cur_k_vec + 0u];
-            let v0_b = X[x_vec_off0 + cur_k_vec + 1u];
-            let sum_nx0 = n0 * v0_a.x + n1 * v0_a.y + n2 * v0_a.z + n3 * v0_a.w +
-                          n4 * v0_b.x + n5 * v0_b.y + n6 * v0_b.z + n7 * v0_b.w;
-            acc0 += (s * sum_nx0);
-
-            if (has_t1) {
-                let v1_a = X[x_vec_off1 + cur_k_vec + 0u];
-                let v1_b = X[x_vec_off1 + cur_k_vec + 1u];
-                let sum_nx1 = n0 * v1_a.x + n1 * v1_a.y + n2 * v1_a.z + n3 * v1_a.w +
-                              n4 * v1_b.x + n5 * v1_b.y + n6 * v1_b.z + n7 * v1_b.w;
-                acc1 += (s * sum_nx1);
+    var k_base_blk = 0u;
+    while (k_base_blk < num_blocks) {
+        // 1. Cooperative load of 8 tokens x 16 vec4 from X into s_X
+        if (lid.x < 128u) {
+            let x_tok = lid.x >> 4u;   // 0..7
+            let x_vec = lid.x & 15u;   // 0..15
+            let t_idx = t_base + x_tok;
+            let k_idx_vec4 = (k_base_blk * 8u) + x_vec;
+            if (t_idx < pc.N && k_idx_vec4 < k_vec4) {
+                s_X[lid.x] = X[t_idx * k_vec4 + k_idx_vec4];
+            } else {
+                s_X[lid.x] = vec4<f32>(0.0);
             }
-            if (has_t2) {
-                let v2_a = X[x_vec_off2 + cur_k_vec + 0u];
-                let v2_b = X[x_vec_off2 + cur_k_vec + 1u];
-                let sum_nx2 = n0 * v2_a.x + n1 * v2_a.y + n2 * v2_a.z + n3 * v2_a.w +
-                              n4 * v2_b.x + n5 * v2_b.y + n6 * v2_b.z + n7 * v2_b.w;
-                acc2 += (s * sum_nx2);
-            }
-            if (has_t3) {
-                let v3_a = X[x_vec_off3 + cur_k_vec + 0u];
-                let v3_b = X[x_vec_off3 + cur_k_vec + 1u];
-                let sum_nx3 = n0 * v3_a.x + n1 * v3_a.y + n2 * v3_a.z + n3 * v3_a.w +
-                              n4 * v3_b.x + n5 * v3_b.y + n6 * v3_b.z + n7 * v3_b.w;
-                acc3 += (s * sum_nx3);
-            }
-            if (has_t4) {
-                let v4_a = X[x_vec_off4 + cur_k_vec + 0u];
-                let v4_b = X[x_vec_off4 + cur_k_vec + 1u];
-                let sum_nx4 = n0 * v4_a.x + n1 * v4_a.y + n2 * v4_a.z + n3 * v4_a.w +
-                              n4 * v4_b.x + n5 * v4_b.y + n6 * v4_b.z + n7 * v4_b.w;
-                acc4 += (s * sum_nx4);
-            }
-            if (has_t5) {
-                let v5_a = X[x_vec_off5 + cur_k_vec + 0u];
-                let v5_b = X[x_vec_off5 + cur_k_vec + 1u];
-                let sum_nx5 = n0 * v5_a.x + n1 * v5_a.y + n2 * v5_a.z + n3 * v5_a.w +
-                              n4 * v5_b.x + n5 * v5_b.y + n6 * v5_b.z + n7 * v5_b.w;
-                acc5 += (s * sum_nx5);
-            }
-            if (has_t6) {
-                let v6_a = X[x_vec_off6 + cur_k_vec + 0u];
-                let v6_b = X[x_vec_off6 + cur_k_vec + 1u];
-                let sum_nx6 = n0 * v6_a.x + n1 * v6_a.y + n2 * v6_a.z + n3 * v6_a.w +
-                              n4 * v6_b.x + n5 * v6_b.y + n6 * v6_b.z + n7 * v6_b.w;
-                acc6 += (s * sum_nx6);
-            }
-            if (has_t7) {
-                let v7_a = X[x_vec_off7 + cur_k_vec + 0u];
-                let v7_b = X[x_vec_off7 + cur_k_vec + 1u];
-                let sum_nx7 = n0 * v7_a.x + n1 * v7_a.y + n2 * v7_a.z + n3 * v7_a.w +
-                              n4 * v7_b.x + n5 * v7_b.y + n6 * v7_b.z + n7 * v7_b.w;
-                acc7 += (s * sum_nx7);
-            }
-
-            base_blk += 8u;
         }
+        workgroupBarrier();
+
+        // 2. Compute partial dot products across the 8 tokens
+        if (valid_row) {
+            let cur_blk = k_base_blk + blk_in_k;
+            if (cur_blk < num_blocks) {
+                let blk_off = row_word_offset + cur_blk * 5u;
+                let s = unpack2x16float(W[blk_off]).x;
+                let w_packed = W[blk_off + word_idx];
+
+                let vec_a_idx = lane8 * 2u;
+                let vec_b_idx = lane8 * 2u + 1u;
+
+                let va0 = s_X[(0u << 4u) + vec_a_idx]; let vb0 = s_X[(0u << 4u) + vec_b_idx];
+                let va1 = s_X[(1u << 4u) + vec_a_idx]; let vb1 = s_X[(1u << 4u) + vec_b_idx];
+                let va2 = s_X[(2u << 4u) + vec_a_idx]; let vb2 = s_X[(2u << 4u) + vec_b_idx];
+                let va3 = s_X[(3u << 4u) + vec_a_idx]; let vb3 = s_X[(3u << 4u) + vec_b_idx];
+                let va4 = s_X[(4u << 4u) + vec_a_idx]; let vb4 = s_X[(4u << 4u) + vec_b_idx];
+                let va5 = s_X[(5u << 4u) + vec_a_idx]; let vb5 = s_X[(5u << 4u) + vec_b_idx];
+                let va6 = s_X[(6u << 4u) + vec_a_idx]; let vb6 = s_X[(6u << 4u) + vec_b_idx];
+                let va7 = s_X[(7u << 4u) + vec_a_idx]; let vb7 = s_X[(7u << 4u) + vec_b_idx];
+
+                acc0 += s * unpack_dot2(w_packed, va0, vb0);
+                acc1 += s * unpack_dot2(w_packed, va1, vb1);
+                acc2 += s * unpack_dot2(w_packed, va2, vb2);
+                acc3 += s * unpack_dot2(w_packed, va3, vb3);
+                acc4 += s * unpack_dot2(w_packed, va4, vb4);
+                acc5 += s * unpack_dot2(w_packed, va5, vb5);
+                acc6 += s * unpack_dot2(w_packed, va6, vb6);
+                acc7 += s * unpack_dot2(w_packed, va7, vb7);
+            }
+        }
+        workgroupBarrier();
+
+        k_base_blk += 2u;
     }
 
-    s_reduce0[lid.x] = acc0; if (has_t1) { s_reduce1[lid.x] = acc1; }
-    if (has_t2) { s_reduce2[lid.x] = acc2; } if (has_t3) { s_reduce3[lid.x] = acc3; }
-    if (has_t4) { s_reduce4[lid.x] = acc4; } if (has_t5) { s_reduce5[lid.x] = acc5; }
-    if (has_t6) { s_reduce6[lid.x] = acc6; } if (has_t7) { s_reduce7[lid.x] = acc7; }
+    if (!valid_row) { return; }
+
+    // 3. Tree reduction across the 8 lanes in each row team
+    // Token 0
+    s_reduce[lid.x] = acc0;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 0u) < pc.N) { Y[(t_base + 0u) * pc.M + row] = s_reduce[lid.x]; }
     workgroupBarrier();
 
-    let base = local_row * 32u;
-    if (lane < 16u) {
-        s_reduce0[base + lane] += s_reduce0[base + lane + 16u];
-        if (has_t1) { s_reduce1[base + lane] += s_reduce1[base + lane + 16u]; }
-        if (has_t2) { s_reduce2[base + lane] += s_reduce2[base + lane + 16u]; }
-        if (has_t3) { s_reduce3[base + lane] += s_reduce3[base + lane + 16u]; }
-        if (has_t4) { s_reduce4[base + lane] += s_reduce4[base + lane + 16u]; }
-        if (has_t5) { s_reduce5[base + lane] += s_reduce5[base + lane + 16u]; }
-        if (has_t6) { s_reduce6[base + lane] += s_reduce6[base + lane + 16u]; }
-        if (has_t7) { s_reduce7[base + lane] += s_reduce7[base + lane + 16u]; }
-    }
+    // Token 1
+    s_reduce[lid.x] = acc1;
     workgroupBarrier();
-    if (lane < 8u) {
-        s_reduce0[base + lane] += s_reduce0[base + lane + 8u];
-        if (has_t1) { s_reduce1[base + lane] += s_reduce1[base + lane + 8u]; }
-        if (has_t2) { s_reduce2[base + lane] += s_reduce2[base + lane + 8u]; }
-        if (has_t3) { s_reduce3[base + lane] += s_reduce3[base + lane + 8u]; }
-        if (has_t4) { s_reduce4[base + lane] += s_reduce4[base + lane + 8u]; }
-        if (has_t5) { s_reduce5[base + lane] += s_reduce5[base + lane + 8u]; }
-        if (has_t6) { s_reduce6[base + lane] += s_reduce6[base + lane + 8u]; }
-        if (has_t7) { s_reduce7[base + lane] += s_reduce7[base + lane + 8u]; }
-    }
-    workgroupBarrier();
-    if (lane < 4u) {
-        s_reduce0[base + lane] += s_reduce0[base + lane + 4u];
-        if (has_t1) { s_reduce1[base + lane] += s_reduce1[base + lane + 4u]; }
-        if (has_t2) { s_reduce2[base + lane] += s_reduce2[base + lane + 4u]; }
-        if (has_t3) { s_reduce3[base + lane] += s_reduce3[base + lane + 4u]; }
-        if (has_t4) { s_reduce4[base + lane] += s_reduce4[base + lane + 4u]; }
-        if (has_t5) { s_reduce5[base + lane] += s_reduce5[base + lane + 4u]; }
-        if (has_t6) { s_reduce6[base + lane] += s_reduce6[base + lane + 4u]; }
-        if (has_t7) { s_reduce7[base + lane] += s_reduce7[base + lane + 4u]; }
-    }
-    workgroupBarrier();
-    if (lane < 2u) {
-        s_reduce0[base + lane] += s_reduce0[base + lane + 2u];
-        if (has_t1) { s_reduce1[base + lane] += s_reduce1[base + lane + 2u]; }
-        if (has_t2) { s_reduce2[base + lane] += s_reduce2[base + lane + 2u]; }
-        if (has_t3) { s_reduce3[base + lane] += s_reduce3[base + lane + 2u]; }
-        if (has_t4) { s_reduce4[base + lane] += s_reduce4[base + lane + 2u]; }
-        if (has_t5) { s_reduce5[base + lane] += s_reduce5[base + lane + 2u]; }
-        if (has_t6) { s_reduce6[base + lane] += s_reduce6[base + lane + 2u]; }
-        if (has_t7) { s_reduce7[base + lane] += s_reduce7[base + lane + 2u]; }
-    }
-    workgroupBarrier();
-    if (lane < 1u) {
-        s_reduce0[base + lane] += s_reduce0[base + lane + 1u];
-        if (has_t1) { s_reduce1[base + lane] += s_reduce1[base + lane + 1u]; }
-        if (has_t2) { s_reduce2[base + lane] += s_reduce2[base + lane + 1u]; }
-        if (has_t3) { s_reduce3[base + lane] += s_reduce3[base + lane + 1u]; }
-        if (has_t4) { s_reduce4[base + lane] += s_reduce4[base + lane + 1u]; }
-        if (has_t5) { s_reduce5[base + lane] += s_reduce5[base + lane + 1u]; }
-        if (has_t6) { s_reduce6[base + lane] += s_reduce6[base + lane + 1u]; }
-        if (has_t7) { s_reduce7[base + lane] += s_reduce7[base + lane + 1u]; }
-    }
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 1u) < pc.N) { Y[(t_base + 1u) * pc.M + row] = s_reduce[lid.x]; }
     workgroupBarrier();
 
-    if (lane == 0u && valid_row) {
-        Y[t0 * pc.M + row] = s_reduce0[base];
-        if (has_t1) { Y[t1 * pc.M + row] = s_reduce1[base]; }
-        if (has_t2) { Y[t2 * pc.M + row] = s_reduce2[base]; }
-        if (has_t3) { Y[t3 * pc.M + row] = s_reduce3[base]; }
-        if (has_t4) { Y[t4 * pc.M + row] = s_reduce4[base]; }
-        if (has_t5) { Y[t5 * pc.M + row] = s_reduce5[base]; }
-        if (has_t6) { Y[t6 * pc.M + row] = s_reduce6[base]; }
-        if (has_t7) { Y[t7 * pc.M + row] = s_reduce7[base]; }
-    }
+    // Token 2
+    s_reduce[lid.x] = acc2;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 2u) < pc.N) { Y[(t_base + 2u) * pc.M + row] = s_reduce[lid.x]; }
+    workgroupBarrier();
+
+    // Token 3
+    s_reduce[lid.x] = acc3;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 3u) < pc.N) { Y[(t_base + 3u) * pc.M + row] = s_reduce[lid.x]; }
+    workgroupBarrier();
+
+    // Token 4
+    s_reduce[lid.x] = acc4;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 4u) < pc.N) { Y[(t_base + 4u) * pc.M + row] = s_reduce[lid.x]; }
+    workgroupBarrier();
+
+    // Token 5
+    s_reduce[lid.x] = acc5;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 5u) < pc.N) { Y[(t_base + 5u) * pc.M + row] = s_reduce[lid.x]; }
+    workgroupBarrier();
+
+    // Token 6
+    s_reduce[lid.x] = acc6;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 6u) < pc.N) { Y[(t_base + 6u) * pc.M + row] = s_reduce[lid.x]; }
+    workgroupBarrier();
+
+    // Token 7
+    s_reduce[lid.x] = acc7;
+    workgroupBarrier();
+    if (lane8 < 4u) { s_reduce[lid.x] += s_reduce[lid.x + 4u]; }
+    if (lane8 < 2u) { s_reduce[lid.x] += s_reduce[lid.x + 2u]; }
+    if (lane8 < 1u) { s_reduce[lid.x] += s_reduce[lid.x + 1u]; }
+    if (lane8 == 0u && (t_base + 7u) < pc.N) { Y[(t_base + 7u) * pc.M + row] = s_reduce[lid.x]; }
 }
