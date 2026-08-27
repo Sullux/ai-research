@@ -112,6 +112,11 @@ pub const ModelConfig = struct {
     }
 };
 
+pub const TopKCandidate = struct {
+    id: u32 = 0,
+    val: f32 = 0.0,
+};
+
 pub const ForwardScratch = struct {
     x: []f32,
     prev_x: []f32,
@@ -128,6 +133,7 @@ pub const ForwardScratch = struct {
     ple_buf_1: []f32,
     ple_buf_2: []f32,
     logits: []f32,
+    topk_candidates: [64]TopKCandidate = [_]TopKCandidate{.{}} ** 64,
     active_slots: []usize,
     prev_normed_x: []f32,
     recall_indices: []usize,

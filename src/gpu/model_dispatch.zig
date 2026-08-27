@@ -122,15 +122,14 @@ pub fn recordForwardGraph(gpu: *model_gpu.GpuModelContext, config: *const model_
     if (include_logits) {
         gpu.engine.recordGemvLogits(cmd_buf, gpu.desc_logits, V, H, 0);
         gpu.engine.recordBarrier(cmd_buf);
-        gpu.engine.recordArgmax(cmd_buf, gpu.desc_argmax, V);
+        gpu.engine.recordTopK(cmd_buf, gpu.desc_topk_pass1, gpu.desc_topk_pass2, V);
     }
     _ = gpu.ctx.api.vkEndCommandBuffer(cmd_buf);
 }
 
-pub fn gpuDispatchForwardToken(gpu: *model_gpu.GpuModelContext, config: *const model_types.ModelConfig, layers: []const model_types.LayerWeights, x: []const f32, logits: []f32, clock: usize, slot_idx: usize, active_slots: []const usize) u32 {
+pub fn gpuDispatchForwardToken(gpu: *model_gpu.GpuModelContext, config: *const model_types.ModelConfig, layers: []const model_types.LayerWeights, x: []const f32, topk_out: ?[]model_types.TopKCandidate, clock: usize, slot_idx: usize, active_slots: []const usize) u32 {
     _ = layers;
     const H = config.hidden_size;
-    const V = config.vocab_size;
 
     @memcpy(gpu.buf_x.asSlice(f32)[0..H], x[0..H]);
     for (gpu.buf_active_slots.asSlice(u32)[0..active_slots.len], active_slots) |*dst, s| dst.* = @intCast(s);
@@ -140,7 +139,14 @@ pub fn gpuDispatchForwardToken(gpu: *model_gpu.GpuModelContext, config: *const m
     params[2] = @intCast(active_slots.len);
     params[3] = 0;
 
-    const cmd_buf = if (logits.len == 0 or logits.len >= V) gpu.cmd_buf_decode else gpu.cmd_buf_prefill;
+    const cmd_buf = if (topk_out != null) gpu.cmd_buf_decode else gpu.cmd_buf_prefill;
     gpu.engine.submitPreRecorded(cmd_buf) catch return 0;
-    return gpu.buf_sampled_token.asSlice(u32)[0];
+    if (topk_out) |out| {
+        const ids = gpu.buf_topk_ids.asSlice(u32)[0..64];
+        const vals = gpu.buf_topk_vals.asSlice(f32)[0..64];
+        for (out[0..64], ids, vals) |*dst, id, v| {
+            dst.* = .{ .id = id, .val = v };
+        }
+    }
+    return gpu.buf_topk_ids.asSlice(u32)[0];
 }

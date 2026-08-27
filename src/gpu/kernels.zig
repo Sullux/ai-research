@@ -28,6 +28,8 @@ pub const GpuEngine = struct {
     attn_pipe: pipeline.ComputePipeline,
     qkv_rope_pipe: pipeline.ComputePipeline,
     argmax_pipe: pipeline.ComputePipeline,
+    topk_pass1_pipe: pipeline.ComputePipeline,
+    topk_pass2_pipe: pipeline.ComputePipeline,
     quiescence_pipe: pipeline.ComputePipeline,
     cmd_pool: types.VkCommandPool,
     cmd_buf: types.VkCommandBuffer,
@@ -47,6 +49,8 @@ pub const GpuEngine = struct {
         var attn = try pipeline.ComputePipeline.init(ctx, &shaders.DECODE_ATTENTION_SPIRV, 6, 16); errdefer attn.deinit();
         var qkv_rope = try pipeline.ComputePipeline.init(ctx, &shaders.QKV_ROPE_SPIRV, 9, 32); errdefer qkv_rope.deinit();
         var argmax = try pipeline.ComputePipeline.init(ctx, &shaders.ARGMAX_SPIRV, 2, 4); errdefer argmax.deinit();
+        var topk_pass1 = try pipeline.ComputePipeline.init(ctx, &shaders.TOPK_PASS1_SPIRV, 3, 4); errdefer topk_pass1.deinit();
+        var topk_pass2 = try pipeline.ComputePipeline.init(ctx, &shaders.TOPK_PASS2_SPIRV, 4, 4); errdefer topk_pass2.deinit();
         var quiescence = try pipeline.ComputePipeline.init(ctx, &shaders.QUIESCENCE_GATE_SPIRV, 3, @sizeOf(QuiescenceGatePushConstants)); errdefer quiescence.deinit();
 
         const cp_info = types_dispatch.VkCommandPoolCreateInfo{ .flags = types.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = ctx.queue_family_index };
@@ -64,7 +68,7 @@ pub const GpuEngine = struct {
             .ctx = ctx, .mode = mode, .gemv_attn_pipe = gemv_attn, .gemv_mlp_pipe = gemv_mlp, .gemv_logits_pipe = gemv_logits,
             .swiglu_pipe = swiglu, .gate_up_pipe = gate_up, .add_rmsnorm_pipe = add_rms,
             .rmsnorm_pipe = rms, .attn_pipe = attn, .qkv_rope_pipe = qkv_rope,
-            .argmax_pipe = argmax, .quiescence_pipe = quiescence,
+            .argmax_pipe = argmax, .topk_pass1_pipe = topk_pass1, .topk_pass2_pipe = topk_pass2, .quiescence_pipe = quiescence,
             .cmd_pool = pool, .cmd_buf = cmd, .fence = fence,
         };
     }
@@ -76,6 +80,7 @@ pub const GpuEngine = struct {
         self.qkv_rope_pipe.deinit(); self.attn_pipe.deinit(); self.rmsnorm_pipe.deinit();
         self.add_rmsnorm_pipe.deinit(); self.gate_up_pipe.deinit(); self.swiglu_pipe.deinit();
         self.gemv_logits_pipe.deinit(); self.gemv_mlp_pipe.deinit(); self.gemv_attn_pipe.deinit(); self.argmax_pipe.deinit();
+        self.topk_pass1_pipe.deinit(); self.topk_pass2_pipe.deinit();
         self.quiescence_pipe.deinit();
     }
 
@@ -149,6 +154,13 @@ pub const GpuEngine = struct {
     pub fn recordArgmax(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, vocab_size: usize) void {
         const pc = extern struct { v: u32 }{ .v = @intCast(vocab_size) };
         self.argmax_pipe.record(cmd, set, std.mem.asBytes(&pc), 1, 1, 1);
+    }
+    pub fn recordTopK(self: *const GpuEngine, cmd: types.VkCommandBuffer, desc_p1: types.VkDescriptorSet, desc_p2: types.VkDescriptorSet, vocab_size: usize) void {
+        const pc1 = extern struct { v: u32 }{ .v = @intCast(vocab_size) };
+        self.topk_pass1_pipe.record(cmd, desc_p1, std.mem.asBytes(&pc1), 64, 1, 1);
+        self.recordBarrier(cmd);
+        const pc2 = extern struct { g: u32 }{ .g = 64 };
+        self.topk_pass2_pipe.record(cmd, desc_p2, std.mem.asBytes(&pc2), 1, 1, 1);
     }
     pub fn recordBarrier(self: *const GpuEngine, cmd: types.VkCommandBuffer) void {
         const b = types_dispatch.VkMemoryBarrier{ .srcAccessMask = 0x00000020 | 0x00000040, .dstAccessMask = 0x00000020 | 0x00000040 };

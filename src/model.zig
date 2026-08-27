@@ -8,6 +8,7 @@ pub const LayerWeights = types.LayerWeights;
 pub const ModelConfig = types.ModelConfig;
 pub const KVCache = types.KVCache;
 pub const ForwardScratch = types.ForwardScratch;
+pub const TopKCandidate = types.TopKCandidate;
 
 pub const Model = loader.Model;
 pub const forwardToken = forward.forwardToken;

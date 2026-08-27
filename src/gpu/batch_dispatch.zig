@@ -146,6 +146,8 @@ pub fn gpuDispatchPrefillBatch(
                 prefill.ctx.api.vkCmdCopyBuffer(prefill.cmd_buf, prefill.buf_normed_x.buffer, gpu.buf_normed_x.buffer, 1, (&copy_region)[0..1].ptr);
                 recordBarrier(gpu, prefill.cmd_buf);
                 gpu.engine.recordGemvLogits(prefill.cmd_buf, gpu.desc_logits, config.vocab_size, H, 0);
+                recordBarrier(gpu, prefill.cmd_buf);
+                gpu.engine.recordTopK(prefill.cmd_buf, gpu.desc_topk_pass1, gpu.desc_topk_pass2, config.vocab_size);
             }
             _ = prefill.ctx.api.vkEndCommandBuffer(prefill.cmd_buf);
             const submit_info = types_dispatch.VkSubmitInfo{ .commandBufferCount = 1, .pCommandBuffers = (&prefill.cmd_buf)[0..1].ptr };

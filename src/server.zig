@@ -157,6 +157,13 @@ pub const Server = struct {
                 const l_dst = if (is_last) self.scratch.logits else self.scratch.logits[0..0];
                 var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .total_tok = total_prefill, .is_gpu = is_gpu, .start_time = prefill_start };
                 try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, chunk, self.m.embed_tokens, c_slots, self.clock, prev_count, l_dst, PrefillProgress.cb, &p_prog);
+                if (is_last) {
+                    const ids = gmc.buf_topk_ids.asSlice(u32)[0..64];
+                    const vals = gmc.buf_topk_vals.asSlice(f32)[0..64];
+                    for (&self.scratch.topk_candidates, ids, vals) |*dst, id, v| {
+                        dst.* = .{ .id = id, .val = v };
+                    }
+                }
                 self.clock += chunk.len; off += chunk.len;
             }
         } else {
@@ -177,7 +184,7 @@ pub const Server = struct {
             writer.flush(); return;
         }
         if (tokens.len > 0) {
-            cur = self.sampler.sample(self.scratch.logits, null);
+            cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
             var is_thk = false;
             for (tokens) |t| { if (t == 100) is_thk = true else if (t == 101) is_thk = false; }
             self.in_thinking_channel = is_thk;
@@ -288,6 +295,9 @@ pub const Server = struct {
         const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
         self.clock += 1;
         if (!needs_logits) return next_tok;
+        if (self.gpu_opt != null) {
+            return self.sampler.sampleTopK(&self.scratch.topk_candidates, recent_tokens);
+        }
         return self.sampler.sample(self.scratch.logits, recent_tokens);
     }
 };

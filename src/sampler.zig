@@ -1,5 +1,6 @@
 const std = @import("std");
 const kernels = @import("kernels.zig");
+pub const TopKCandidate = @import("model/types.zig").TopKCandidate;
 
 pub const IndexedLogit = struct {
     id: u32,
@@ -167,6 +168,85 @@ pub const Sampler = struct {
             acc += probs[i];
             if (acc >= r) {
                 chosen_id = candidates[i].id;
+                break;
+            }
+        }
+
+        return chosen_id;
+    }
+
+    pub fn sampleTopK(self: *Sampler, candidates: []const TopKCandidate, recent_tokens: ?[]const u32) u32 {
+        if (self.temp <= 0.0 or candidates.len == 0) return candidates[0].id;
+
+        var items: [64]TopKCandidate = undefined;
+        var K: usize = 0;
+        for (candidates) |cand| {
+            if (cand.id == 0 or cand.id == 258882 or cand.id == 258883 or cand.id == 255999 or cand.id == 256000 or cand.id == 256001 or cand.id == 255995 or cand.id == 255996 or cand.id == 255997 or cand.id == 255998) continue;
+            items[K] = cand;
+            K += 1;
+            if (K == 64) break;
+        }
+        if (K == 0) return candidates[0].id;
+
+        if (self.repeat_penalty > 1.0 and recent_tokens != null) {
+            for (recent_tokens.?) |tok| {
+                if (isExcludedFromRepeatPenalty(tok)) continue;
+                for (items[0..K]) |*item| {
+                    if (item.id == tok) {
+                        if (item.val > 0.0) {
+                            item.val /= self.repeat_penalty;
+                        } else {
+                            item.val *= self.repeat_penalty;
+                        }
+                    }
+                }
+            }
+        }
+
+        var probs: [64]f32 = undefined;
+        var max_scaled: f32 = -1e9;
+        const t = if (self.temp > 0.0) self.temp else 1.0;
+        for (items[0..K], 0..) |cand, i| {
+            const scaled = cand.val / t;
+            probs[i] = scaled;
+            if (scaled > max_scaled) max_scaled = scaled;
+        }
+
+        var sum: f32 = 0.0;
+        for (0..K) |i| {
+            probs[i] = @exp(probs[i] - max_scaled);
+            sum += probs[i];
+        }
+        for (0..K) |i| probs[i] /= sum;
+
+        const max_p = probs[0];
+        const p_thresh = max_p * self.min_p;
+        var valid_k: usize = 0;
+        var valid_sum: f32 = 0.0;
+        for (0..K) |i| {
+            if (probs[i] >= p_thresh) {
+                valid_k = i + 1;
+                valid_sum += probs[i];
+            } else break;
+        }
+        if (valid_k == 0) valid_k = 1;
+        for (0..valid_k) |i| probs[i] /= valid_sum;
+
+        var cum_p: f32 = 0.0;
+        var cutoff: usize = 0;
+        for (0..valid_k) |i| {
+            cum_p += probs[i];
+            cutoff = i + 1;
+            if (cum_p >= self.top_p) break;
+        }
+
+        const r = self.prng.random().float(f32) * cum_p;
+        var acc: f32 = 0.0;
+        var chosen_id = items[0].id;
+        for (0..cutoff) |i| {
+            acc += probs[i];
+            if (acc >= r) {
+                chosen_id = items[i].id;
                 break;
             }
         }

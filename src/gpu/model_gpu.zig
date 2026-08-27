@@ -32,9 +32,11 @@ pub const GpuModelContext = struct {
     desc_mgr: descriptors.DescriptorManager, layers: []GpuLayerWeights,
     embed_tokens: buffer.GpuBuffer, final_norm: buffer.GpuBuffer,
     desc_logits: types.VkDescriptorSet, desc_final_norm: types.VkDescriptorSet, desc_argmax: types.VkDescriptorSet,
+    desc_topk_pass1: types.VkDescriptorSet, desc_topk_pass2: types.VkDescriptorSet,
     buf_x: buffer.GpuBuffer, buf_normed_x: buffer.GpuBuffer, buf_q: buffer.GpuBuffer, buf_k: buffer.GpuBuffer, buf_v: buffer.GpuBuffer,
     buf_attn_out: buffer.GpuBuffer, buf_active_slots: buffer.GpuBuffer, buf_gate: buffer.GpuBuffer, buf_up: buffer.GpuBuffer,
     buf_act: buffer.GpuBuffer, buf_mlp_out: buffer.GpuBuffer, buf_logits: buffer.GpuBuffer, buf_sampled_token: buffer.GpuBuffer,
+    buf_topk_inter_ids: buffer.GpuBuffer, buf_topk_inter_vals: buffer.GpuBuffer, buf_topk_ids: buffer.GpuBuffer, buf_topk_vals: buffer.GpuBuffer,
     buf_step_params: buffer.GpuBuffer, buf_indirect_cmds: buffer.GpuBuffer,
     cmd_buf_decode: types.VkCommandBuffer, cmd_buf_prefill: types.VkCommandBuffer,
     batch_prefill_ctx: ?*@import("batch_prefill.zig").BatchPrefillContext = null,
@@ -92,6 +94,10 @@ pub const GpuModelContext = struct {
         const buf_up = try buffer.GpuBuffer.init(ctx, I * 4, sb);
         const buf_act = try buffer.GpuBuffer.init(ctx, I * 4, sb);
         const buf_mlp_out = try buffer.GpuBuffer.init(ctx, H * 4, sb);
+        const buf_topk_inter_ids = try buffer.GpuBuffer.init(ctx, 4096 * 4, sb);
+        const buf_topk_inter_vals = try buffer.GpuBuffer.init(ctx, 4096 * 4, sb);
+        const buf_topk_ids = try buffer.GpuBuffer.init(ctx, 64 * 4, sb);
+        const buf_topk_vals = try buffer.GpuBuffer.init(ctx, 64 * 4, sb);
         const buf_logits = try buffer.GpuBuffer.initCached(ctx, V * 4, sb);
         const buf_sampled_token = try buffer.GpuBuffer.init(ctx, 4, sb);
         const buf_step_params = try buffer.GpuBuffer.init(ctx, 64, sb);
@@ -158,9 +164,13 @@ pub const GpuModelContext = struct {
         const desc_logits = try desc_mgr.allocateSet(engine.gemv_logits_pipe.desc_set_layout);
         const desc_final_norm = try desc_mgr.allocateSet(engine.rmsnorm_pipe.desc_set_layout);
         const desc_argmax = try desc_mgr.allocateSet(engine.argmax_pipe.desc_set_layout);
+        const desc_topk_pass1 = try desc_mgr.allocateSet(engine.topk_pass1_pipe.desc_set_layout);
+        const desc_topk_pass2 = try desc_mgr.allocateSet(engine.topk_pass2_pipe.desc_set_layout);
         desc_mgr.bindBuffers(desc_final_norm, &.{ &buf_x, &final_norm, &buf_normed_x });
         desc_mgr.bindBuffers(desc_logits, &.{ &embed_tokens, &buf_normed_x, &buf_logits });
         desc_mgr.bindBuffers(desc_argmax, &.{ &buf_logits, &buf_sampled_token });
+        desc_mgr.bindBuffers(desc_topk_pass1, &.{ &buf_logits, &buf_topk_inter_ids, &buf_topk_inter_vals });
+        desc_mgr.bindBuffers(desc_topk_pass2, &.{ &buf_topk_inter_ids, &buf_topk_inter_vals, &buf_topk_ids, &buf_topk_vals });
 
         var bp_ptr: ?*@import("batch_prefill.zig").BatchPrefillContext = null;
         if (allocator.create(@import("batch_prefill.zig").BatchPrefillContext)) |bp| {
@@ -173,10 +183,13 @@ pub const GpuModelContext = struct {
             .allocator = allocator, .ctx = ctx, .engine = engine, .desc_mgr = desc_mgr,
             .layers = gpu_layers, .embed_tokens = embed_tokens, .final_norm = final_norm,
             .desc_logits = desc_logits, .desc_final_norm = desc_final_norm, .desc_argmax = desc_argmax,
+            .desc_topk_pass1 = desc_topk_pass1, .desc_topk_pass2 = desc_topk_pass2,
             .buf_x = buf_x, .buf_normed_x = buf_normed_x, .buf_q = buf_q, .buf_k = buf_k, .buf_v = buf_v,
             .buf_attn_out = buf_attn_out, .buf_active_slots = buf_active_slots,
             .buf_gate = buf_gate, .buf_up = buf_up, .buf_act = buf_act, .buf_mlp_out = buf_mlp_out,
             .buf_logits = buf_logits, .buf_sampled_token = buf_sampled_token,
+            .buf_topk_inter_ids = buf_topk_inter_ids, .buf_topk_inter_vals = buf_topk_inter_vals,
+            .buf_topk_ids = buf_topk_ids, .buf_topk_vals = buf_topk_vals,
             .buf_step_params = buf_step_params, .buf_indirect_cmds = buf_indirect_cmds,
             .cmd_buf_decode = cmds[0], .cmd_buf_prefill = cmds[1], .batch_prefill_ctx = bp_ptr,
         };
@@ -193,6 +206,8 @@ pub const GpuModelContext = struct {
         self.allocator.free(self.layers);
         self.buf_indirect_cmds.deinit(); self.final_norm.deinit(); self.embed_tokens.deinit();
         self.buf_step_params.deinit(); self.buf_sampled_token.deinit(); self.buf_logits.deinit();
+        self.buf_topk_vals.deinit(); self.buf_topk_ids.deinit();
+        self.buf_topk_inter_vals.deinit(); self.buf_topk_inter_ids.deinit();
         self.buf_mlp_out.deinit(); self.buf_act.deinit(); self.buf_up.deinit(); self.buf_gate.deinit();
         self.buf_active_slots.deinit(); self.buf_attn_out.deinit(); self.buf_v.deinit();
         self.buf_k.deinit(); self.buf_q.deinit(); self.buf_normed_x.deinit(); self.buf_x.deinit();
