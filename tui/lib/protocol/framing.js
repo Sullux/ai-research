@@ -48,9 +48,9 @@ const memQueryFrame = (query, msgId = 1, topK = 5) => {
   return Buffer.concat([hdr, payload])
 }
 
-const configFrame = (budget = 512, temp = 1.0, topP = 0.95, qThresh = 0.001, maxTok = 64, minP = 0.05, repeatPenalty = 1.1, msgId = 1) => {
+const configFrame = (thinkingBudget = 512, temp = 1.0, topP = 0.95, qThresh = 0.001, maxTok = 64, minP = 0.05, repeatPenalty = 1.1, msgId = 1) => {
   const payload = Buffer.alloc(28)
-  payload.writeUInt32LE(budget, 0)
+  payload.writeUInt32LE(thinkingBudget, 0)
   payload.writeFloatLE(temp, 4)
   payload.writeFloatLE(topP, 8)
   payload.writeFloatLE(qThresh, 12)

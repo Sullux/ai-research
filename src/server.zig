@@ -24,7 +24,7 @@ const PrefillProgress = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, top_p: f32 = 0.95, temp: f32 = 0.7, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -32,7 +32,7 @@ pub const Server = struct {
             @memset(g.buf_logits.asSlice(f32), 0.0); @memset(g.buf_x.asSlice(f32), 0.0);
             if (g.batch_prefill_ctx) |bp| { @memset(bp.buf_x.asSlice(f32), 0.0); @memset(bp.buf_normed_x.asSlice(f32), 0.0); }
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .temp = 0.7, .top_p = 0.95, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = null, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = null, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
     }
     pub fn deinit(self: *Server) void { _ = self; }
     inline fn slots(self: *Server) u16 { return @intCast(self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots)); }
@@ -94,6 +94,7 @@ pub const Server = struct {
 
     fn handleSetConfig(self: *Server, p: []const u8) void {
         if (p.len < 20) return;
+        self.thinking_budget = std.mem.readInt(u32, p[0..4], .little);
         self.temp = @bitCast(std.mem.readInt(u32, p[4..8], .little));
         self.top_p = @bitCast(std.mem.readInt(u32, p[8..12], .little));
         self.sampler.temp = self.temp;
@@ -243,12 +244,13 @@ pub const Server = struct {
     fn decodeResponse(self: *Server, msg_id: u16, first_token: u32, writer: anytype, diff_count: u16, is_gpu: u8) !void {
         var cur = first_token;
         var start: i64 = 0;
-        var gen_count: u32 = 0;
+        var thinking_count: u32 = 0;
+        var response_count: u32 = 0;
         var reason: u8 = protocol.STOP_END_OF_TURN;
         var recent_buf: [64]u32 = undefined;
         var recent_count: usize = 0;
 
-        for (0..self.max_tokens) |_| {
+        while (true) {
             if (self.is_aborted.load(.monotonic)) { reason = protocol.STOP_ABORTED; break; }
             if (cur == self.tok.eos_token_id or cur == 106) {
                 _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
@@ -265,28 +267,48 @@ pub const Server = struct {
                 recent_buf[63] = cur;
             }
 
-            if (cur == 100) { self.in_thinking_channel = true; recent_count = 0; cur = self.advanceToken(cur, &.{}); gen_count += 1; continue; }
-            if (cur == 101) { self.in_thinking_channel = false; recent_count = 0; cur = self.advanceToken(cur, &.{}); gen_count += 1; continue; }
-            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, recent_buf[0..recent_count]); gen_count += 1; continue; }
+            if (cur == 100) { self.in_thinking_channel = true; recent_count = 0; cur = self.advanceToken(cur, &.{}); continue; }
+            if (cur == 101) { self.in_thinking_channel = false; recent_count = 0; cur = self.advanceToken(cur, &.{}); continue; }
+            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
+
+            if (self.in_thinking_channel) {
+                if (thinking_count >= self.thinking_budget) {
+                    self.in_thinking_channel = false;
+                    recent_count = 0;
+                    cur = self.advanceToken(101, &.{});
+                    continue;
+                }
+                thinking_count += 1;
+            } else {
+                if (response_count >= self.max_tokens) {
+                    reason = protocol.STOP_MAX_TOKENS;
+                    break;
+                }
+                response_count += 1;
+            }
+
             const str = self.tok.decode(cur);
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
             writer.flush();
-            gen_count += 1;
-            if (gen_count % 8 == 0) {
+
+            const total_gen = thinking_count + response_count;
+            if (total_gen % 8 == 0) {
                 const el = @max(1, std.time.milliTimestamp() - start);
-                const dividend = if (gen_count > 1) gen_count - 1 else gen_count;
-                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, gen_count, @intCast(self.max_tokens), is_gpu);
+                const dividend = if (total_gen > 1) total_gen - 1 else total_gen;
+                const total_budget: u32 = @intCast(self.max_tokens + self.thinking_budget);
+                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, total_gen, total_budget, is_gpu);
                 writer.flush();
             }
             cur = self.advanceToken(cur, recent_buf[0..recent_count]);
         }
+        const total_gen = thinking_count + response_count;
         const now = std.time.milliTimestamp();
         const elapsed: u32 = @intCast(@max(1, now - (if (start > 0) start else now)));
-        const dividend = if (gen_count > 1) gen_count - 1 else gen_count;
+        const dividend = if (total_gen > 1) total_gen - 1 else total_gen;
         const tok_sec = (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
-        try protocol.writeTurnComplete(writer, msg_id, gen_count, elapsed, tok_sec, reason);
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, gen_count, gen_count, is_gpu);
+        try protocol.writeTurnComplete(writer, msg_id, total_gen, elapsed, tok_sec, reason);
+        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, total_gen, total_gen, is_gpu);
         writer.flush();
         if (self.archive != null and self.hippo != null) _ = self.hippo.?.commit(self.archive.?, self.ring, self.store);
     }

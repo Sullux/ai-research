@@ -67,7 +67,8 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
 
   const setConfig = (o) => {
     if (proc?.stdin?.writable) {
-      proc.stdin.write(configFrame(o.budget, o.temp, o.topP, o.qThresh, o.maxTokens, o.minP, o.repeatPenalty, nextMsgId++))
+      const budget = o.thinkingBudget ?? o.budget ?? 512
+      proc.stdin.write(configFrame(budget, o.temp, o.topP, o.qThresh, o.maxTokens, o.minP, o.repeatPenalty, nextMsgId++))
     }
   }
 

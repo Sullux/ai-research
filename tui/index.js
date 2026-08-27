@@ -19,7 +19,7 @@ const loadConfig = () => {
   return {
     modelPath: '../../gemma-4-12B-it',
     extraArgs: ['--gpu', '--q4', '--quiescence'],
-    runtime: { maxTokens: 512, budget: 512, temp: 0.7, topP: 0.95, qThresh: 0.001 },
+    runtime: { maxTokens: 512, thinkingBudget: 512, temp: 0.7, topP: 0.95, qThresh: 0.001 },
   }
 }
 
