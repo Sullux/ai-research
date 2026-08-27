@@ -11,7 +11,7 @@ This document records the strategic order of operations for completing the Strea
   - Apply $\tanh$ logit softcapping directly on GPU and implement a lightweight 2-pass GPU Top-64 reduction shader.
   - Transfer only 64 candidate token IDs and logits (512 bytes) to the host per step instead of copying the full 1.0 MB (262k floats) logits buffer.
   - Eliminates host CPU softcapping and 262k-entry heap insertion latency (~10–12 ms per token), boosting end-to-end decode throughput from $\approx 19.4\text{ tok/s}$ to $\approx 25.0\text{ tok/s}$.
-- [ ] **Fused QKV Projection Dispatch in Decode (High ROI ⭐⭐):**
+- [x] **Fused QKV Projection Dispatch in Decode (High ROI ⭐⭐):**
   - Combine separate $Q$, $K$, and $V$ GEMV dispatches into a single fused QKV projection dispatch per layer (using `shaders/fused_qkv_q4.wgsl`).
   - Eliminates 96 Vulkan dispatches and 96 pipeline execution barriers per step, reducing raw GPU decode latency by $\approx 1.5\text{–}2.0\text{ ms}$ (reaching $\approx 26.5\text{–}27.0\text{ tok/s}$).
 - [ ] **2D Shared-Memory Block Tiling in Batch GEMM (High ROI for Prefill ⭐⭐):**
