@@ -39,7 +39,7 @@ pub fn forwardToken(
     var result_token: u32 = 0;
 
     if (gpu_opt) |g| {
-        for (0..self.config.num_hidden_layers) |l| _ = ring.activateSlot(l, clock);
+        _ = ring.activateSlot(0, clock);
         const slot_idx = ring.getSlotIndex(clock);
         const active_count = ring.getActiveSlots(0, clock, scratch.active_slots);
         const topk_out: ?[]model.TopKCandidate = if (compute_logits) &scratch.topk_candidates else null;

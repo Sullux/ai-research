@@ -43,7 +43,8 @@ fn main(
     workgroupBarrier();
 
     // 1. Compute dot product scores for all active slots (4x unrolled burst reads)
-    for (var slot_i = lane; slot_i < S; slot_i = slot_i + 32u) {
+    var slot_i = lane;
+    while (slot_i < S) {
         let physical_slot = Active_slots[slot_i];
         let kv_offset = physical_slot * kv_vec4 + kv_h * D_vec4;
 
@@ -68,6 +69,7 @@ fn main(
             d = d + 1u;
         }
         s_scores[slot_i] = dot_sum * pc.inv_sqrt_dim;
+        slot_i += 32u;
     }
     workgroupBarrier();
 
@@ -119,58 +121,78 @@ fn main(
     }
     workgroupBarrier();
 
-    // 3. Weighted sum of V_cache vectors (4x unrolled for pipelined memory loads)
+    // 3. Weighted sum of V_cache vectors (8x unrolled for pipelined burst loads)
     var acc0 = vec4<f32>(0.0);
     var acc1 = vec4<f32>(0.0);
     var acc2 = vec4<f32>(0.0);
     var acc3 = vec4<f32>(0.0);
 
-    var slot_i = 0u;
-    while (slot_i + 4u <= S) {
-        let s0 = Active_slots[slot_i];
-        let s1 = Active_slots[slot_i + 1u];
-        let s2 = Active_slots[slot_i + 2u];
-        let s3 = Active_slots[slot_i + 3u];
+    var s = 0u;
+    while (s + 8u <= S) {
+        let s0 = Active_slots[s + 0u]; let s1 = Active_slots[s + 1u];
+        let s2 = Active_slots[s + 2u]; let s3 = Active_slots[s + 3u];
+        let s4 = Active_slots[s + 4u]; let s5 = Active_slots[s + 5u];
+        let s6 = Active_slots[s + 6u]; let s7 = Active_slots[s + 7u];
 
-        let off0 = s0 * kv_vec4 + kv_h * D_vec4;
-        let off1 = s1 * kv_vec4 + kv_h * D_vec4;
-        let off2 = s2 * kv_vec4 + kv_h * D_vec4;
-        let off3 = s3 * kv_vec4 + kv_h * D_vec4;
+        let off0 = s0 * kv_vec4 + kv_h * D_vec4; let off1 = s1 * kv_vec4 + kv_h * D_vec4;
+        let off2 = s2 * kv_vec4 + kv_h * D_vec4; let off3 = s3 * kv_vec4 + kv_h * D_vec4;
+        let off4 = s4 * kv_vec4 + kv_h * D_vec4; let off5 = s5 * kv_vec4 + kv_h * D_vec4;
+        let off6 = s6 * kv_vec4 + kv_h * D_vec4; let off7 = s7 * kv_vec4 + kv_h * D_vec4;
 
-        let w0 = vec4<f32>(s_scores[slot_i]);
-        let w1 = vec4<f32>(s_scores[slot_i + 1u]);
-        let w2 = vec4<f32>(s_scores[slot_i + 2u]);
-        let w3 = vec4<f32>(s_scores[slot_i + 3u]);
+        let w0 = vec4<f32>(s_scores[s + 0u]); let w1 = vec4<f32>(s_scores[s + 1u]);
+        let w2 = vec4<f32>(s_scores[s + 2u]); let w3 = vec4<f32>(s_scores[s + 3u]);
+        let w4 = vec4<f32>(s_scores[s + 4u]); let w5 = vec4<f32>(s_scores[s + 5u]);
+        let w6 = vec4<f32>(s_scores[s + 6u]); let w7 = vec4<f32>(s_scores[s + 7u]);
 
-        acc0 = fma(w0, V_cache[off0 + lane], acc0);
-        acc0 = fma(w1, V_cache[off1 + lane], acc0);
-        acc0 = fma(w2, V_cache[off2 + lane], acc0);
-        acc0 = fma(w3, V_cache[off3 + lane], acc0);
+        let v0_0 = V_cache[off0 + lane]; let v1_0 = V_cache[off1 + lane];
+        let v2_0 = V_cache[off2 + lane]; let v3_0 = V_cache[off3 + lane];
+        let v4_0 = V_cache[off4 + lane]; let v5_0 = V_cache[off5 + lane];
+        let v6_0 = V_cache[off6 + lane]; let v7_0 = V_cache[off7 + lane];
 
-        acc1 = fma(w0, V_cache[off0 + lane + 32u], acc1);
-        acc1 = fma(w1, V_cache[off1 + lane + 32u], acc1);
-        acc1 = fma(w2, V_cache[off2 + lane + 32u], acc1);
-        acc1 = fma(w3, V_cache[off3 + lane + 32u], acc1);
+        acc0 = fma(w0, v0_0, acc0); acc0 = fma(w1, v1_0, acc0);
+        acc0 = fma(w2, v2_0, acc0); acc0 = fma(w3, v3_0, acc0);
+        acc0 = fma(w4, v4_0, acc0); acc0 = fma(w5, v5_0, acc0);
+        acc0 = fma(w6, v6_0, acc0); acc0 = fma(w7, v7_0, acc0);
+
+        let v0_1 = V_cache[off0 + lane + 32u]; let v1_1 = V_cache[off1 + lane + 32u];
+        let v2_1 = V_cache[off2 + lane + 32u]; let v3_1 = V_cache[off3 + lane + 32u];
+        let v4_1 = V_cache[off4 + lane + 32u]; let v5_1 = V_cache[off5 + lane + 32u];
+        let v6_1 = V_cache[off6 + lane + 32u]; let v7_1 = V_cache[off7 + lane + 32u];
+
+        acc1 = fma(w0, v0_1, acc1); acc1 = fma(w1, v1_1, acc1);
+        acc1 = fma(w2, v2_1, acc1); acc1 = fma(w3, v3_1, acc1);
+        acc1 = fma(w4, v4_1, acc1); acc1 = fma(w5, v5_1, acc1);
+        acc1 = fma(w6, v6_1, acc1); acc1 = fma(w7, v7_1, acc1);
 
         if (D_vec4 == 128u) {
-            acc2 = fma(w0, V_cache[off0 + lane + 64u], acc2);
-            acc2 = fma(w1, V_cache[off1 + lane + 64u], acc2);
-            acc2 = fma(w2, V_cache[off2 + lane + 64u], acc2);
-            acc2 = fma(w3, V_cache[off3 + lane + 64u], acc2);
+            let v0_2 = V_cache[off0 + lane + 64u]; let v1_2 = V_cache[off1 + lane + 64u];
+            let v2_2 = V_cache[off2 + lane + 64u]; let v3_2 = V_cache[off3 + lane + 64u];
+            let v4_2 = V_cache[off4 + lane + 64u]; let v5_2 = V_cache[off5 + lane + 64u];
+            let v6_2 = V_cache[off6 + lane + 64u]; let v7_2 = V_cache[off7 + lane + 64u];
 
-            acc3 = fma(w0, V_cache[off0 + lane + 96u], acc3);
-            acc3 = fma(w1, V_cache[off1 + lane + 96u], acc3);
-            acc3 = fma(w2, V_cache[off2 + lane + 96u], acc3);
-            acc3 = fma(w3, V_cache[off3 + lane + 96u], acc3);
+            acc2 = fma(w0, v0_2, acc2); acc2 = fma(w1, v1_2, acc2);
+            acc2 = fma(w2, v2_2, acc2); acc2 = fma(w3, v3_2, acc2);
+            acc2 = fma(w4, v4_2, acc2); acc2 = fma(w5, v5_2, acc2);
+            acc2 = fma(w6, v6_2, acc2); acc2 = fma(w7, v7_2, acc2);
+
+            let v0_3 = V_cache[off0 + lane + 96u]; let v1_3 = V_cache[off1 + lane + 96u];
+            let v2_3 = V_cache[off2 + lane + 96u]; let v3_3 = V_cache[off3 + lane + 96u];
+            let v4_3 = V_cache[off4 + lane + 96u]; let v5_3 = V_cache[off5 + lane + 96u];
+            let v6_3 = V_cache[off6 + lane + 96u]; let v7_3 = V_cache[off7 + lane + 96u];
+
+            acc3 = fma(w0, v0_3, acc3); acc3 = fma(w1, v1_3, acc3);
+            acc3 = fma(w2, v2_3, acc3); acc3 = fma(w3, v3_3, acc3);
+            acc3 = fma(w4, v4_3, acc3); acc3 = fma(w5, v5_3, acc3);
+            acc3 = fma(w6, v6_3, acc3); acc3 = fma(w7, v7_3, acc3);
         }
 
-        slot_i = slot_i + 4u;
+        s += 8u;
     }
 
-    while (slot_i < S) {
-        let physical_slot = Active_slots[slot_i];
+    while (s < S) {
+        let physical_slot = Active_slots[s];
         let kv_offset = physical_slot * kv_vec4 + kv_h * D_vec4;
-        let weight = vec4<f32>(s_scores[slot_i]);
+        let weight = vec4<f32>(s_scores[s]);
 
         let v0 = V_cache[kv_offset + lane];
         let v1 = V_cache[kv_offset + lane + 32u];
@@ -183,7 +205,7 @@ fn main(
             acc2 = fma(weight, v2, acc2);
             acc3 = fma(weight, v3, acc3);
         }
-        slot_i = slot_i + 1u;
+        s += 1u;
     }
 
     Attn_out[q_offset + lane] = acc0;

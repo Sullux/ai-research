@@ -67,11 +67,11 @@ pub fn gpuDispatchPrefillBatch(
             recordBarrier(gpu, prefill.cmd_buf);
         }
 
-        const n_tiles: u32 = (N + 7) / 8;
+        const n_tiles: u32 = if (prefill.mlp_is_q4) (N + 63) / 64 else (N + 7) / 8;
         const q_tiles: u32 = if (prefill.mlp_is_q4) (q_dim + 31) / 32 else (q_dim + 7) / 8;
         const kv_tiles: u32 = if (prefill.mlp_is_q4) (kv_dim + 31) / 32 else (kv_dim + 7) / 8;
         const h_tiles: u32 = if (prefill.mlp_is_q4) @intCast((H + 31) / 32) else @intCast((H + 7) / 8);
-        const inter_tiles: u32 = @intCast((inter + 7) / 8);
+        const inter_tiles: u32 = if (prefill.mlp_is_q4) @intCast((inter + 31) / 32) else @intCast((inter + 7) / 8);
 
         const pc_q = [4]u32{ N, q_dim, @intCast(H), 0 };
         const pc_kv = [4]u32{ N, kv_dim, @intCast(H), 0 };
