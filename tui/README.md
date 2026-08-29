@@ -83,11 +83,13 @@ The orchestrator maintains an in-memory **LIFO (Last-In, First-Out) Priority Sta
 1. **New Plan Creation**: When the model calls `plan(brief, steps)`, the orchestrator converts the plan into a tree of steps, assigns hierarchical IDs (`1138.1`, `1138.2`, `...`), and pushes Step 1 to the stack top.
 2. **Step Completion**: When the active step completes, the model calls `done()`. The orchestrator pops the step, advances to the next sibling step, and ticks inference.
 3. **Task Suspension & Deferral**: If a step is blocked (e.g. waiting for a long compilation or background job), the model calls `defer(duration="30s", reason="awaiting build")`. The orchestrator moves the step to the `TimerManager` queue and ticks the next pending item or sleeps.
-4. **Live User Interruption**:
-   - When user input arrives while a task is executing, the orchestrator does not wipe the KV cache or kill the engine.
-   - It pauses the active step, pushes a transient user interaction task to the stack top, and prompts the model.
-   - Once the user interaction is fulfilled, the orchestrator pops the interruption task and issues a resume tick for the suspended task.
-5. **Idle State**: When the stack is empty (or all tasks are sleeping on timers) and the model emits an end-of-turn delimiter (`<turn|>`), the orchestrator enters zero-CPU sleep until the next user prompt or timer expiration.
+4. **Blocking on User Input (`ask_user`)**:
+   - When a step requires human intervention (e.g. `sudo` installation, confirmation, credentials), the model calls `ask_user({ brief: "...", message: "..." })`.
+   - The orchestrator displays `message` to the user, transitions the task status to `WAITING_FOR_USER` with `brief` tagged, and immediately puts the engine to sleep (0% CPU/GPU).
+5. **Live User Interruption & Automatic Resumption**:
+   - When user input arrives while a task is executing, the orchestrator pauses the active step, pushes a transient user interaction task to the stack top, and prompts the model.
+   - Once the user interaction is fulfilled, the orchestrator pops the interruption task and **automatically resumes** the next suspended task on the stack without confirmation prompts.
+6. **Idle State**: When the stack is empty (or all tasks are sleeping on timers / `WAITING_FOR_USER`) and the model emits an end-of-turn delimiter (`<turn|>`), the orchestrator enters zero-CPU sleep until the next user prompt or timer expiration.
 
 ---
 
@@ -96,7 +98,9 @@ The orchestrator maintains an in-memory **LIFO (Last-In, First-Out) Priority Sta
 To avoid unnatural latency on simple questions while ensuring complex action requests are never lost, user turns follow a dual-lane strategy with an automatic safety net:
 
 ### A. The Injected Decision Thought
-When user input arrives, the orchestrator opens the model turn with:
+When user input arrives, the orchestrator opens the model turn with a contextual thought frame.
+
+If there are **no tasks waiting for user intervention**:
 ```
 <|turn>model
 <|think|>
@@ -106,10 +110,26 @@ Decision:
 - If this requires actions, multiple steps, or investigation, call `plan` with a brief summary.
 ```
 
+If there are **tasks in `WAITING_FOR_USER` state**:
+```
+<|turn>model
+<|think|>
+User message received: "[User Message Text]"
+
+Tasks currently awaiting user intervention:
+- Step 1138.2: [Brief summary of requested user action]
+
+Decision:
+1. If the user's message fulfills an awaiting task, resume that task (or call `done()` if completed).
+2. If the user provided a new unrelated instruction, prioritize answering/planning the new instruction (suspended tasks will remain in `WAITING_FOR_USER`).
+3. If the user cancelled the task, abort the task.
+Next action:
+```
+
 ### B. Execution Lanes:
 1. **Direct Answer (Zero-Task Path):**
    - If the model determines it can answer immediately, it emits text in the public channel (`<|channel>response ... <channel|>`) and closes the turn (`<turn|>`).
-   - Output is printed directly to the TUI. No tasks are created. If a prior task was suspended underneath, the orchestrator issues a prompt: *"Resume previous task?"* or automatically resumes.
+   - Output is printed directly to the TUI. No tasks are created. If a prior task was suspended underneath, the orchestrator **automatically resumes** the suspended task on the next tick.
 2. **Structured Multi-Step Plan:**
    - If the model calls `plan(brief, steps)`, the orchestrator creates the plan stack and enters the autonomous tick loop.
 3. **Auto-Wrap Safety Net (The "Impulsive Model" Fallback):**
@@ -125,7 +145,7 @@ Decision:
 | `plan` | `brief: string`, `steps: string[]` | Creates a new structured plan or child sub-plan. Pushes Step 1 to stack. |
 | `done` | `summary?: string` | Marks the current active step as complete and advances stack. |
 | `defer` | `duration: string`, `reason?: string` | Suspends active step onto timer queue (`"10s"`, `"2m"`). |
-| `ask_user` | `prompt: string` | Prompts user for input/permission (e.g., `sudo` password) and suspends task. |
+| `ask_user` | `brief: string`, `message: string` | Presents `message` to user, marks task `WAITING_FOR_USER` with `brief`, and sleeps. |
 | `terminal_write` | `input: string` | Sends raw keystrokes/commands to the active pty/terminal session. |
 | `recall` | `query: string`, `top_k?: number` | Performs explicit associative memory search and latent KV slab rehydration. |
 
@@ -145,12 +165,20 @@ Status: In progress.
 Next action:
 ```
 
-### Post-Interruption Resume Tick:
+### Post-Interruption Automatic Resume Tick:
 ```
 <|turn>model
 <|think|>
-Interruption handled. Resuming Plan [ID] at Step [ID.Step]: [Step Brief].
+Interruption handled. Automatically resuming Plan [ID] at Step [ID.Step]: [Step Brief].
 Previous context remains active in episodic memory.
+Next action:
+```
+
+### User Input Fulfilled Resume Tick:
+```
+<|turn>model
+<|think|>
+User fulfilled Step [ID.Step] ([Brief]). Resuming execution.
 Next action:
 ```
 
