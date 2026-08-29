@@ -205,12 +205,104 @@ The orchestrator interfaces seamlessly with the engine's three-tier memory hiera
 
 ---
 
-## 8. TUI Client & UI Integration
+## 8. TUI Layout, Responsive Panels & Modal Ergonomics
 
-The frontend client leverages `@sullux/tui` with the following architectural features:
+The frontend client leverages `@sullux/tui` to provide a real-time, responsive multi-pane terminal interface designed specifically for autonomous agent monitoring and debugging.
 
-- **Native Caret & Multiline Input:** Adopts the native `input` control introduced in `@sullux/tui` (as demonstrated in `../tui/examples/chat/`) for smooth caret navigation, copy/paste, and history navigation.
-- **Dual Pane Layout:**
-  - **Main Conversation & Terminal View:** Displays live model reasoning (`<|think|>` channel collapsible), streaming responses, and interactive terminal output.
-  - **Live Plan & Task Sidebar:** Real-time visual display of the active plan stack, step checkboxes, completed timestamps, and sleeping timer countdowns.
-- **Asynchronous Wire Protocol:** Full duplex binary framing (`OP_STREAM_INPUT`, `OP_TOKEN`, `OP_ABORT`, `OP_MEM_QUERY`) over Unix domain sockets with millisecond debounce timers.
+### A. Three-Panel Visual Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ TIER 1 (≥ 200 cols): Full Tri-Pane View (40% Conversation / 40% Stream / 20% Plan)     │
+├──────────────────────────────┬──────────────────────────────┬──────────────────────────┤
+│ 💬 CONVERSATION (40%)        │ ⚡ LIVE STREAM (40%)         │ 📋 PLAN STACK (20%)      │
+│                              │                              │                          │
+│ User: Update all packages    │ <|think|>                    │ [1138] Update Packages   │
+│ Assistant: Scanning system...│ User requested update.       │  ├─ [1138.1] Scan (Done) │
+│                              │ <|tool>terminal_write(...)   │  └─ [1138.2] Write script│
+│                              │ ↳ dpkg -l ... (exit 0)       │     ⏳ WAITING_FOR_USER  │
+├──────────────────────────────┤                              │                          │
+│ [Input Box (Caret/History)]  │                              │                          │
+├──────────────────────────────┴──────────────────────────────┴──────────────────────────┤
+│ [Enter] Type  [a] Chat  [s] Stream  [d] Plan  [c] Copy  [Esc] Pause  [Ctrl+Q] Quit     │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+> **Note on Input Box Placement:** The input control is confined **strictly to the bottom of the Conversation column**. This maximizes vertical context for the Live Stream and Plan Stack columns so long telemetry logs and deep plan trees remain visible.
+
+---
+
+### B. Turn Routing & Panel Separation
+
+To eliminate clutter in the conversational view while retaining 100% observability, inbound turns are routed deterministically:
+
+| Message / Event Type | Wire / Token Boundary | Conversation Panel | Live Stream Panel | Plan Stack Panel |
+|---|---|:---:|:---:|:---:|
+| **User Prompt** | `<|turn>user ... <turn|>` | **YES** (User Bubble) | **YES** (Chronological sequence) | No |
+| **Model Thought** | `<|think|> ... <channel|>` | **NO** | **YES** (Dim collapsible block) | No |
+| **Action Tools** (`plan`, `done`, `defer`, `terminal_write`, `recall`) | `<|tool> ... <tool|>` | **NO** | **YES** (Color-coded call + result) | **YES** (If plan/done/defer) |
+| **User Request Tool** (`ask_user`) | `<|tool> ask_user({ message: "..." }) <tool|>` | **YES** (Rendered as Assistant message) | **YES** (Tool call + text) | **YES** (Tagged `⏳ WAITING_FOR_USER`) |
+| **Public Assistant Response** | `<|channel> ... <channel|>` | **YES** (Assistant Bubble) | **YES** (Public stream text) | No |
+
+---
+
+### C. Responsive Real Estate & Overlay Modes
+
+The TUI dynamically recalculates its column layout on terminal resize events (`SIGWINCH`):
+
+1. **Tier 1 (≥ 200 cols):** Full Tri-Pane View (`40%` Conversation / `40%` Live Stream / `20%` Plan Stack).
+2. **Tier 2 (160–199 cols):** Dual-Pane View (`50%` Conversation / `50%` Live Stream).
+   - The Plan Stack is hidden. Pressing **`d`** pops up the Plan Stack as a floating centered overlay modal.
+3. **Tier 3 (< 160 cols):** Single-Pane Focused View (`100%` Conversation).
+   - Both Live Stream and Plan Stack are hidden. Pressing **`s`** opens the Live Stream overlay; pressing **`d`** opens the Plan Stack overlay.
+4. **Hard Minima & Clipping HUD:**
+   - Minimum supported terminal dimensions: **80 columns $\times$ 30 rows**.
+   - If terminal width $< 80$ or height $< 30$, a high-contrast inverted status banner is rendered at the bottom:
+     `⚠️ TERMINAL TOO SMALL (Min 80x30) — CONTENT CLIPPED`.
+
+---
+
+### D. Modal Keyboard Ergonomics (Vim-Style Navigation)
+
+The TUI avoids cycle-heavy `Tab` navigation in favor of direct modal hotkeys:
+
+- **`Enter` (from Normal mode):** Enters **Edit Mode** (focuses native multiline text input at the bottom of the Conversation column).
+  - `Enter`: Submits message (no-op if empty).
+  - `Esc`: Exits edit mode back to Normal mode (preserves unsubmitted draft).
+  - `Up` / `Down`: Navigates prompt history (when cursor is on top/bottom line).
+  - `Ctrl+C`: Clears active input buffer.
+- **`a`:** Focuses **Conversation Panel** in Normal/Browse mode.
+  - `j` / `k`: Scroll down / up by item (or page if item is taller than viewport).
+  - `c`: Copies selected message bubble to clipboard.
+- **`s`:** Focuses **Live Stream Panel** (or opens it as an overlay modal if hidden).
+  - `j` / `k`: Scroll down / up.
+  - `x`: Toggles expanded/collapsed view for the focused thought or tool block.
+  - `c`: Copies selected telemetry entry to clipboard.
+- **`d`:** Focuses **Plan Stack Panel** (or opens it as an overlay modal if hidden).
+  - `j` / `k`: Scroll up / down task tree.
+  - `c`: Copies active plan brief and step list.
+- **`Esc` (in Normal mode):** Pauses model inference engine. Displays centered HUD:
+  `⏸️ INFERENCE PAUSED — Press 'r' to resume`.
+  - `r`: Resumes inference execution.
+- **`Ctrl+Q`:** Gracefully shuts down TUI, sends `OP_ABORT` if active, and disconnects socket.
+
+---
+
+### E. Auto-Scroll vs. Sticky Scroll Semantics
+
+- In both Conversation and Live Stream viewports, when scrolled to the very bottom, new streaming tokens and tool logs automatically pin and scroll with new output.
+- Pressing `k` (scrolling up) immediately disengages auto-scroll to allow calm scrollback reading.
+- Scrolling back to the bottom (`j` or `G`) automatically re-engages sticky auto-scroll.
+
+---
+
+### F. Dynamic Bottom Status Bar
+
+The bottom bar updates continuously to reflect the active focus and available hotkeys:
+
+- **In Edit Mode:** `[Enter] Send  [Esc] Normal Mode  [Ctrl+C] Clear  [Up/Down] History`
+- **In Conversation Mode (`a`):** `[j/k] Scroll  [Enter] Type  [s] Stream  [d] Plan  [c] Copy  [Esc] Pause  [Ctrl+Q] Quit`
+- **In Stream Mode (`s`):** `[j/k] Scroll  [x] Expand/Collapse  [a] Chat  [d] Plan  [c] Copy  [Esc] Close/Pause`
+- **In Plan Mode (`d`):** `[j/k] Navigate Tasks  [a] Chat  [s] Stream  [Esc] Close/Pause`
+- **When Inference Paused:** `[r] Resume Inference  [Ctrl+Q] Quit`
+
