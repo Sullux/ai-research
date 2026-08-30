@@ -247,7 +247,7 @@ const onSubmitInput = (ctx, payload) => {
 }
 
 const onGlobalKey = (ctx, event) => {
-  if (event.key === 'ctrl+q') {
+  if ((event.ctrl && event.key === 'q') || (event.ctrl && event.key === 'c') || event.stroke === 'ctrl+q' || event.key === 'ctrl+q') {
     process.exit(0)
   }
 
