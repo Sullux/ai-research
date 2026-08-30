@@ -253,6 +253,7 @@ const onGlobalKey = (ctx, event) => {
     if (event.key === 'escape') {
       event.stopPropagation()
       store.setEditMode(false)
+      ctx.setFocus?.(null)
       ctx.redraw()
       return
     }
@@ -294,7 +295,7 @@ const onGlobalKey = (ctx, event) => {
     event.stopPropagation()
     store?.setEditMode(true)
     store?.setMode('chat')
-    ctx.focus?.('chatInput')
+    ctx.setFocus?.('chatInput')
     ctx.redraw()
     return
   }
