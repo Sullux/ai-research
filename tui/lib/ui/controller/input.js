@@ -15,16 +15,12 @@ const onSubmitInput = (ctx, payload) => {
   refs.store?.setEditMode(false)
   ctx.setFocus?.(null)
 
-  const thoughtBody = refs.orchestrator
-    ? refs.orchestrator.buildThoughtPrefix('USER_PROMPT', { message: val })
-    : `<|turn>model\n<|think|>\nNext action:\n`
-
   let payloadText = ''
   if (!refs.hasSentFirstTurn && refs.systemPrompt) {
     refs.hasSentFirstTurn = true
-    payloadText = `<|turn>system\n${refs.systemPrompt}\n<turn|>\n<|turn>user\n${val}\n<turn|>\n${thoughtBody}`
+    payloadText = `<|turn>system\n<|think|>\n${refs.systemPrompt}\n<turn|>\n<|turn>user\n${val}\n<turn|>\n<|turn>model\n`
   } else {
-    payloadText = `<|turn>user\n${val}\n<turn|>\n${thoughtBody}`
+    payloadText = `<|turn>user\n${val}\n<turn|>\n<|turn>model\n`
   }
 
   refs.store?.setGenerating(true)

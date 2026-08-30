@@ -68,12 +68,12 @@ describe('UI Controller & Layout Tiering', () => {
     }
 
     controller.onSubmitInput(mockCtx, { value: 'Hello world', node: { value: 'Hello world', cursor: 11 } })
-    assert.ok(sentInput.includes('<|turn>system\nTest System Prompt\n<turn|>'))
-    assert.ok(sentInput.includes('<|turn>user\nHello world\n<turn|>'))
+    assert.ok(sentInput.includes('<|turn>system\n<|think|>\nTest System Prompt\n<turn|>'))
+    assert.ok(sentInput.includes('<|turn>user\nHello world\n<turn|>\n<|turn>model\n'))
 
     // Second turn should NOT repeat system prompt
     controller.onSubmitInput(mockCtx, { value: 'Follow up', node: { value: 'Follow up', cursor: 9 } })
     assert.ok(!sentInput.includes('<|turn>system'))
-    assert.ok(sentInput.includes('<|turn>user\nFollow up\n<turn|>'))
+    assert.ok(sentInput.includes('<|turn>user\nFollow up\n<turn|>\n<|turn>model\n'))
   })
 })

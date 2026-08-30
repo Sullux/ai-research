@@ -3,7 +3,7 @@ const { refs, formatTimestamp } = require('./state')
 const getConversationNodes = () => {
   if (!refs.store) return []
   const list = refs.store.state.conversation
-  return list.map((msg, idx) => {
+  const nodes = list.map((msg, idx) => {
     const isUser = msg.sender === 'User'
     const isSelected =
       refs.store.state.mode === 'chat' && refs.store.state.selectedIdx.chat === idx
@@ -54,6 +54,31 @@ const getConversationNodes = () => {
       ],
     }
   })
+
+  if (refs.store.state.activeResponse) {
+    const timeStr = formatTimestamp(Date.now())
+    nodes.push({
+      type: 'layout',
+      direction: 'vertical',
+      bg: '#132133',
+      margin: { top: 0, bottom: 1 },
+      padding: { top: 0, bottom: 0, left: 1, right: 2 },
+      inner: [
+        {
+          type: 'rich',
+          inner: [
+            { type: 'text', text: '▶ ', bold: true, fg: '#7dcfff' },
+            { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
+            { type: 'text', text: '🤖 Assistant: ', bold: true, fg: '#7dcfff' },
+            { type: 'text', text: refs.store.state.activeResponse, fg: '#c0caf5' },
+            { type: 'text', text: ' ▍', fg: '#7aa2f7', bold: true },
+          ],
+        },
+      ],
+    })
+  }
+
+  return nodes
 }
 
 module.exports = {

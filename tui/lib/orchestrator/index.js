@@ -140,15 +140,7 @@ const orchestratorFactory = (now) => (timers) => {
 
     if (type === 'USER_PROMPT') {
       if (waiting.length === 0) {
-        return [
-          '<|turn>model',
-          '<|think|>',
-          'User request received.',
-          'Decision:',
-          '- If this is a simple query I can answer directly in one turn, respond immediately.',
-          '- If this requires actions, multiple steps, or investigation, call `plan` with a brief summary.',
-          'Next action:',
-        ].join('\n')
+        return '<|turn>model\n'
       }
 
       const waitingLines = waiting
@@ -157,7 +149,7 @@ const orchestratorFactory = (now) => (timers) => {
 
       return [
         '<|turn>model',
-        '<|think|>',
+        '<|channel>thought',
         `User message received: "${meta.message || ''}"`,
         '',
         'Tasks currently awaiting user intervention:',
@@ -168,46 +160,46 @@ const orchestratorFactory = (now) => (timers) => {
         '2. If user provided a new unrelated instruction, prioritize answering/planning it.',
         '3. If user cancelled a task, mark it complete/aborted.',
         'Next action:',
-      ].join('\n')
+      ].join('\n') + '\n'
     }
 
     if (type === 'STEP_TICK') {
       const active = meta.step || getActiveStep()
-      if (!active) return '<|turn>model\n<|think|>\nAll tasks complete.\n'
+      if (!active) return '<|turn>model\n<|channel>thought\nAll tasks complete.\n'
       const parent = plans.find((p) => p.id === active.parentId)
       return [
         '<|turn>model',
-        '<|think|>',
+        '<|channel>thought',
         `Focus: Plan ${parent?.id || ''} - ${parent?.brief || ''}`,
         `Active Step ${active.id}: ${active.brief}`,
         'Status: In progress.',
         'Next action:',
-      ].join('\n')
+      ].join('\n') + '\n'
     }
 
     if (type === 'RESUME_AFTER_INTERRUPT') {
       const active = meta.step || getActiveStep()
-      if (!active) return '<|turn>model\n<|think|>\nNo pending tasks to resume.\n'
+      if (!active) return '<|turn>model\n<|channel>thought\nNo pending tasks to resume.\n'
       return [
         '<|turn>model',
-        '<|think|>',
+        '<|channel>thought',
         `Interruption handled. Automatically resuming Step ${active.id}: ${active.brief}.`,
         'Previous context remains active in episodic memory.',
         'Next action:',
-      ].join('\n')
+      ].join('\n') + '\n'
     }
 
     if (type === 'TIMER_WAKE') {
       const active = meta.step
       return [
         '<|turn>model',
-        '<|think|>',
+        '<|channel>thought',
         `Timer expired for Step ${active?.id || ''} (${active?.deferReason || ''}). Checking state for updates.`,
         'Next action:',
-      ].join('\n')
+      ].join('\n') + '\n'
     }
 
-    return '<|turn>model\n<|think|>\nNext action:\n'
+    return '<|turn>model\n'
   }
 
   return {

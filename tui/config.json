@@ -11,7 +11,7 @@
     "temp": 0.7,
     "topP": 0.95,
     "minP": 0.05,
-    "repeatPenalty": 1.0,
+    "repeatPenalty": 1.1,
     "repeatLastN": 64,
     "qThresh": 0.0
   }
