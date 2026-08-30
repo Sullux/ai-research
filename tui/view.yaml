@@ -74,6 +74,9 @@ inner:
                   italic: true
                 caret:
                   mode: invert
+                unfocusedCaret:
+                  char: '█'
+                  fg: '#565f89'
                 onSubmit: '@controller:onSubmitInput'
 
       # Middle Column: Live Stream (Telemetry, Thoughts & Tools)
