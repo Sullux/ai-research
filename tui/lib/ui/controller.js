@@ -233,6 +233,9 @@ const onSubmitInput = (ctx, payload) => {
   store?.addConversationMessage({ sender: 'User', text: val })
   store?.addStreamEntry({ type: 'user', title: '👤 USER', content: val })
 
+  store?.setEditMode(false)
+  ctx.setFocus?.(null)
+
   // Build appropriate thought prefix
   const thoughtPrefix = orchestrator
     ? orchestrator.buildThoughtPrefix('USER_PROMPT', { message: val })
