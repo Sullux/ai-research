@@ -51,4 +51,29 @@ describe('UI Controller & Layout Tiering', () => {
     assert.strictEqual(store.state.mode, 'chat')
     assert.strictEqual(store.state.overlay, null)
   })
+
+  it('injects system prompt on first turn input submit', () => {
+    const store = StateStore()
+    const orch = Orchestrator()
+    let sentInput = ''
+    const mockClient = {
+      sendInput: (payload) => { sentInput = payload },
+    }
+
+    controller.init(store, mockClient, null, orch, null, 'Test System Prompt')
+
+    const mockCtx = {
+      redraw: () => {},
+      setFocus: () => {},
+    }
+
+    controller.onSubmitInput(mockCtx, { value: 'Hello world', node: { value: 'Hello world', cursor: 11 } })
+    assert.ok(sentInput.includes('<|turn>system\nTest System Prompt\n<turn|>'))
+    assert.ok(sentInput.includes('<|turn>user\nHello world\n<turn|>'))
+
+    // Second turn should NOT repeat system prompt
+    controller.onSubmitInput(mockCtx, { value: 'Follow up', node: { value: 'Follow up', cursor: 9 } })
+    assert.ok(!sentInput.includes('<|turn>system'))
+    assert.ok(sentInput.includes('<|turn>user\nFollow up\n<turn|>'))
+  })
 })

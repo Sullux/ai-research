@@ -27,6 +27,7 @@ const loadConfig = () => {
   }
   return {
     modelPath: '../../gemma-4-12B-it',
+    promptPath: './PROMPT.md',
     extraArgs: ['--gpu', '--q4', '--quiescence'],
     runtime: {
       maxTokens: 512,
@@ -38,11 +39,22 @@ const loadConfig = () => {
   }
 }
 
+const loadSystemPrompt = (promptPath) => {
+  const kernelPath = path.resolve(__dirname, './PROMPT_KERNEL.md')
+  const userPromptPath = path.resolve(__dirname, promptPath || './PROMPT.md')
+
+  const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : ''
+  const userPrompt = fs.existsSync(userPromptPath) ? fs.readFileSync(userPromptPath, 'utf-8').trim() : ''
+
+  return [userPrompt, kernel].filter(Boolean).join('\n\n')
+}
+
 const main = () => {
   const config = loadConfig()
   const cliArgs = process.argv.slice(2)
   const extraArgs = cliArgs.length > 0 ? cliArgs : config.extraArgs
   const modelPath = path.resolve(__dirname, config.modelPath)
+  const systemPrompt = loadSystemPrompt(config.promptPath)
 
   const store = StateStore()
   const session = TerminalSession({ rows: 30, cols: 100 })
@@ -56,7 +68,7 @@ const main = () => {
   const registry = ToolRegistry(session, client, timers, orchestrator)
   const parser = ToolParser(registry, client)
 
-  controller.init(store, client, session, orchestrator, timers)
+  controller.init(store, client, session, orchestrator, timers, systemPrompt)
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),

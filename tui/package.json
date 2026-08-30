@@ -10,6 +10,6 @@
   "author": "Charles Sullivan",
   "license": "MIT",
   "dependencies": {
-    "@sullux/tui": "link:../../tui"
+    "@sullux/tui": "^1.0.2"
   }
 }
