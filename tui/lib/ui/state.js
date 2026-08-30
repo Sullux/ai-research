@@ -61,14 +61,23 @@ const stateStoreFactory = () => () => {
     state.activeThought += chunk
   }
 
+  const cleanThought = (raw) => {
+    let t = (raw || '').trim()
+    if (t.startsWith('thought')) {
+      t = t.slice(7).trim()
+    }
+    return t
+  }
+
   const flushActiveThought = () => {
-    if (!state.activeThought) return
+    const content = cleanThought(state.activeThought)
+    state.activeThought = ''
+    if (!content) return
     addStreamEntry({
       type: 'thought',
       title: '💭 THOUGHT',
-      content: state.activeThought,
+      content,
     })
-    state.activeThought = ''
   }
 
   const appendActiveResponse = (chunk) => {

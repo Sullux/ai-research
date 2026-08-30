@@ -76,4 +76,37 @@ describe('UI Controller & Layout Tiering', () => {
     assert.ok(!sentInput.includes('<|turn>system'))
     assert.ok(sentInput.includes('<|turn>user\nFollow up\n<turn|>\n<|turn>model\n'))
   })
+
+  it('renders smart 4-line live stream cards with conditional expand hint', () => {
+    const store = StateStore()
+    store.state.stream = []
+    // Short item
+    store.addStreamEntry({ type: 'thought', title: '💭 THOUGHT', content: 'Short thought' })
+    // Long item (more than 3 lines)
+    const longContent = 'Line 1 word word word\nLine 2 word word word\nLine 3 word word word\nLine 4 word word word\nLine 5 word word word'
+    store.addStreamEntry({ type: 'response', title: '🤖 ASSISTANT', content: longContent })
+
+    controller.init(store, null, null, null, null)
+
+    // Unselected state (mode = chat)
+    store.setMode('chat')
+    let nodes = controller.getStreamNodes()
+    assert.strictEqual(nodes.length, 2)
+    const longSpansUnselected = nodes[1].inner[0].inner
+    assert(longSpansUnselected.some((s) => s.text.includes('(↑ 2 more)')))
+    assert(!longSpansUnselected.some((s) => s.text.includes('(x to expand)')))
+
+    // Selected state (mode = stream, selectedIdx = 1)
+    store.setMode('stream')
+    store.state.selectedIdx.stream = 1
+    nodes = controller.getStreamNodes()
+    const longSpansSelected = nodes[1].inner[0].inner
+    assert(longSpansSelected.some((s) => s.text.includes('(x to expand)')))
+
+    // Expanded state
+    store.toggleExpandStreamItem(1)
+    nodes = controller.getStreamNodes()
+    const longSpansExpanded = nodes[1].inner[0].inner
+    assert(longSpansExpanded.some((s) => s.text.includes('(x to collapse)')))
+  })
 })
