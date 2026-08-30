@@ -4,22 +4,37 @@ const { Tui } = require('@sullux/tui')
 const { Client } = require('./lib/client')
 const { TerminalSession } = require('./lib/terminal/session')
 const { TimerManager } = require('./lib/timers')
+const { Orchestrator } = require('./lib/orchestrator')
 const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StateStore } = require('./lib/ui/state')
 const controller = require('./lib/ui/controller')
 
-const STATUS_NAMES = ['Idle', 'Encoding prompt...', 'Generating...', 'Searching memory...', 'Consolidating diffs...']
+const STATUS_NAMES = [
+  'Idle',
+  'Encoding prompt...',
+  'Generating...',
+  'Searching memory...',
+  'Consolidating diffs...',
+]
 
 const loadConfig = () => {
   const cfgPath = path.resolve(__dirname, './config.json')
   if (fs.existsSync(cfgPath)) {
-    try { return JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) } catch (_) {}
+    try {
+      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
+    } catch (_) {}
   }
   return {
     modelPath: '../../gemma-4-12B-it',
     extraArgs: ['--gpu', '--q4', '--quiescence'],
-    runtime: { maxTokens: 512, thinkingBudget: 512, temp: 0.7, topP: 0.95, qThresh: 0.001 },
+    runtime: {
+      maxTokens: 512,
+      thinkingBudget: 512,
+      temp: 0.7,
+      topP: 0.95,
+      qThresh: 0.001,
+    },
   }
 }
 
@@ -37,10 +52,11 @@ const main = () => {
     extraArgs,
   })
   const timers = TimerManager()
-  const registry = ToolRegistry(session, client, timers)
+  const orchestrator = Orchestrator(timers)
+  const registry = ToolRegistry(session, client, timers, orchestrator)
   const parser = ToolParser(registry, client)
 
-  controller.init(store, client, session)
+  controller.init(store, client, session, orchestrator, timers)
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
@@ -64,13 +80,16 @@ const main = () => {
   }
 
   client.on('thought', ({ text }) => {
-    store.appendThought(text.replaceAll('\u2581', ' '))
+    const clean = text.replaceAll('\u2581', ' ')
+    store.appendActiveThought(clean)
+    requestRedraw()
   })
 
   client.on('content', ({ text }) => {
     const clean = text.replaceAll('\u2581', ' ')
-    store.appendDialogue(clean)
+    store.appendActiveResponse(clean)
     parser.ingestChunk(clean)
+    requestRedraw()
   })
 
   client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, tokSec, currentTok, totalTok }) => {
@@ -81,12 +100,26 @@ const main = () => {
       ? ` (${currentTok}/${totalTok} tok)`
       : (status === 2 ? ` (${currentTok} tok)` : '')
     const rate = tokSec > 0 ? ` | ${tokSec.toFixed(1)} tok/s` : ''
-    store.setStatus(`[${devTag}] ${sName}${prog}${rate} | Slots: ${activeSlots} | Memory: ${archivedDiffs} diffs`)
+    store.setStatus(
+      `[${devTag}] ${sName}${prog}${rate} | Slots: ${activeSlots} | Memory: ${archivedDiffs} diffs`,
+    )
+    requestRedraw()
   })
 
   client.on('turnComplete', ({ tokSec, elapsedMs, totalTok }) => {
+    store.flushActiveThought()
+    store.flushActiveResponse()
     store.setGenerating(false)
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
+
+    // Autonomous tick loop check
+    const activeStep = orchestrator.getActiveStep()
+    if (activeStep && activeStep.status === 'IN_PROGRESS') {
+      const nextThought = orchestrator.buildThoughtPrefix('STEP_TICK', { step: activeStep })
+      store.setGenerating(true)
+      client.sendInput(nextThought)
+    }
+
     requestRedraw()
   })
 
@@ -106,7 +139,9 @@ const main = () => {
   if (config.runtime) client.setConfig(config.runtime)
   app.start()
 
-  setInterval(() => { app.redraw() }, 250)
+  setInterval(() => {
+    app.redraw()
+  }, 250)
 }
 
 main()

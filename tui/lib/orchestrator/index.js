@@ -1,0 +1,231 @@
+const parseDurationMs = (str) => {
+  if (!str || typeof str !== 'string') return 10000
+  const match = str.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)?$/i)
+  if (!match) return 10000
+  const val = parseFloat(match[1])
+  const unit = (match[2] || 's').toLowerCase()
+  if (unit === 'ms') return Math.round(val)
+  if (unit === 's') return Math.round(val * 1000)
+  if (unit === 'm') return Math.round(val * 60 * 1000)
+  if (unit === 'h') return Math.round(val * 3600 * 1000)
+  return 10000
+}
+
+const orchestratorFactory = (now) => (timers) => {
+  let planCounter = 1000
+  const plans = []
+  const stack = []
+
+  const createPlan = (brief, steps = []) => {
+    planCounter += 1
+    const planId = `${planCounter}`
+    const stepList = Array.isArray(steps) ? steps : [steps]
+    const normSteps = stepList.length > 0 ? stepList : [brief]
+
+    const planObj = {
+      id: planId,
+      brief: typeof brief === 'string' ? brief : 'Untitled Plan',
+      timestamp: now(),
+      completed: null,
+      status: 'IN_PROGRESS',
+      steps: normSteps.map((s, idx) => ({
+        id: `${planId}.${idx + 1}`,
+        parentId: planId,
+        brief: typeof s === 'string' ? s : (s?.brief || `Step ${idx + 1}`),
+        timestamp: now(),
+        completed: null,
+        status: 'PENDING',
+        waitingForUser: null,
+      })),
+    }
+
+    plans.push(planObj)
+    for (let i = planObj.steps.length - 1; i >= 0; i -= 1) {
+      stack.push(planObj.steps[i])
+    }
+    if (stack.length > 0) {
+      stack[stack.length - 1].status = 'IN_PROGRESS'
+    }
+    return planObj
+  }
+
+  const getActiveStep = () => {
+    for (let i = stack.length - 1; i >= 0; i -= 1) {
+      const item = stack[i]
+      if (item.status === 'IN_PROGRESS' || item.status === 'WAITING_FOR_USER' || item.status === 'PENDING') {
+        if (item.status === 'PENDING') item.status = 'IN_PROGRESS'
+        return item
+      }
+    }
+    return null
+  }
+
+  const getWaitingForUserTasks = () => {
+    const list = []
+    for (const p of plans) {
+      for (const s of p.steps) {
+        if (s.status === 'WAITING_FOR_USER') list.push(s)
+      }
+    }
+    return list
+  }
+
+  const completeActiveStep = (summary) => {
+    const active = getActiveStep()
+    if (!active) return null
+
+    active.status = 'DONE'
+    active.completed = now()
+    active.summary = summary || active.brief
+
+    const idx = stack.indexOf(active)
+    if (idx !== -1) stack.splice(idx, 1)
+
+    const parent = plans.find((p) => p.id === active.parentId)
+    if (parent) {
+      const allDone = parent.steps.every((s) => s.status === 'DONE')
+      if (allDone) {
+        parent.status = 'DONE'
+        parent.completed = now()
+      }
+    }
+
+    const next = getActiveStep()
+    return { completedStep: active, nextStep: next }
+  }
+
+  const deferActiveStep = (durationStr, reason, onWake) => {
+    const active = getActiveStep()
+    if (!active) return null
+
+    active.status = 'DEFERRED'
+    active.deferReason = reason || 'waiting on timer'
+    const ms = parseDurationMs(durationStr)
+    const sec = Math.max(1, Math.round(ms / 1000))
+
+    if (timers) {
+      timers.setTimer(sec, active.deferReason, () => {
+        if (active.status === 'DEFERRED') {
+          active.status = 'IN_PROGRESS'
+          onWake?.(active)
+        }
+      })
+    }
+    return { deferredStep: active, durationMs: ms }
+  }
+
+  const askUserActiveStep = (brief, message) => {
+    const active = getActiveStep()
+    if (!active) {
+      const plan = createPlan(brief, [brief])
+      const step = plan.steps[0]
+      step.status = 'WAITING_FOR_USER'
+      step.waitingForUser = { brief, message }
+      return { step, message }
+    }
+
+    active.status = 'WAITING_FOR_USER'
+    active.waitingForUser = { brief, message }
+    return { step: active, message }
+  }
+
+  const autoWrapToolCall = (toolName, snippet) => {
+    const brief = `${toolName}: ${snippet || ''}`.trim()
+    const plan = createPlan(brief, [brief])
+    return plan.steps[0]
+  }
+
+  const buildThoughtPrefix = (type, meta = {}) => {
+    const waiting = getWaitingForUserTasks()
+
+    if (type === 'USER_PROMPT') {
+      if (waiting.length === 0) {
+        return [
+          '<|turn>model',
+          '<|think|>',
+          'User request received.',
+          'Decision:',
+          '- If this is a simple query I can answer directly in one turn, respond immediately.',
+          '- If this requires actions, multiple steps, or investigation, call `plan` with a brief summary.',
+          'Next action:',
+        ].join('\n')
+      }
+
+      const waitingLines = waiting
+        .map((w) => `- Step ${w.id}: ${w.waitingForUser?.brief || w.brief}`)
+        .join('\n')
+
+      return [
+        '<|turn>model',
+        '<|think|>',
+        `User message received: "${meta.message || ''}"`,
+        '',
+        'Tasks currently awaiting user intervention:',
+        waitingLines,
+        '',
+        'Decision:',
+        "1. If user's message fulfills an awaiting task, resume that task or call `done()`.",
+        '2. If user provided a new unrelated instruction, prioritize answering/planning it.',
+        '3. If user cancelled a task, mark it complete/aborted.',
+        'Next action:',
+      ].join('\n')
+    }
+
+    if (type === 'STEP_TICK') {
+      const active = meta.step || getActiveStep()
+      if (!active) return '<|turn>model\n<|think|>\nAll tasks complete.\n'
+      const parent = plans.find((p) => p.id === active.parentId)
+      return [
+        '<|turn>model',
+        '<|think|>',
+        `Focus: Plan ${parent?.id || ''} - ${parent?.brief || ''}`,
+        `Active Step ${active.id}: ${active.brief}`,
+        'Status: In progress.',
+        'Next action:',
+      ].join('\n')
+    }
+
+    if (type === 'RESUME_AFTER_INTERRUPT') {
+      const active = meta.step || getActiveStep()
+      if (!active) return '<|turn>model\n<|think|>\nNo pending tasks to resume.\n'
+      return [
+        '<|turn>model',
+        '<|think|>',
+        `Interruption handled. Automatically resuming Step ${active.id}: ${active.brief}.`,
+        'Previous context remains active in episodic memory.',
+        'Next action:',
+      ].join('\n')
+    }
+
+    if (type === 'TIMER_WAKE') {
+      const active = meta.step
+      return [
+        '<|turn>model',
+        '<|think|>',
+        `Timer expired for Step ${active?.id || ''} (${active?.deferReason || ''}). Checking state for updates.`,
+        'Next action:',
+      ].join('\n')
+    }
+
+    return '<|turn>model\n<|think|>\nNext action:\n'
+  }
+
+  return {
+    plans,
+    stack,
+    createPlan,
+    getActiveStep,
+    getWaitingForUserTasks,
+    completeActiveStep,
+    deferActiveStep,
+    askUserActiveStep,
+    autoWrapToolCall,
+    buildThoughtPrefix,
+  }
+}
+
+module.exports = {
+  parseDurationMs,
+  orchestratorFactory,
+  Orchestrator: orchestratorFactory(Date.now),
+}

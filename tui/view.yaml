@@ -5,67 +5,122 @@ type: layout
 direction: vertical
 width: fill
 height: fill
-onKey: '@controller:onKey'
+bg: '#1a1b26'
+onKeyPreview: '@controller:onGlobalKey'
 
 inner:
-  - type: layout
-    height: 1
-    class: header
-    inner:
-      - type: text
-        bold: true
-        fg: '#89b4fa'
-        text: ' SULLUX COGNITIVE ENGINE '
-      - type: text
-        fg: '#a6adc8'
-        text: '│ Vulkan RDNA 3.5 │ Gemma 4 Streaming │ Hippocampal Memory & Terminal '
-
-  - type: layout
-    direction: horizontal
-    width: fill
-    height: fill
-    inner:
-      - type: layout
-        direction: vertical
-        width: 50%
-        height: fill
-        inner:
-          - type: border
-            class: thoughtPanel
-            height: 35%
-            inner:
-              - type: text
-                wrap: true
-                text: '@controller:getThoughts'
-          - type: border
-            class: panel
-            height: fill
-            inner:
-              - type: text
-                wrap: true
-                text: '@controller:getDialogue'
-
-      - type: border
-        class: terminalPanel
-        width: 50%
-        height: fill
-        inner:
-          - type: text
-            wrap: false
-            text: '@controller:getTerminal'
-
+  # Header Bar
   - type: border
-    class: inputBar
+    borderStyle: single
+    borderFg: '#3b4261'
     height: 3
     inner:
-      - type: text
-        bold: true
-        fg: '#fab387'
-        text: '@controller:getInput'
+      - type: layout
+        direction: horizontal
+        width: fill
+        inner:
+          - type: text
+            text: ' SULLUX COGNITIVE ENGINE '
+            bold: true
+            fg: '#7aa2f7'
+          - type: text
+            text: '● Online'
+            fg: '#9ece6a'
+            margin: { left: 2 }
+          - type: text
+            text: '@controller:getStatusText'
+            fg: '#bb9af7'
+            margin: { left: 3 }
 
+  # Main Content Split (3-Column Layout: Conversation + Input | Stream | Plan Stack)
   - type: layout
+    direction: horizontal
+    height: fill
+    inner:
+      # Left Column: Conversation + Pinned Input Box
+      - type: layout
+        direction: vertical
+        width: 40%
+        height: fill
+        inner:
+          # Scrollable Conversation Messages
+          - type: border
+            borderStyle: rounded
+            borderFg: '#7aa2f7'
+            height: fill
+            inner:
+              - type: scroll
+                direction: vertical
+                height: fill
+                inner:
+                  - type: layout
+                    direction: vertical
+                    inner: '@controller:getConversationNodes'
+
+          # Input Box (Pinned strictly at bottom of Conversation Column)
+          - type: border
+            borderStyle: rounded
+            borderFg: '#e0af68'
+            height: content
+            margin: { top: 1 }
+            inner:
+              - type: input
+                id: chatInput
+                wrap: true
+                maxHeight: 6
+                placeholder: 'Type a message or prompt... (Enter to send, Shift+Enter for newline)'
+                placeholderStyle:
+                  fg: '#565f89'
+                  italic: true
+                caret:
+                  mode: invert
+                onSubmit: '@controller:onSubmitInput'
+
+      # Middle Column: Live Stream (Telemetry, Thoughts & Tools)
+      - type: layout
+        direction: vertical
+        width: 40%
+        height: fill
+        margin: { left: 1 }
+        inner:
+          - type: border
+            borderStyle: rounded
+            borderFg: '#bb9af7'
+            height: fill
+            inner:
+              - type: scroll
+                direction: vertical
+                height: fill
+                inner:
+                  - type: layout
+                    direction: vertical
+                    inner: '@controller:getStreamNodes'
+
+      # Right Column: Plan Stack & Task Tree
+      - type: layout
+        direction: vertical
+        width: 20%
+        height: fill
+        margin: { left: 1 }
+        inner:
+          - type: border
+            borderStyle: rounded
+            borderFg: '#9ece6a'
+            height: fill
+            inner:
+              - type: scroll
+                direction: vertical
+                height: fill
+                inner:
+                  - type: layout
+                    direction: vertical
+                    inner: '@controller:getPlanNodes'
+
+  # Dynamic Footer Status & Shortcuts Bar
+  - type: layout
+    direction: horizontal
     height: 1
-    class: status
     inner:
       - type: text
-        text: '@controller:getStatus'
+        text: '@controller:getShortcutsText'
+        fg: '#565f89'

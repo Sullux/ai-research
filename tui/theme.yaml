@@ -1,34 +1,34 @@
 classes:
   header:
-    bg: '#313244'
-    fg: '#cdd6f4'
+    bg: '#1f2335'
+    fg: '#c0caf5'
     bold: true
     padding: 0
 
   panel:
     borderStyle: rounded
-    borderFg: '#89b4fa'
-    bg: '#1e1e2e'
-    fg: '#cdd6f4'
+    borderFg: '#7aa2f7'
+    bg: '#1a1b26'
+    fg: '#c0caf5'
 
-  thoughtPanel:
+  streamPanel:
     borderStyle: rounded
-    borderFg: '#f9e2af'
-    bg: '#181825'
-    fg: '#bac2de'
+    borderFg: '#bb9af7'
+    bg: '#16161e'
+    fg: '#9aa5ce'
 
-  terminalPanel:
+  planPanel:
     borderStyle: rounded
-    borderFg: '#a6e3a1'
-    bg: '#11111b'
-    fg: '#a6adc8'
+    borderFg: '#9ece6a'
+    bg: '#141c18'
+    fg: '#73daca'
 
   inputBar:
-    borderStyle: single
-    borderFg: '#fab387'
-    bg: '#1e1e2e'
-    fg: '#cdd6f4'
+    borderStyle: rounded
+    borderFg: '#e0af68'
+    bg: '#1f2335'
+    fg: '#c0caf5'
 
   status:
-    bg: '#181825'
-    fg: '#9399b2'
+    bg: '#1a1b26'
+    fg: '#565f89'
