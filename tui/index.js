@@ -61,6 +61,7 @@ const main = () => {
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
     modules: { controller },
+    autoFocus: false,
     truecolor: true,
   })
 

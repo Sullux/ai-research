@@ -366,6 +366,9 @@ const onGlobalKey = (ctx, event) => {
     ctx.redraw()
     return
   }
+
+  // Prevent any unhandled keys in browse/normal mode from leaking to input
+  event.stopPropagation()
 }
 
 module.exports = {
