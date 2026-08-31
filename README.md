@@ -38,16 +38,19 @@ If no prompt arguments are supplied on the command line, the engine enters an in
 | `-m`, `--model` | `<path>` | `../gemma-4-E2B` | Path to the model directory containing `config.json`, `tokenizer.json`, and `model.safetensors`. |
 | `-n`, `--max-tokens` | `<N>` | `128` | Maximum number of new tokens to generate for the response. |
 | `--gpu` | — | Disabled | Enables Vulkan 1.3 GPU compute dispatch in unquantized 16-bit bfloat16 (`BF16`). |
-| `--q4` | — | Disabled | Enables GPU compute acceleration with on-the-fly **Q4_0** layer weight dequantization and **Q8_0** output vocabulary classification. |
+| `--q4`, `--mixed` | — | Disabled | Enables GPU compute acceleration with pure symmetric zero-centered **Q4_0** linear projections and **Q8_0** output classification. |
 | `--q8` | — | Disabled | Enables GPU compute acceleration with on-the-fly **Q8_0** (8-bit signed integer) weight dequantization across all layers. |
 | `--quant` | `<q4\|q8\|none>` | `none` | Explicitly selects the GPU weight quantization mode. |
+| `--serve` | — | Disabled | Runs engine as a headless full-duplex binary wire-protocol server over STDIN/STDOUT for TUI or driver clients. |
 | `--bench` | — | Disabled | Executes single-batch GPU compute throughput and latency benchmarking. |
 | `--anchors` | `<N>` | `32` | Number of immutable early context anchor slots reserved at the start of the ring buffer. |
 | `--window` | `<N>` | `512` | Number of rolling active sliding-window slots in the dynamic ring buffer. |
-| `--recall` | `<N>` | `96` | Number of dynamic recall slots injected by the associative long-term diff-memory subsystem (up to 128 max). |
-| `--storage` | `<path>` | Disabled | Path to a persistent binary diff archive (`.bin`). Enables cross-session long-term memory persistence. |
-| `--no-memory` | — | Enabled | Disables associative long-term diff-memory ingestion and recall injection. |
+| `--recall` | `<N>` | `96` | Number of dynamic recall slots injected by the associative long-term memory subsystem (up to 128 max). |
+| `--memory`, `--storage` | `[<path>]` | `.episodic.mem` (if flag present) | Enables persistent memory-mapped episodic store (`.episodic.mem`). Cross-session latent memory persistence. |
+| `--mem-capacity` | `<N>` | `64` | Maximum capacity of stored episodic entries in `.episodic.mem` (e.g. 64 episodes = 4,096 tokens). |
+| `--no-memory` | — | Enabled | Disables associative long-term memory ingestion and recall injection. |
 | `--quiescence` | — | Disabled | Enables hierarchical multi-scale temporal quiescence gating to skip upper transformer layers during low activation velocity. |
+| `--quiescence-threshold` | `<float>` | `0.001` | Sets the cosine similarity activation velocity threshold for quiescence skipping. |
 
 ---
 
@@ -68,10 +71,15 @@ What is the capital of France?<turn|>
 
 ### 3. Persistent Long-Term Associative Memory Session
 ```bash
-./zig-out/bin/infer --model ../gemma-4-12B-it --q4 --storage memory_vault.bin
+./zig-out/bin/infer --model ../gemma-4-12B-it --gpu --q4 --memory .memory/.episodic.mem --mem-capacity 64
 ```
 
-### 4. Running CPU Inference on Gemma 4 E2B
+### 4. Full-Duplex Binary Wire Protocol Server for TUI / Clients
+```bash
+./zig-out/bin/infer --model ../gemma-4-12B-it --gpu --q4 --serve --memory .memory/.episodic.mem
+```
+
+### 5. Running CPU Inference on Gemma 4 E2B
 ```bash
 ./zig-out/bin/infer --model ../gemma-4-E2B --max-tokens 30 "The capital of France is"
 ```
