@@ -86,11 +86,25 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     }
   }
 
-  const shutdown = () => {
-    if (proc?.stdin?.writable) proc.stdin.write(shutdownFrame())
+  const kill = () => {
+    if (proc && !proc.killed) {
+      try {
+        proc.kill('SIGKILL')
+      } catch (_) {}
+    }
   }
 
-  return { start, sendInput, sendAbort, sendMemQuery, setConfig, shutdown, on: emitter.on.bind(emitter) }
+  const shutdown = () => {
+    if (proc?.stdin?.writable) {
+      try {
+        proc.stdin.write(shutdownFrame())
+        proc.stdin.end()
+      } catch (_) {}
+    }
+    setTimeout(kill, 500).unref?.()
+  }
+
+  return { start, sendInput, sendAbort, sendMemQuery, setConfig, shutdown, kill, on: emitter.on.bind(emitter) }
 }
 
 module.exports = {

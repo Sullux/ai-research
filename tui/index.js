@@ -187,10 +187,22 @@ const main = () => {
 
   client.on('drain', requestRedraw)
 
-  app.onExit(() => {
-    streamLog.close()
-    session.kill()
-    client.shutdown()
+  const cleanup = () => {
+    try { streamLog.close() } catch (_) {}
+    try { session.kill() } catch (_) {}
+    try { client.shutdown() } catch (_) {}
+    try { client.kill() } catch (_) {}
+  }
+
+  app.onExit(cleanup)
+  process.on('exit', cleanup)
+  process.on('SIGINT', () => { cleanup(); process.exit(0) })
+  process.on('SIGTERM', () => { cleanup(); process.exit(0) })
+  process.on('SIGHUP', () => { cleanup(); process.exit(0) })
+  process.on('uncaughtException', (err) => {
+    cleanup()
+    console.error(err)
+    process.exit(1)
   })
 
   client.start()

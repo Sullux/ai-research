@@ -69,6 +69,7 @@ pub const Server = struct {
 
         const ReaderThread = struct {
             fn run(q: *server_queue.MessageQueue, r: @TypeOf(reader), aborted: *std.atomic.Value(bool)) void {
+                defer q.close();
                 while (true) {
                     const hdr = protocol.readHeader(r) catch break;
                     if (hdr.opcode == protocol.OP_ABORT) { aborted.store(true, .seq_cst); continue; }
@@ -78,7 +79,7 @@ pub const Server = struct {
                         r.readNoEof(p) catch { q.allocator.free(p); break; };
                     }
                     q.push(.{ .hdr = hdr, .payload = p });
-                    if (hdr.opcode == protocol.OP_SHUTDOWN) { q.close(); break; }
+                    if (hdr.opcode == protocol.OP_SHUTDOWN) break;
                 }
             }
         };
