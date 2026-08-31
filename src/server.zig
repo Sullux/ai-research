@@ -217,7 +217,9 @@ pub const Server = struct {
         var thinking_count: u32 = 0;
         var response_count: u32 = 0;
         var reason: u8 = protocol.STOP_END_OF_TURN;
-        var recent_buf: [64]u32 = undefined;
+        const max_recent: usize = @max(64, self.max_tokens + self.thinking_budget);
+        const recent_buf = try self.allocator.alloc(u32, max_recent);
+        defer self.allocator.free(recent_buf);
         var recent_count: usize = 0;
 
         while (true) {
@@ -233,12 +235,12 @@ pub const Server = struct {
 
             if (start == 0) start = std.time.milliTimestamp();
 
-            if (recent_count < 64) {
+            if (recent_count < max_recent) {
                 recent_buf[recent_count] = cur;
                 recent_count += 1;
             } else {
-                for (0..63) |i| recent_buf[i] = recent_buf[i + 1];
-                recent_buf[63] = cur;
+                std.mem.copyForwards(u32, recent_buf[0 .. max_recent - 1], recent_buf[1..max_recent]);
+                recent_buf[max_recent - 1] = cur;
             }
 
             if (cur == 100) { self.in_thinking_channel = true; recent_count = 0; cur = self.advanceToken(cur, &.{}); continue; }

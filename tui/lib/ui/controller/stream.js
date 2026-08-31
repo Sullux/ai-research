@@ -1,8 +1,6 @@
 const { refs, formatTimestamp } = require('./state')
 const { getLayoutTier } = require('./layout')
 
-const getStreamScroll = () => (refs.store?.state.stickyScroll.stream ? Infinity : 0)
-
 const getItemColors = (t) => {
   if (t === 'thought') return { titleFg: '#bb9af7', contentFg: '#7a88cf', bg: '#14141e' }
   if (t === 'tool_call') return { titleFg: '#e0af68', contentFg: '#ff9e64', bg: '#1f1a16' }
@@ -32,6 +30,29 @@ const wrapLines = (text, maxWidth) => {
     if (cur) lines.push(cur)
   }
   return lines
+}
+
+const getCardHeight = (item, width) => {
+  const lines = wrapLines(item.content, width)
+  if (lines.length <= 3) {
+    return Math.max(1, lines.length) + 1
+  }
+  if (!item.expanded) {
+    return 4 + 1
+  }
+  return 1 + lines.length + 1
+}
+
+const getStreamScroll = () => {
+  if (!refs.store) return 0
+  if (refs.store.state.stickyScroll.stream) return Infinity
+  const selIdx = refs.store.state.selectedIdx.stream
+  const width = getPanelWidth()
+  let offset = 0
+  for (let i = 0; i < selIdx && i < refs.store.state.stream.length; i++) {
+    offset += getCardHeight(refs.store.state.stream[i], width)
+  }
+  return offset
 }
 
 const buildCardSpans = (item, isSel, width) => {

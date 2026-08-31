@@ -1,6 +1,17 @@
 const { refs, formatTimestamp } = require('./state')
 
-const getConversationScroll = () => (refs.store?.state.stickyScroll.chat ? Infinity : 0)
+const getConversationScroll = () => {
+  if (!refs.store) return 0
+  if (refs.store.state.stickyScroll.chat) return Infinity
+  const selIdx = refs.store.state.selectedIdx.chat
+  let offset = 0
+  for (let i = 0; i < selIdx && i < refs.store.state.conversation.length; i++) {
+    const msg = refs.store.state.conversation[i]
+    const lineCount = (msg.text || '').split('\n').length
+    offset += Math.max(1, lineCount) + 1
+  }
+  return offset
+}
 
 const getConversationNodes = () => {
   if (!refs.store) return []
