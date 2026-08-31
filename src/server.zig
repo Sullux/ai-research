@@ -243,15 +243,14 @@ pub const Server = struct {
                 recent_buf[max_recent - 1] = cur;
             }
 
-            if (cur == 100) { self.in_thinking_channel = true; recent_count = 0; cur = self.advanceToken(cur, &.{}); continue; }
-            if (cur == 101) { self.in_thinking_channel = false; recent_count = 0; cur = self.advanceToken(cur, &.{}); continue; }
+            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
+            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
 
             if (self.in_thinking_channel) {
                 if (thinking_count >= self.thinking_budget) {
                     self.in_thinking_channel = false;
-                    recent_count = 0;
-                    cur = self.advanceToken(101, &.{});
+                    cur = self.advanceToken(101, recent_buf[0..recent_count]);
                     continue;
                 }
                 thinking_count += 1;

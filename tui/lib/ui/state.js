@@ -22,7 +22,9 @@ const stateStoreFactory = () => (onStreamItem) => {
       },
     ],
     activeThought: '',
+    activeThoughtTime: 0,
     activeResponse: '',
+    activeResponseTime: 0,
     status: 'Idle | tok/s: 0.0 | Memory: 0 episodes',
     isGenerating: false,
     isPaused: false,
@@ -92,6 +94,9 @@ const stateStoreFactory = () => (onStreamItem) => {
   }
 
   const appendActiveThought = (chunk) => {
+    if (!state.activeThought) {
+      state.activeThoughtTime = Date.now()
+    }
     state.activeThought += chunk
   }
 
@@ -105,31 +110,41 @@ const stateStoreFactory = () => (onStreamItem) => {
 
   const flushActiveThought = () => {
     const content = cleanThought(state.activeThought)
+    const time = state.activeThoughtTime || Date.now()
     state.activeThought = ''
+    state.activeThoughtTime = 0
     if (!content) return
     addStreamEntry({
       type: 'thought',
       title: '💭 THOUGHT',
       content,
+      time,
     })
   }
 
   const appendActiveResponse = (chunk) => {
+    if (!state.activeResponse) {
+      state.activeResponseTime = Date.now()
+    }
     state.activeResponse += chunk
   }
 
   const flushActiveResponse = () => {
     if (!state.activeResponse) return
     const text = state.activeResponse
+    const time = state.activeResponseTime || Date.now()
     state.activeResponse = ''
+    state.activeResponseTime = 0
     addConversationMessage({
       sender: 'Assistant',
       text: text.trim(),
+      time,
     })
     addStreamEntry({
       type: 'response',
       title: '🤖 ASSISTANT',
       content: text.trim(),
+      time,
     })
   }
 

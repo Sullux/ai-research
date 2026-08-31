@@ -52,7 +52,7 @@ const getConversationNodes = () => {
   })
 
   if (activeResponse) {
-    const timeStr = formatTimestamp(Date.now())
+    const timeStr = formatTimestamp(refs.store.state.activeResponseTime || Date.now())
     nodes.push({
       type: 'layout',
       direction: 'vertical',

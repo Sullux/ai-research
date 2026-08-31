@@ -73,4 +73,33 @@ describe('UI StateStore', () => {
     assert.strictEqual(store.state.conversation[2].text, 'Do you want to proceed?')
     assert.strictEqual(persisted.length, 0) // hydration does not re-emit persistence
   })
+
+  it('handles multi-phase thought and response channel transitions', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+
+    // Phase 1: Thought
+    store.appendActiveThought('Initial thought')
+    assert.strictEqual(store.state.activeThought, 'Initial thought')
+
+    // Transition to Response: flush thought, start response
+    store.flushActiveThought()
+    store.appendActiveResponse('Part 1 of answer')
+    assert.strictEqual(store.state.stream.length, 2) // init + thought
+    assert.strictEqual(store.state.stream[1].type, 'thought')
+    assert.strictEqual(store.state.activeResponse, 'Part 1 of answer')
+
+    // Transition back to Thought: flush response, start thought
+    store.flushActiveResponse()
+    store.appendActiveThought('Second mid-turn thought')
+    assert.strictEqual(store.state.stream.length, 3) // init + thought + response
+    assert.strictEqual(store.state.stream[2].type, 'response')
+    assert.strictEqual(store.state.activeThought, 'Second mid-turn thought')
+
+    // Finalize
+    store.flushActiveThought()
+    assert.strictEqual(store.state.stream.length, 4) // init + thought + response + thought
+    assert.strictEqual(store.state.stream[3].type, 'thought')
+    assert.strictEqual(store.state.stream[3].content, 'Second mid-turn thought')
+  })
 })

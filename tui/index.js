@@ -132,12 +132,18 @@ const main = () => {
 
   client.on('thought', ({ text }) => {
     const clean = text.replaceAll('\u2581', ' ')
+    if (store.state.activeResponse) {
+      store.flushActiveResponse()
+    }
     store.appendActiveThought(clean)
     requestRedraw()
   })
 
   client.on('content', ({ text }) => {
     const clean = text.replaceAll('\u2581', ' ')
+    if (store.state.activeThought) {
+      store.flushActiveThought()
+    }
     store.appendActiveResponse(clean)
     parser.ingestChunk(clean)
     requestRedraw()

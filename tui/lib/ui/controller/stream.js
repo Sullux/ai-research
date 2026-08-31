@@ -79,13 +79,13 @@ const buildCardSpans = (item, isSel, width) => {
   return spans
 }
 
-const liveNode = (title, text, fg, bg, width) => ({
+const liveNode = (title, text, fg, bg, width, time) => ({
   type: 'layout', direction: 'vertical', bg, margin: { top: 0, bottom: 1 }, padding: { top: 0, bottom: 0, left: 1, right: 1 },
   inner: [{
     type: 'rich',
     inner: [
       { type: 'text', text: '  ', fg },
-      { type: 'text', text: `[${formatTimestamp(Date.now())}] `, fg: '#565f89' },
+      { type: 'text', text: `[${formatTimestamp(time || Date.now())}] `, fg: '#565f89' },
       { type: 'text', text: `${title}`, bold: true, fg },
       { type: 'text', text: wrapLines(text, width).slice(-3).map((l) => `\n  ${l}`).join(''), fg },
       { type: 'text', text: ' ▍', fg, bold: true },
@@ -104,8 +104,8 @@ const getStreamNodes = () => {
     inner: [{ type: 'rich', inner: buildCardSpans(item, idx === selIdx, width) }],
   }))
   const th = cleanThought(refs.store.state.activeThought)
-  if (th) nodes.push(liveNode('💭 THOUGHT', th, '#bb9af7', '#14141e', width))
-  if (refs.store.state.activeResponse) nodes.push(liveNode('🤖 ASSISTANT', refs.store.state.activeResponse, '#7dcfff', '#132133', width))
+  if (th) nodes.push(liveNode('💭 THOUGHT', th, '#bb9af7', '#14141e', width, refs.store.state.activeThoughtTime))
+  if (refs.store.state.activeResponse) nodes.push(liveNode('🤖 ASSISTANT', refs.store.state.activeResponse, '#7dcfff', '#132133', width, refs.store.state.activeResponseTime))
   return nodes
 }
 
