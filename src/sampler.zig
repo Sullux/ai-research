@@ -55,6 +55,8 @@ pub const Sampler = struct {
     prng: std.Random.DefaultPrng,
     top_k: u32 = 64,
     repeat_penalty: f32 = 1.1,
+    frequency_penalty: f32 = 0.1,
+    presence_penalty: f32 = 0.1,
     top_p: f32 = 0.95,
     min_p: f32 = 0.05,
     temp: f32 = 1.0,
@@ -66,6 +68,8 @@ pub const Sampler = struct {
             .top_p = top_p,
             .top_k = 64,
             .repeat_penalty = 1.1,
+            .frequency_penalty = 0.1,
+            .presence_penalty = 0.1,
             .min_p = 0.05,
         };
     }
@@ -84,7 +88,7 @@ pub const Sampler = struct {
             }
         }
 
-        if (self.repeat_penalty > 1.0 and recent_tokens != null) {
+        if (recent_tokens != null and (self.repeat_penalty > 1.0 or self.frequency_penalty > 0.0 or self.presence_penalty > 0.0)) {
             for (recent_tokens.?, 0..) |tok, i| {
                 if (isExcludedFromRepeatPenalty(tok)) continue;
 
@@ -94,12 +98,20 @@ pub const Sampler = struct {
                 }
                 if (already_seen) continue;
 
+                var count: usize = 0;
+                for (recent_tokens.?) |rt| {
+                    if (rt == tok) count += 1;
+                }
+
                 if (tok < logits.len) {
-                    if (logits[tok] > 0.0) {
-                        logits[tok] /= self.repeat_penalty;
-                    } else {
-                        logits[tok] *= self.repeat_penalty;
+                    if (self.repeat_penalty > 1.0) {
+                        if (logits[tok] > 0.0) {
+                            logits[tok] /= self.repeat_penalty;
+                        } else {
+                            logits[tok] *= self.repeat_penalty;
+                        }
                     }
+                    logits[tok] -= self.presence_penalty + (@as(f32, @floatFromInt(count)) * self.frequency_penalty);
                 }
             }
         }
@@ -177,7 +189,8 @@ pub const Sampler = struct {
 
     pub fn sampleTopK(self: *Sampler, candidates: []const TopKCandidate, recent_tokens: ?[]const u32) u32 {
         if (candidates.len == 0) return 0;
-        if (self.temp <= 0.0 and (self.repeat_penalty <= 1.0 or recent_tokens == null)) return candidates[0].id;
+        const has_penalties = (self.repeat_penalty > 1.0 or self.frequency_penalty > 0.0 or self.presence_penalty > 0.0);
+        if (self.temp <= 0.0 and (!has_penalties or recent_tokens == null)) return candidates[0].id;
 
         var items: [64]TopKCandidate = undefined;
         var K: usize = 0;
@@ -189,7 +202,7 @@ pub const Sampler = struct {
         }
         if (K == 0) return candidates[0].id;
 
-        if (self.repeat_penalty > 1.0 and recent_tokens != null) {
+        if (recent_tokens != null and has_penalties) {
             for (recent_tokens.?, 0..) |tok, i| {
                 if (isExcludedFromRepeatPenalty(tok)) continue;
 
@@ -202,13 +215,21 @@ pub const Sampler = struct {
                 }
                 if (already_seen) continue;
 
+                var count: usize = 0;
+                for (recent_tokens.?) |rt| {
+                    if (rt == tok) count += 1;
+                }
+
                 for (items[0..K]) |*item| {
                     if (item.id == tok) {
-                        if (item.val > 0.0) {
-                            item.val /= self.repeat_penalty;
-                        } else {
-                            item.val *= self.repeat_penalty;
+                        if (self.repeat_penalty > 1.0) {
+                            if (item.val > 0.0) {
+                                item.val /= self.repeat_penalty;
+                            } else {
+                                item.val *= self.repeat_penalty;
+                            }
                         }
+                        item.val -= self.presence_penalty + (@as(f32, @floatFromInt(count)) * self.frequency_penalty);
                     }
                 }
             }
@@ -298,4 +319,23 @@ test "sampler.sampleTopK re-sorts penalized candidates" {
     low_temp_sampler.repeat_penalty = 1.2;
     const chosen_temp = low_temp_sampler.sampleTopK(&candidates, &recent);
     try std.testing.expectEqual(@as(u32, 705), chosen_temp);
+}
+
+test "sampler.sampleTopK frequency and presence penalties suppress repeated tokens" {
+    var sampler = Sampler.init(42, 0.0, 0.95);
+    sampler.repeat_penalty = 1.0;
+    sampler.frequency_penalty = 0.5;
+    sampler.presence_penalty = 0.5;
+
+    const candidates = [_]TopKCandidate{
+        .{ .id = 6639, .val = 18.0 }, // "call"
+        .{ .id = 16132, .val = 17.0 }, // "will"
+    };
+
+    // If 6639 appears 3 times:
+    // val becomes 18.0 - (0.5 + 3 * 0.5) = 18.0 - 2.0 = 16.0
+    // Candidate 16132 (val 17.0) becomes the winner.
+    const recent = [_]u32{ 6639, 6639, 6639 };
+    const chosen = sampler.sampleTopK(&candidates, &recent);
+    try std.testing.expectEqual(@as(u32, 16132), chosen);
 }

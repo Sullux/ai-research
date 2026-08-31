@@ -48,6 +48,18 @@ test('memQueryFrame serializes query and topK correctly', () => {
   assert.strictEqual(parsed.payload.subarray(24).toString('utf-8'), 'matrix multiplication')
 })
 
+test('configFrame serializes penalty and runtime options properly', () => {
+  const frame = configFrame(512, 0.7, 0.95, 0.001, 256, 0.05, 1.15, 64, 0.2, 0.3, 11)
+  const parsed = parsedFrame(frame)
+  assert.notStrictEqual(parsed, null)
+  assert.strictEqual(parsed.header.msgId, 11)
+  assert.strictEqual(parsed.header.opcode, OP_SET_CONFIG)
+  assert.strictEqual(parsed.payload.length, 40)
+  assert.strictEqual(parsed.payload.readUInt32LE(0), 512)
+  assert.strictEqual(parsed.payload.readUInt32LE(16), 256)
+  assert.strictEqual(parsed.payload.readUInt32LE(28), 64)
+})
+
 test('parsedFrame handles incomplete buffers gracefully', () => {
   const frame = pingFrame(1)
   const partial = frame.subarray(0, 10)

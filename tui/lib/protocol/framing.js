@@ -48,8 +48,20 @@ const memQueryFrame = (query, msgId = 1, topK = 5) => {
   return Buffer.concat([hdr, payload])
 }
 
-const configFrame = (thinkingBudget = 512, temp = 1.0, topP = 0.95, qThresh = 0.001, maxTok = 64, minP = 0.05, repeatPenalty = 1.1, msgId = 1) => {
-  const payload = Buffer.alloc(28)
+const configFrame = (
+  thinkingBudget = 512,
+  temp = 1.0,
+  topP = 0.95,
+  qThresh = 0.001,
+  maxTok = 64,
+  minP = 0.05,
+  repeatPenalty = 1.1,
+  repeatLastN = 64,
+  frequencyPenalty = 0.1,
+  presencePenalty = 0.1,
+  msgId = 1,
+) => {
+  const payload = Buffer.alloc(40)
   payload.writeUInt32LE(thinkingBudget, 0)
   payload.writeFloatLE(temp, 4)
   payload.writeFloatLE(topP, 8)
@@ -57,6 +69,9 @@ const configFrame = (thinkingBudget = 512, temp = 1.0, topP = 0.95, qThresh = 0.
   payload.writeUInt32LE(maxTok, 16)
   payload.writeFloatLE(minP, 20)
   payload.writeFloatLE(repeatPenalty, 24)
+  payload.writeUInt32LE(repeatLastN, 28)
+  payload.writeFloatLE(frequencyPenalty, 32)
+  payload.writeFloatLE(presencePenalty, 36)
   const hdr = headerBuffer(OP_SET_CONFIG, msgId, payload.length)
   return Buffer.concat([hdr, payload])
 }

@@ -24,7 +24,7 @@ const PrefillProgress = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -37,7 +37,7 @@ pub const Server = struct {
             const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
             hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
     }
     pub fn deinit(self: *Server) void {
         if (self.hippo) |*h| h.deinit();
@@ -111,6 +111,13 @@ pub const Server = struct {
         if (p.len >= 28) {
             self.sampler.min_p = @bitCast(std.mem.readInt(u32, p[20..24], .little));
             self.sampler.repeat_penalty = @bitCast(std.mem.readInt(u32, p[24..28], .little));
+        }
+        if (p.len >= 32) {
+            self.repeat_last_n = std.mem.readInt(u32, p[28..32], .little);
+        }
+        if (p.len >= 40) {
+            self.sampler.frequency_penalty = @bitCast(std.mem.readInt(u32, p[32..36], .little));
+            self.sampler.presence_penalty = @bitCast(std.mem.readInt(u32, p[36..40], .little));
         }
     }
 
@@ -243,14 +250,17 @@ pub const Server = struct {
                 recent_buf[max_recent - 1] = cur;
             }
 
-            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
-            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
-            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, recent_buf[0..recent_count]); continue; }
+            const w_start = if (recent_count > self.repeat_last_n) recent_count - self.repeat_last_n else 0;
+            const window_tokens = recent_buf[w_start..recent_count];
+
+            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur, window_tokens); continue; }
+            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, window_tokens); continue; }
+            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, window_tokens); continue; }
 
             if (self.in_thinking_channel) {
                 if (thinking_count >= self.thinking_budget) {
                     self.in_thinking_channel = false;
-                    cur = self.advanceToken(101, recent_buf[0..recent_count]);
+                    cur = self.advanceToken(101, window_tokens);
                     continue;
                 }
                 thinking_count += 1;
@@ -275,7 +285,7 @@ pub const Server = struct {
                 try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, total_gen, total_budget, is_gpu);
                 writer.flush();
             }
-            cur = self.advanceToken(cur, recent_buf[0..recent_count]);
+            cur = self.advanceToken(cur, window_tokens);
         }
         const total_gen = thinking_count + response_count;
         const now = std.time.milliTimestamp();
@@ -292,7 +302,8 @@ pub const Server = struct {
     }
 
     fn advanceToken(self: *Server, cur: u32, recent_tokens: []const u32) u32 {
-        const needs_logits = (self.sampler.temp > 0.0 or self.sampler.repeat_penalty != 1.0 or self.gpu_opt == null);
+        const has_penalties = (self.sampler.repeat_penalty != 1.0 or self.sampler.frequency_penalty != 0.0 or self.sampler.presence_penalty != 0.0);
+        const needs_logits = (self.sampler.temp > 0.0 or has_penalties or self.gpu_opt == null);
         const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
         self.clock += 1;
         if (self.hippo) |*h| {

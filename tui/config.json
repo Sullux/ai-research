@@ -14,6 +14,8 @@
     "minP": 0.05,
     "repeatPenalty": 1.1,
     "repeatLastN": 64,
+    "frequencyPenalty": 0.1,
+    "presencePenalty": 0.1,
     "qThresh": 0.0
   }
 }
