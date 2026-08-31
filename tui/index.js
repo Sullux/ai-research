@@ -19,8 +19,27 @@ const STATUS_NAMES = [
   'Consolidating diffs...',
 ]
 
-const loadConfig = () => {
-  const cfgPath = path.resolve(__dirname, './config.json')
+const parseCliArgs = (argv) => {
+  let configPath = null
+  const extraArgs = []
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--config' || arg === '-c') {
+      configPath = argv[++i]
+    } else if (arg.startsWith('--config=')) {
+      configPath = arg.slice('--config='.length)
+    } else {
+      extraArgs.push(arg)
+    }
+  }
+  return { configPath, extraArgs }
+}
+
+const loadConfig = (explicitPath) => {
+  const cfgPath = explicitPath
+    ? path.resolve(process.cwd(), explicitPath)
+    : path.resolve(__dirname, './config.json')
+
   if (fs.existsSync(cfgPath)) {
     try {
       return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
@@ -52,9 +71,9 @@ const loadSystemPrompt = (promptPath) => {
 }
 
 const main = () => {
-  const config = loadConfig()
-  const cliArgs = process.argv.slice(2)
-  const extraArgs = [...(cliArgs.length > 0 ? cliArgs : config.extraArgs || [])]
+  const { configPath, extraArgs: cliExtraArgs } = parseCliArgs(process.argv.slice(2))
+  const config = loadConfig(configPath)
+  const extraArgs = [...(cliExtraArgs.length > 0 ? cliExtraArgs : config.extraArgs || [])]
   const modelPath = path.resolve(__dirname, config.modelPath)
   const systemPrompt = loadSystemPrompt(config.promptPath)
 
