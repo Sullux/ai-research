@@ -14,7 +14,7 @@ struct PushConstants {
 var<push_constant> pc: PushConstants;
 
 var<workgroup> s_Q: array<vec4<f32>, 128>;
-var<workgroup> s_scores: array<f32, 2048>;
+var<workgroup> s_scores: array<f32, 4096>;
 var<workgroup> s_reduce: array<f32, 32>;
 var<workgroup> s_max_val: f32;
 var<workgroup> s_inv_sum: f32;

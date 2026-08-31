@@ -1,5 +1,7 @@
 const { refs } = require('./state')
 
+const getPlanScroll = () => 0
+
 const getPlanNodes = () => {
   if (!refs.orchestrator) return []
   const plans = refs.orchestrator.plans
@@ -60,5 +62,6 @@ const getPlanNodes = () => {
 }
 
 module.exports = {
+  getPlanScroll,
   getPlanNodes,
 }

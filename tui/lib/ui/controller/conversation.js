@@ -1,12 +1,15 @@
 const { refs, formatTimestamp } = require('./state')
 
+const getConversationScroll = () => (refs.store?.state.stickyScroll.chat ? Infinity : 0)
+
 const getConversationNodes = () => {
   if (!refs.store) return []
-  const list = refs.store.state.conversation
-  const nodes = list.map((msg, idx) => {
+  const { conversation, mode, isEditMode, selectedIdx, activeResponse } = refs.store.state
+  const isChatFocused = mode === 'chat' && !isEditMode
+
+  const nodes = conversation.map((msg, idx) => {
     const isUser = msg.sender === 'User'
-    const isSelected =
-      refs.store.state.mode === 'chat' && refs.store.state.selectedIdx.chat === idx
+    const isSelected = isChatFocused && selectedIdx.chat === idx
     const timeStr = formatTimestamp(msg.time)
 
     let bg = isUser ? '#162b4d' : '#132133'
@@ -24,38 +27,20 @@ const getConversationNodes = () => {
       direction: 'vertical',
       bg,
       margin: { top: 0, bottom: 1 },
-      padding: isUser
-        ? { top: 0, bottom: 0, left: 2, right: 1 }
-        : { top: 0, bottom: 0, left: 1, right: 2 },
-      inner: [
-        {
-          type: 'rich',
-          inner: [
-            {
-              type: 'text',
-              text: isSelected ? '▶ ' : '  ',
-              bold: true,
-              fg: '#f7768e',
-            },
-            { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
-            {
-              type: 'text',
-              text: `${headerPrefix}${msg.sender}: `,
-              bold: true,
-              fg: headerFg,
-            },
-            {
-              type: 'text',
-              text: msg.text,
-              fg: isUser ? '#e2e8f0' : '#c0caf5',
-            },
-          ],
-        },
-      ],
+      padding: isUser ? { top: 0, bottom: 0, left: 2, right: 1 } : { top: 0, bottom: 0, left: 1, right: 2 },
+      inner: [{
+        type: 'rich',
+        inner: [
+          { type: 'text', text: isSelected ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
+          { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
+          { type: 'text', text: `${headerPrefix}${msg.sender}: `, bold: true, fg: headerFg },
+          { type: 'text', text: msg.text, fg: isUser ? '#e2e8f0' : '#c0caf5' },
+        ],
+      }],
     }
   })
 
-  if (refs.store.state.activeResponse) {
+  if (activeResponse) {
     const timeStr = formatTimestamp(Date.now())
     nodes.push({
       type: 'layout',
@@ -63,18 +48,16 @@ const getConversationNodes = () => {
       bg: '#132133',
       margin: { top: 0, bottom: 1 },
       padding: { top: 0, bottom: 0, left: 1, right: 2 },
-      inner: [
-        {
-          type: 'rich',
-          inner: [
-            { type: 'text', text: '▶ ', bold: true, fg: '#7dcfff' },
-            { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
-            { type: 'text', text: '🤖 Assistant: ', bold: true, fg: '#7dcfff' },
-            { type: 'text', text: refs.store.state.activeResponse, fg: '#c0caf5' },
-            { type: 'text', text: ' ▍', fg: '#7aa2f7', bold: true },
-          ],
-        },
-      ],
+      inner: [{
+        type: 'rich',
+        inner: [
+          { type: 'text', text: '  ', fg: '#7dcfff' },
+          { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
+          { type: 'text', text: '🤖 Assistant: ', bold: true, fg: '#7dcfff' },
+          { type: 'text', text: activeResponse, fg: '#c0caf5' },
+          { type: 'text', text: ' ▍', fg: '#7aa2f7', bold: true },
+        ],
+      }],
     })
   }
 
@@ -82,5 +65,6 @@ const getConversationNodes = () => {
 }
 
 module.exports = {
+  getConversationScroll,
   getConversationNodes,
 }

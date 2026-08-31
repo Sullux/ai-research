@@ -53,6 +53,7 @@ inner:
               - type: scroll
                 direction: vertical
                 height: fill
+                scroll: '@controller:getConversationScroll'
                 inner:
                   - type: layout
                     direction: vertical
@@ -63,7 +64,6 @@ inner:
             borderStyle: rounded
             borderFg: '#e0af68'
             height: content
-            margin: { top: 1 }
             inner:
               - type: input
                 id: chatInput
@@ -95,6 +95,7 @@ inner:
               - type: scroll
                 direction: vertical
                 height: fill
+                scroll: '@controller:getStreamScroll'
                 inner:
                   - type: layout
                     direction: vertical
@@ -115,6 +116,7 @@ inner:
               - type: scroll
                 direction: vertical
                 height: fill
+                scroll: '@controller:getPlanScroll'
                 inner:
                   - type: layout
                     direction: vertical

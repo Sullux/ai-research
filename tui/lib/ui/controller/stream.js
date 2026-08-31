@@ -1,6 +1,8 @@
 const { refs, formatTimestamp } = require('./state')
 const { getLayoutTier } = require('./layout')
 
+const getStreamScroll = () => (refs.store?.state.stickyScroll.stream ? Infinity : 0)
+
 const getItemColors = (t) => {
   if (t === 'thought') return { titleFg: '#bb9af7', contentFg: '#7a88cf', bg: '#14141e' }
   if (t === 'tool_call') return { titleFg: '#e0af68', contentFg: '#ff9e64', bg: '#1f1a16' }
@@ -61,7 +63,7 @@ const liveNode = (title, text, fg, bg, width) => ({
   inner: [{
     type: 'rich',
     inner: [
-      { type: 'text', text: '▶ ', bold: true, fg },
+      { type: 'text', text: '  ', fg },
       { type: 'text', text: `[${formatTimestamp(Date.now())}] `, fg: '#565f89' },
       { type: 'text', text: `${title}`, bold: true, fg },
       { type: 'text', text: wrapLines(text, width).slice(-3).map((l) => `\n  ${l}`).join(''), fg },
@@ -86,4 +88,4 @@ const getStreamNodes = () => {
   return nodes
 }
 
-module.exports = { getStreamNodes }
+module.exports = { getStreamScroll, getStreamNodes }
