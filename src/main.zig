@@ -16,7 +16,6 @@ pub const bench = @import("model/bench.zig");
 pub const server = @import("server.zig");
 pub const interactive = @import("interactive.zig");
 
-const MEMORY_CAPACITY: usize = 8192;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -43,6 +42,7 @@ pub fn main() !void {
     var prompt_buf = std.ArrayList(u8).init(allocator);
     defer prompt_buf.deinit();
 
+    var memory_capacity: usize = 64;
     var arg_idx: usize = 1;
     while (arg_idx < args.len) : (arg_idx += 1) {
         const arg = args[arg_idx];
@@ -51,6 +51,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--anchors") and arg_idx + 1 < args.len) { num_anchors = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 32; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--window") and arg_idx + 1 < args.len) { window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--recall") and arg_idx + 1 < args.len) { num_recall = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 96; arg_idx += 1;
+        } else if ((std.mem.eql(u8, arg, "--mem-capacity") or std.mem.eql(u8, arg, "--memory-capacity")) and arg_idx + 1 < args.len) { memory_capacity = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 64; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--memory") or std.mem.eql(u8, arg, "--storage")) {
             if (arg_idx + 1 < args.len and !std.mem.startsWith(u8, args[arg_idx + 1], "-")) {
                 storage_path = args[arg_idx + 1];
@@ -96,6 +97,7 @@ pub fn main() !void {
         return err;
     } else null;
     defer if (gpu_model_ctx) |*gmc| gmc.deinit();
+    if (gpu_model_ctx != null) st.adviseDontNeed();
     const gpu_ptr: ?*gpu.model_gpu.GpuModelContext = if (gpu_model_ctx) |*gmc| gmc else null;
     if (gpu_ctx) |gc| {
         const mode_tag = switch (quant_mode) { .none => "BF16", .q8 => "Q8_0", .q4, .mixed => "Q4_0 (Attn:Q8_0/MLP:Q4_0)" };
@@ -114,9 +116,9 @@ pub fn main() !void {
     var store: ?storage.PersistentDiffStore = null;
     defer if (store) |*s| s.close();
     if (memory_enabled) {
-        var arch = try memory.DiffArchive.initWithKV(allocator, config.hidden_size, MEMORY_CAPACITY, config.num_hidden_layers, max_kv_dim, .{});
+        var arch = try memory.DiffArchive.initWithKV(allocator, config.hidden_size, memory_capacity, config.num_hidden_layers, max_kv_dim, .{});
         if (storage_path) |sp| {
-            var s = try storage.PersistentDiffStore.open(sp, MEMORY_CAPACITY, config.num_hidden_layers, config.hidden_size, max_kv_dim, 64);
+            var s = try storage.PersistentDiffStore.open(sp, memory_capacity, config.num_hidden_layers, config.hidden_size, max_kv_dim, 64);
             _ = s.loadIntoArchive(&arch);
             store = s;
         }

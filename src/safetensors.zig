@@ -123,6 +123,12 @@ pub const SafeTensors = struct {
         self.file_handles.deinit();
     }
 
+    pub fn adviseDontNeed(self: *SafeTensors) void {
+        for (self.mappings.items) |mapped| {
+            _ = std.posix.madvise(@constCast(mapped.ptr), mapped.len, std.posix.MADV.DONTNEED) catch {};
+        }
+    }
+
     fn mapAndParseFile(self: *SafeTensors, path: []const u8) !void {
         const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
         errdefer file.close();
