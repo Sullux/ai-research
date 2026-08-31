@@ -176,7 +176,8 @@ pub const Sampler = struct {
     }
 
     pub fn sampleTopK(self: *Sampler, candidates: []const TopKCandidate, recent_tokens: ?[]const u32) u32 {
-        if (self.temp <= 0.0 or candidates.len == 0) return candidates[0].id;
+        if (candidates.len == 0) return 0;
+        if (self.temp <= 0.0 and (self.repeat_penalty <= 1.0 or recent_tokens == null)) return candidates[0].id;
 
         var items: [64]TopKCandidate = undefined;
         var K: usize = 0;
@@ -189,8 +190,18 @@ pub const Sampler = struct {
         if (K == 0) return candidates[0].id;
 
         if (self.repeat_penalty > 1.0 and recent_tokens != null) {
-            for (recent_tokens.?) |tok| {
+            for (recent_tokens.?, 0..) |tok, i| {
                 if (isExcludedFromRepeatPenalty(tok)) continue;
+
+                var already_seen = false;
+                for (recent_tokens.?[0..i]) |prev| {
+                    if (prev == tok) {
+                        already_seen = true;
+                        break;
+                    }
+                }
+                if (already_seen) continue;
+
                 for (items[0..K]) |*item| {
                     if (item.id == tok) {
                         if (item.val > 0.0) {
@@ -201,7 +212,16 @@ pub const Sampler = struct {
                     }
                 }
             }
+
+            // Re-sort items in descending order after applying repeat penalties
+            std.mem.sort(TopKCandidate, items[0..K], {}, struct {
+                fn cmp(_: void, a: TopKCandidate, b: TopKCandidate) bool {
+                    return a.val > b.val;
+                }
+            }.cmp);
         }
+
+        if (self.temp <= 0.0) return items[0].id;
 
         var probs: [64]f32 = undefined;
         var max_scaled: f32 = -1e9;
@@ -254,3 +274,28 @@ pub const Sampler = struct {
         return chosen_id;
     }
 };
+
+test "sampler.sampleTopK re-sorts penalized candidates" {
+    // Test deterministic greedy with penalty
+    var greedy_sampler = Sampler.init(42, 0.0, 0.95);
+    greedy_sampler.repeat_penalty = 1.2;
+
+    const candidates = [_]TopKCandidate{
+        .{ .id = 4373, .val = 18.0 }, // "pass"
+        .{ .id = 705, .val = 17.5 },  // "return"
+        .{ .id = 1980, .val = 16.0 }, // "continue"
+    };
+
+    // Before penalty, candidate 4373 would win.
+    // If recent_tokens contains 4373, it should be penalized (18.0 / 1.2 = 15.0)
+    // and candidate 705 (val 17.5) should become the top choice.
+    const recent = [_]u32{ 4373, 4373 };
+    const chosen = greedy_sampler.sampleTopK(&candidates, &recent);
+    try std.testing.expectEqual(@as(u32, 705), chosen);
+
+    // Test low temp sampling
+    var low_temp_sampler = Sampler.init(42, 0.01, 0.95);
+    low_temp_sampler.repeat_penalty = 1.2;
+    const chosen_temp = low_temp_sampler.sampleTopK(&candidates, &recent);
+    try std.testing.expectEqual(@as(u32, 705), chosen_temp);
+}
