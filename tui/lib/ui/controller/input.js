@@ -1,4 +1,9 @@
 const { refs } = require('./state')
+const {
+  formatTurn1,
+  formatUserTurn,
+  formatUserDecisionTurn,
+} = require('../../template')
 
 const onSubmitInput = (ctx, payload) => {
   const val = payload.value?.trim()
@@ -18,9 +23,12 @@ const onSubmitInput = (ctx, payload) => {
   let payloadText = ''
   if (!refs.hasSentFirstTurn && refs.systemPrompt) {
     refs.hasSentFirstTurn = true
-    payloadText = `<|turn>system\n<|think|>\n${refs.systemPrompt}\n<turn|>\n<|turn>user\n${val}\n<turn|>\n<|turn>model\n`
+    payloadText = formatTurn1(refs.systemPrompt, val)
   } else {
-    payloadText = `<|turn>user\n${val}\n<turn|>\n<|turn>model\n`
+    const waitingTasks = refs.orchestrator?.getWaitingForUserTasks?.() || []
+    payloadText = waitingTasks.length > 0
+      ? formatUserDecisionTurn(val, waitingTasks)
+      : formatUserTurn(val)
   }
 
   refs.store?.setGenerating(true)

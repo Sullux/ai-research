@@ -201,47 +201,10 @@ pub const Server = struct {
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
 
-    fn readPromptKernel(self: *Server) ?[]const u8 {
-        const paths = [_][]const u8{ "tui/PROMPT_KERNEL.md", "PROMPT_KERNEL.md" };
-        for (paths) |p| {
-            const file = std.fs.cwd().openFile(p, .{}) catch continue;
-            defer file.close();
-            const size = file.getEndPos() catch continue;
-            if (size > 0 and size < 65536) {
-                const buf = self.allocator.alloc(u8, size) catch continue;
-                const bytes_read = file.readAll(buf) catch { self.allocator.free(buf); continue; };
-                return buf[0..bytes_read];
-            }
-        }
-        return null;
-    }
-
     fn parseTokens(self: *Server, p: []const u8) ![]u32 {
         if (p[0] == protocol.MODE_TEXT) {
             const raw_text = p[8..];
-            var pb = std.ArrayList(u8).init(self.allocator);
-            defer pb.deinit();
-
-            if (std.mem.indexOf(u8, raw_text, "<|turn>") != null) {
-                try pb.appendSlice(raw_text);
-                if (std.mem.endsWith(u8, raw_text, "<|turn>model")) try pb.appendSlice("\n");
-            } else {
-                if (self.clock == 0) {
-                    if (self.readPromptKernel()) |kernel| {
-                        defer self.allocator.free(kernel);
-                        const trimmed = std.mem.trim(u8, kernel, " \t\r\n");
-                        if (trimmed.len > 0) {
-                            try pb.appendSlice("<|turn>system\n<|think|>\n");
-                            try pb.appendSlice(trimmed);
-                            try pb.appendSlice("\n<turn|>\n");
-                        }
-                    }
-                }
-                try pb.appendSlice("<|turn>user\n");
-                try pb.appendSlice(raw_text);
-                try pb.appendSlice("<turn|>\n<|turn>model\n");
-            }
-            return self.tok.encode(self.allocator, pb.items, self.clock == 0);
+            return self.tok.encode(self.allocator, raw_text, self.clock == 0);
         }
         const count = std.mem.readInt(u16, p[2..4], .little);
         const slice: []const u32 = @alignCast(std.mem.bytesAsSlice(u32, p[8 .. 8 + count * 4]));

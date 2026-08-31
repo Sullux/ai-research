@@ -1,3 +1,10 @@
+const {
+  formatUserDecisionTurn,
+  formatStepTick,
+  formatTimerWake,
+  formatResumeAfterInterrupt,
+} = require('../template')
+
 const parseDurationMs = (str) => {
   if (!str || typeof str !== 'string') return 10000
   const match = str.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)?$/i)
@@ -142,61 +149,25 @@ const orchestratorFactory = (now) => (timers) => {
       if (waiting.length === 0) {
         return '<|turn>model\n'
       }
-
-      const waitingLines = waiting
-        .map((w) => `- Step ${w.id}: ${w.waitingForUser?.brief || w.brief}`)
-        .join('\n')
-
-      return [
-        '<|turn>model',
-        '<|channel>thought',
-        `User message received: "${meta.message || ''}"`,
-        '',
-        'Tasks currently awaiting user intervention:',
-        waitingLines,
-        '',
-        'Decision:',
-        "1. If user's message fulfills an awaiting task, resume that task or call `done()`.",
-        '2. If user provided a new unrelated instruction, prioritize answering/planning it.',
-        '3. If user cancelled a task, mark it complete/aborted.',
-        'Next action:',
-      ].join('\n') + '\n'
+      return formatUserDecisionTurn(meta.message || '', waiting)
     }
 
     if (type === 'STEP_TICK') {
       const active = meta.step || getActiveStep()
       if (!active) return '<|turn>model\n<|channel>thought\nAll tasks complete.\n'
       const parent = plans.find((p) => p.id === active.parentId)
-      return [
-        '<|turn>model',
-        '<|channel>thought',
-        `Focus: Plan ${parent?.id || ''} - ${parent?.brief || ''}`,
-        `Active Step ${active.id}: ${active.brief}`,
-        'Status: In progress.',
-        'Next action:',
-      ].join('\n') + '\n'
+      return formatStepTick(parent?.id, parent?.brief, active.id, active.brief)
     }
 
     if (type === 'RESUME_AFTER_INTERRUPT') {
       const active = meta.step || getActiveStep()
       if (!active) return '<|turn>model\n<|channel>thought\nNo pending tasks to resume.\n'
-      return [
-        '<|turn>model',
-        '<|channel>thought',
-        `Interruption handled. Automatically resuming Step ${active.id}: ${active.brief}.`,
-        'Previous context remains active in episodic memory.',
-        'Next action:',
-      ].join('\n') + '\n'
+      return formatResumeAfterInterrupt(active.id, active.brief)
     }
 
     if (type === 'TIMER_WAKE') {
       const active = meta.step
-      return [
-        '<|turn>model',
-        '<|channel>thought',
-        `Timer expired for Step ${active?.id || ''} (${active?.deferReason || ''}). Checking state for updates.`,
-        'Next action:',
-      ].join('\n') + '\n'
+      return formatTimerWake(active?.id, active?.deferReason)
     }
 
     return '<|turn>model\n'

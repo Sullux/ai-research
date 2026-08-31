@@ -1,3 +1,5 @@
+const { formatToolResponse } = require('../template')
+
 const TOOL_CALL_START = '<|tool_call>'
 const TOOL_CALL_END = '<tool_call|>'
 
@@ -63,7 +65,7 @@ const toolParserFactory = () => (registry, client, store) => {
       content: JSON.stringify(result, null, 2),
     })
 
-    const responsePayload = `\n<|tool_response>response:${parsed.name}${JSON.stringify(result)}<tool_response|>\n`
+    const responsePayload = formatToolResponse(parsed.name, result)
     client.sendInput(responsePayload)
   }
 
