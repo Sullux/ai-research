@@ -7,7 +7,8 @@ const { TimerManager } = require('./lib/timers')
 const { Orchestrator } = require('./lib/orchestrator')
 const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
-const { StateStore } = require('./lib/ui/state')
+const { StreamLog } = require('./lib/storage')
+const { stateStoreFactory } = require('./lib/ui/state')
 const controller = require('./lib/ui/controller')
 
 const STATUS_NAMES = [
@@ -27,8 +28,9 @@ const loadConfig = () => {
   }
   return {
     modelPath: '../../gemma-4-12B-it',
+    memoryDir: './.memory',
     promptPath: './PROMPT.md',
-    extraArgs: ['--gpu', '--q4', '--quiescence'],
+    extraArgs: ['--gpu', '--q4'],
     runtime: {
       maxTokens: 512,
       thinkingBudget: 512,
@@ -52,11 +54,28 @@ const loadSystemPrompt = (promptPath) => {
 const main = () => {
   const config = loadConfig()
   const cliArgs = process.argv.slice(2)
-  const extraArgs = cliArgs.length > 0 ? cliArgs : config.extraArgs
+  const extraArgs = [...(cliArgs.length > 0 ? cliArgs : config.extraArgs || [])]
   const modelPath = path.resolve(__dirname, config.modelPath)
   const systemPrompt = loadSystemPrompt(config.promptPath)
 
-  const store = StateStore()
+  let streamLog = StreamLog(null)
+  if (config.memoryDir) {
+    const memDir = path.resolve(__dirname, config.memoryDir)
+    fs.mkdirSync(memDir, { recursive: true })
+    const episodicMemPath = path.join(memDir, '.episodic.mem')
+    if (!extraArgs.includes('--memory') && !extraArgs.includes('--storage')) {
+      extraArgs.push('--memory', episodicMemPath)
+    }
+    streamLog = StreamLog(memDir)
+  }
+
+  const StateStore = stateStoreFactory()
+  const store = StateStore(streamLog.append)
+  const tail = streamLog.loadTail()
+  if (tail.items?.length > 0) {
+    store.hydrateFromStream(tail.items)
+  }
+
   const session = TerminalSession({ rows: 30, cols: 100 })
   const client = Client({
     binaryPath: path.resolve(__dirname, '../zig-out/bin/infer'),
@@ -66,7 +85,7 @@ const main = () => {
   const timers = TimerManager()
   const orchestrator = Orchestrator(timers)
   const registry = ToolRegistry(session, client, timers, orchestrator)
-  const parser = ToolParser(registry, client)
+  const parser = ToolParser(registry, client, store)
 
   controller.init(store, client, session, orchestrator, timers, systemPrompt)
 
@@ -144,6 +163,7 @@ const main = () => {
   client.on('drain', requestRedraw)
 
   app.onExit(() => {
+    streamLog.close()
     session.kill()
     client.shutdown()
   })

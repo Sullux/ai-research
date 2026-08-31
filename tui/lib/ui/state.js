@@ -1,4 +1,7 @@
-const stateStoreFactory = () => () => {
+const MAX_STREAM_ITEMS = 1000
+const MAX_CONVERSATION_ITEMS = 500
+
+const stateStoreFactory = () => (onStreamItem) => {
   const state = {
     conversation: [
       {
@@ -35,25 +38,56 @@ const stateStoreFactory = () => () => {
   }
 
   const addConversationMessage = (msg) => {
-    state.conversation.push({
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      time: Date.now(),
+    const item = {
+      id: msg.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      time: msg.time || Date.now(),
       ...msg,
-    })
+    }
+    state.conversation.push(item)
+    if (state.conversation.length > MAX_CONVERSATION_ITEMS) {
+      state.conversation.shift()
+    }
     if (state.stickyScroll.chat) {
       state.selectedIdx.chat = state.conversation.length - 1
     }
   }
 
-  const addStreamEntry = (entry) => {
-    state.stream.push({
-      id: `str-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      time: Date.now(),
+  const addStreamEntry = (entry, shouldPersist = true) => {
+    const item = {
+      id: entry.id || `str-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      time: entry.time || Date.now(),
       expanded: false,
       ...entry,
-    })
+    }
+    state.stream.push(item)
+    if (state.stream.length > MAX_STREAM_ITEMS) {
+      state.stream.shift()
+    }
     if (state.stickyScroll.stream) {
       state.selectedIdx.stream = state.stream.length - 1
+    }
+    if (shouldPersist && onStreamItem) {
+      onStreamItem(item)
+    }
+  }
+
+  const hydrateFromStream = (items) => {
+    if (!items || items.length === 0) return
+    state.conversation = []
+    state.stream = []
+
+    for (const item of items) {
+      addStreamEntry(item, false)
+      if (item.type === 'user') {
+        addConversationMessage({ sender: 'User', text: item.content, time: item.time, id: item.id })
+      } else if (item.type === 'response') {
+        addConversationMessage({ sender: 'Assistant', text: item.content, time: item.time, id: item.id })
+      } else if (item.type === 'ask_user') {
+        addConversationMessage({ sender: 'Assistant', text: item.content, time: item.time, id: item.id, waitingUser: true })
+      }
+    }
+    if (state.conversation.length === 0) {
+      addConversationMessage({ sender: 'Assistant', text: 'Cognitive Engine Ready. Press Enter to type a prompt or task.' })
     }
   }
 
@@ -125,6 +159,7 @@ const stateStoreFactory = () => () => {
     state,
     addConversationMessage,
     addStreamEntry,
+    hydrateFromStream,
     appendActiveThought,
     flushActiveThought,
     appendActiveResponse,
