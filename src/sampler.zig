@@ -60,6 +60,7 @@ pub const Sampler = struct {
     top_p: f32 = 0.95,
     min_p: f32 = 0.05,
     temp: f32 = 1.0,
+    suppress_thinking: bool = false,
 
     pub fn init(seed: u64, temp: f32, top_p: f32) Sampler {
         return .{
@@ -71,6 +72,7 @@ pub const Sampler = struct {
             .frequency_penalty = 0.1,
             .presence_penalty = 0.1,
             .min_p = 0.05,
+            .suppress_thinking = false,
         };
     }
 
@@ -79,6 +81,7 @@ pub const Sampler = struct {
         for (suppress) |sup| {
             if (sup < logits.len) logits[sup] = -1e9;
         }
+        if (self.suppress_thinking and 100 < logits.len) logits[100] = -1e9;
 
         const cap: f32 = 30.0;
         const inv_cap: f32 = 1.0 / cap;
@@ -190,12 +193,13 @@ pub const Sampler = struct {
     pub fn sampleTopK(self: *Sampler, candidates: []const TopKCandidate, recent_tokens: ?[]const u32) u32 {
         if (candidates.len == 0) return 0;
         const has_penalties = (self.repeat_penalty > 1.0 or self.frequency_penalty > 0.0 or self.presence_penalty > 0.0);
-        if (self.temp <= 0.0 and (!has_penalties or recent_tokens == null)) return candidates[0].id;
+        if (self.temp <= 0.0 and (!has_penalties or recent_tokens == null) and !self.suppress_thinking) return candidates[0].id;
 
         var items: [64]TopKCandidate = undefined;
         var K: usize = 0;
         for (candidates) |cand| {
             if (cand.id == 0 or cand.id == 258882 or cand.id == 258883 or cand.id == 255999 or cand.id == 256000 or cand.id == 256001 or cand.id == 255995 or cand.id == 255996 or cand.id == 255997 or cand.id == 255998) continue;
+            if (self.suppress_thinking and cand.id == 100) continue;
             items[K] = cand;
             K += 1;
             if (K == 64) break;
@@ -338,4 +342,17 @@ test "sampler.sampleTopK frequency and presence penalties suppress repeated toke
     const recent = [_]u32{ 6639, 6639, 6639 };
     const chosen = sampler.sampleTopK(&candidates, &recent);
     try std.testing.expectEqual(@as(u32, 16132), chosen);
+}
+
+test "sampler.sampleTopK suppresses token 100 when suppress_thinking is active" {
+    var sampler = Sampler.init(42, 0.0, 0.95);
+    sampler.suppress_thinking = true;
+
+    const candidates = [_]TopKCandidate{
+        .{ .id = 100, .val = 20.0 }, // <|channel>
+        .{ .id = 236777, .val = 15.0 }, // "I"
+    };
+
+    const chosen = sampler.sampleTopK(&candidates, null);
+    try std.testing.expectEqual(@as(u32, 236777), chosen);
 }

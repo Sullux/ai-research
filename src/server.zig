@@ -228,6 +228,7 @@ pub const Server = struct {
         const recent_buf = try self.allocator.alloc(u32, max_recent);
         defer self.allocator.free(recent_buf);
         var recent_count: usize = 0;
+        self.sampler.suppress_thinking = false;
 
         while (true) {
             if (self.is_aborted.load(.monotonic)) {
@@ -253,13 +254,22 @@ pub const Server = struct {
             const w_start = if (recent_count > self.repeat_last_n) recent_count - self.repeat_last_n else 0;
             const window_tokens = recent_buf[w_start..recent_count];
 
-            if (cur == 100) { self.in_thinking_channel = true; cur = self.advanceToken(cur, window_tokens); continue; }
+            if (cur == 100) {
+                if (self.sampler.suppress_thinking) {
+                    cur = self.advanceToken(101, window_tokens);
+                    continue;
+                }
+                self.in_thinking_channel = true;
+                cur = self.advanceToken(cur, window_tokens);
+                continue;
+            }
             if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, window_tokens); continue; }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, window_tokens); continue; }
 
             if (self.in_thinking_channel) {
                 if (thinking_count >= self.thinking_budget) {
                     self.in_thinking_channel = false;
+                    self.sampler.suppress_thinking = true;
                     cur = self.advanceToken(101, window_tokens);
                     continue;
                 }
