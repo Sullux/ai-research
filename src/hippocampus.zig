@@ -133,7 +133,21 @@ pub const Hippocampus = struct {
         if (has_interrupted) flags |= EpisodeFlags.IS_INTERRUPTED;
 
         if (archive) |a| {
-            a.appendWithMeta(first_ts, avg_salience, 0, has_interrupted, last_tok, self.centroid_buf);
+            const a_idx = a.appendFullMeta(.{
+                .episode_id = if (storage) |s| @intCast(s.getHeader().total_episodes + 1) else @intCast(a.count + 1),
+                .parent_episode_id = self.current_parent_id,
+                .timestamp = first_ts,
+                .last_accessed = last_ts,
+                .start_clock = start_clock,
+                .token_count = @intCast(n),
+                .salience_norm = avg_salience,
+                .is_interrupted = has_interrupted,
+                .token_id = last_tok,
+            }, self.centroid_buf);
+            if (ring) |r| {
+                const rep_slot = self.items[n / 2].slot_idx;
+                a.copyKVFromRing(a_idx, r, rep_slot);
+            }
         }
 
         if (storage) |s| {

@@ -20,6 +20,8 @@ pub const DynamicRingBuffer = struct {
     clocks: []usize,
     active: []bool,
     total_ingested: usize,
+    turn_boundaries: [128]usize = [_]usize{0} ** 128,
+    num_turn_boundaries: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, num_layers: usize, max_kv_dim: usize, num_anchors: usize, window_size: usize, num_recall: usize) !DynamicRingBuffer {
         _ = window_size; _ = num_recall;
@@ -48,6 +50,24 @@ pub const DynamicRingBuffer = struct {
         @memset(self.k, 0); @memset(self.v, 0);
         @memset(self.clocks, 0); @memset(self.active, false);
         self.total_ingested = 0;
+        self.num_turn_boundaries = 0;
+    }
+
+    pub fn markTurnBoundary(self: *DynamicRingBuffer, clock: usize) void {
+        if (self.num_turn_boundaries > 0 and self.turn_boundaries[(self.num_turn_boundaries - 1) % 128] == clock) return;
+        const idx = self.num_turn_boundaries % 128;
+        self.turn_boundaries[idx] = clock;
+        self.num_turn_boundaries += 1;
+    }
+
+    pub fn snapToBoundary(self: *const DynamicRingBuffer, raw_min_clock: usize) usize {
+        if (raw_min_clock <= self.num_anchors or self.num_turn_boundaries == 0) return raw_min_clock;
+        const start = if (self.num_turn_boundaries > 128) self.num_turn_boundaries - 128 else 0;
+        for (start..self.num_turn_boundaries) |i| {
+            const b = self.turn_boundaries[i % 128];
+            if (b >= raw_min_clock) return b;
+        }
+        return raw_min_clock;
     }
     pub fn setNumAnchors(self: *DynamicRingBuffer, n: usize) void {
         self.num_anchors = @min(n, self.total_slots - UPPER_RECALL_SLOTS - 64);
@@ -118,7 +138,8 @@ pub const DynamicRingBuffer = struct {
         var count: usize = 0;
 
         const effective_window = if (is_sliding) sliding_window else self.windowSize(layer);
-        const min_valid_clock: usize = if (curr_clock >= effective_window) curr_clock - effective_window + 1 else 0;
+        const raw_min: usize = if (curr_clock >= effective_window) curr_clock - effective_window + 1 else 0;
+        const min_valid_clock = if (is_sliding) raw_min else self.snapToBoundary(raw_min);
 
         // 1. Anchors (clock = s)
         const anchor_limit = @min(curr_clock + 1, self.num_anchors);
@@ -168,7 +189,8 @@ pub const DynamicRingBuffer = struct {
 
         const end_clock = start_clock + chunk_len - 1;
         const w_size = self.windowSize(layer);
-        const min_valid_clock: usize = if (end_clock >= w_size) end_clock - w_size + 1 else 0;
+        const raw_min: usize = if (end_clock >= w_size) end_clock - w_size + 1 else 0;
+        const min_valid_clock = self.snapToBoundary(raw_min);
 
         // 1. Anchors (clock = s)
         const anchor_limit = @min(start_clock, self.num_anchors);

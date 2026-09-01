@@ -117,11 +117,11 @@ pub const DiffArchive = struct {
     }
 
     pub fn append(self: *DiffArchive, timestamp: u64, salience_norm: f32, layer_id: u8, vector: []const f32) void {
-        self.appendWithMeta(timestamp, salience_norm, layer_id, false, 0, vector);
+        _ = self.appendWithMeta(timestamp, salience_norm, layer_id, false, 0, vector);
     }
 
     pub fn appendWithMeta(self: *DiffArchive, timestamp: u64, salience_norm: f32, layer_id: u8, is_interrupted: bool, token_id: u32, vector: []const f32) void {
-        self.appendFullMeta(.{
+        _ = self.appendFullMeta(.{
             .timestamp = timestamp,
             .last_accessed = timestamp,
             .salience_norm = salience_norm,
@@ -131,7 +131,7 @@ pub const DiffArchive = struct {
         }, vector);
     }
 
-    pub fn appendFullMeta(self: *DiffArchive, meta: MemoryMeta, vector: []const f32) void {
+    pub fn appendFullMeta(self: *DiffArchive, meta: MemoryMeta, vector: []const f32) usize {
         std.debug.assert(vector.len == self.dim);
         var sum_sq: f32 = 0.0;
         for (vector) |v| sum_sq += v * v;
@@ -143,6 +143,7 @@ pub const DiffArchive = struct {
         self.metas[idx] = meta;
         self.write_head = (idx + 1) % self.capacity;
         if (self.count < self.capacity) self.count += 1;
+        return idx;
     }
 
     pub fn scan(self: *DiffArchive, query: []const f32, now: u64, out_indices: []usize, top_k: usize) usize {
@@ -188,8 +189,8 @@ pub const DiffArchive = struct {
 
         for (0..selected) |rank| {
             const mi = scratch_recall_indices[rank];
-            const mem_ts = self.metas[mi].timestamp;
-            self.copyKVToRing(mi, ring, rank, @intCast(mem_ts));
+            const mem_clock = self.metas[mi].start_clock;
+            self.copyKVToRing(mi, ring, rank, @intCast(mem_clock));
         }
         return selected;
     }
@@ -233,7 +234,7 @@ test "archive multi-factor salience weights child count and prominence" {
     defer arch.deinit();
 
     // Node 0: weak match but high child count / foundational schema
-    arch.appendFullMeta(.{
+    _ = arch.appendFullMeta(.{
         .episode_id = 1,
         .timestamp = 1000,
         .last_accessed = 1000,
@@ -243,7 +244,7 @@ test "archive multi-factor salience weights child count and prominence" {
     }, &[_]f32{ 0.7, 0.7, 0.0, 0.0 });
 
     // Node 1: zero children, ephemeral
-    arch.appendFullMeta(.{
+    _ = arch.appendFullMeta(.{
         .episode_id = 2,
         .timestamp = 1000,
         .last_accessed = 1000,

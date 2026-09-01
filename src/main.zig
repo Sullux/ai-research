@@ -172,5 +172,6 @@ test {
     _ = @import("vq.zig"); _ = @import("gpu.zig"); _ = @import("quant.zig");
     _ = @import("protocol.zig"); _ = @import("hippocampus.zig");
     _ = @import("sampler.zig");
+    _ = @import("model/memory_inject.zig");
     _ = @import("test_memory_lifecycle.zig");
 }

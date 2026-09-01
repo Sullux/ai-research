@@ -72,8 +72,8 @@ pub fn forwardToken(
         }
     }
 
-    if (gpu_opt == null) {
-        if (memory_opt) |mem| memory_inject.integrateMemory(self, mem, ring, scratch, clock, H, tp);
+    if (memory_opt) |mem| {
+        memory_inject.integrateMemory(self, mem, ring, scratch, clock, H, gpu_opt);
     }
     return result_token;
 }

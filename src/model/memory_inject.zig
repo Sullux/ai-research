@@ -38,12 +38,12 @@ pub fn primeSubconsciousMemory(mem: *memory.DiffArchive, ring: *DynamicRingBuffe
     return selected;
 }
 
-pub fn integrateMemory(self: *const Model, mem: *memory.DiffArchive, ring: *DynamicRingBuffer, scratch: *ForwardScratch, clock: usize, H: usize, tp: ?*std.Thread.Pool) void {
+pub fn integrateMemory(self: *const Model, mem: *memory.DiffArchive, ring: *DynamicRingBuffer, scratch: *ForwardScratch, clock: usize, H: usize, gpu_opt: ?*gpu.model_gpu.GpuModelContext) void {
     _ = self;
-    _ = tp;
     _ = H;
     const now_ts: u64 = @intCast(clock);
-    _ = primeSubconsciousMemory(mem, ring, scratch, scratch.normed_x, now_ts, null);
+    const query_vec = if (gpu_opt) |g| g.buf_x.asSlice(f32)[0..scratch.normed_x.len] else scratch.normed_x;
+    _ = primeSubconsciousMemory(mem, ring, scratch, query_vec, now_ts, gpu_opt);
 }
 
 pub fn computeKeywordQueryVector(self: *const Model, token_ids: []const u32, out_vector: []f32) bool {
@@ -73,4 +73,45 @@ pub fn computeKeywordQueryVector(self: *const Model, token_ids: []const u32, out
 
 pub fn searchExplicitMemory(mem: *memory.DiffArchive, query: []const f32, now: u64, out_indices: []usize, top_k: usize) usize {
     return mem.scan(query, now, out_indices, top_k);
+}
+
+test "primeSubconsciousMemory populates recall slots with valid token clock" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 48, 64, 512, 3456, 128);
+    defer ring.deinit();
+
+    var arch = try memory.DiffArchive.initWithKV(std.testing.allocator, 16, 8, 48, 64, .{});
+    defer arch.deinit();
+
+    const idx = arch.appendFullMeta(.{
+        .episode_id = 1,
+        .timestamp = 1740000000000,
+        .last_accessed = 1740000000000,
+        .start_clock = 500,
+        .token_count = 10,
+        .salience_norm = 1.0,
+    }, &[_]f32{ 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+
+    var dummy_k: [64]f32 = undefined;
+    var dummy_v: [64]f32 = undefined;
+    @memset(&dummy_k, 3.14);
+    @memset(&dummy_v, 2.71);
+    ring.writeKV(16, 500, &dummy_k, &dummy_v);
+    arch.copyKVFromRing(idx, &ring, 500);
+
+    var recall_idx: [16]usize = undefined;
+    const selected = arch.primeTier3(&[_]f32{ 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 1740000001000, &ring, &recall_idx);
+    try std.testing.expectEqual(@as(usize, 1), selected);
+
+    // Verify recall slot is active at clock 1000 (since start_clock = 500 <= 1000)
+    var slots_buf: [4096]usize = undefined;
+    const count = ring.getActiveSlotsLayer(16, 1000, false, 1024, &slots_buf);
+    try std.testing.expect(count > 0);
+
+    // Verify recall start slot is in the active list
+    const r_start = ring.recallStart(16);
+    var found = false;
+    for (slots_buf[0..count]) |s| {
+        if (s == r_start) { found = true; break; }
+    }
+    try std.testing.expect(found);
 }

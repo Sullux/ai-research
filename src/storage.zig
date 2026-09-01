@@ -259,7 +259,7 @@ pub const PersistentDiffStore = struct {
             const slot = i % self.max_episodes;
             const ep = self.getEpisodeHeader(slot);
             self.getEpisodeCentroid(slot, temp_vec);
-            archive.appendFullMeta(.{
+            const a_idx = archive.appendFullMeta(.{
                 .episode_id = ep.episode_id,
                 .parent_episode_id = ep.parent_episode_id,
                 .timestamp = ep.created_timestamp,
@@ -273,6 +273,24 @@ pub const PersistentDiffStore = struct {
                 .is_interrupted = (ep.flags & EpisodeFlags.IS_INTERRUPTED) != 0,
                 .token_id = ep.continuation_token,
             }, temp_vec);
+
+            if (archive.kv_cache.len > 0 and ep.token_count > 0) {
+                const ep_total = self.num_layers * 2 * ep.token_count * self.kv_dim;
+                const kv_temp = archive.allocator.alloc(f32, ep_total) catch continue;
+                defer archive.allocator.free(kv_temp);
+                if (self.getEpisodeKVSlab(slot, kv_temp) == ep_total) {
+                    const base = a_idx * archive.kv_stride;
+                    const rep_t = ep.token_count / 2;
+                    for (0..self.num_layers) |l| {
+                        const l_base = l * 2 * ep.token_count * self.kv_dim;
+                        const k_src = l_base + 0 * (ep.token_count * self.kv_dim) + rep_t * self.kv_dim;
+                        const v_src = l_base + 1 * (ep.token_count * self.kv_dim) + rep_t * self.kv_dim;
+                        const dst = base + l * archive.max_kv_dim * 2;
+                        @memcpy(archive.kv_cache[dst .. dst + self.kv_dim], kv_temp[k_src .. k_src + self.kv_dim]);
+                        @memcpy(archive.kv_cache[dst + archive.max_kv_dim .. dst + archive.max_kv_dim + self.kv_dim], kv_temp[v_src .. v_src + self.kv_dim]);
+                    }
+                }
+            }
         }
         return archive.count;
     }

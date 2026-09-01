@@ -134,6 +134,7 @@ pub const Server = struct {
         }
         var indices: [16]usize = undefined;
         const count = self.archive.?.scan(q_vec, @intCast(self.clock), &indices, @min(top_k, 16));
+        _ = model.memory_inject.primeSubconsciousMemory(self.archive.?, self.ring, self.scratch, q_vec, @intCast(self.clock), self.gpu_opt);
         var timestamps: [16]u64 = undefined;
         for (0..count) |i| timestamps[i] = self.archive.?.metas[indices[i]].timestamp;
         try protocol.writeMemResponse(writer, msg_id, @intCast(count), 0x00, 0, 0, timestamps[0..count]);
@@ -143,6 +144,7 @@ pub const Server = struct {
     fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
         if (payload.len < 8) return;
         self.is_aborted.store(false, .seq_cst);
+        self.ring.markTurnBoundary(self.clock);
         const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
         if (self.clock == 0 and tokens.len > 0) {
             var sys_len: usize = 0;
@@ -153,6 +155,13 @@ pub const Server = struct {
         const prefill_start = std.time.milliTimestamp();
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+
+        if (self.archive) |a| {
+            if (model.memory_inject.computeKeywordQueryVector(self.m, tokens, self.scratch.normed_x)) {
+                _ = model.memory_inject.primeSubconsciousMemory(a, self.ring, self.scratch, self.scratch.normed_x, @intCast(self.clock), self.gpu_opt);
+            }
+        }
+
         try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, 0.0, self.slots(), diff_count, 0, total_prefill, is_gpu);
         writer.flush();
 
