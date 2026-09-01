@@ -40,17 +40,6 @@ fn pushTopK(heap: []IndexedLogit, size: *usize, max_k: usize, item: IndexedLogit
     }
 }
 
-inline fn isExcludedFromRepeatPenalty(tok: u32) bool {
-    if (tok < 256) return true;
-    return switch (tok) {
-        // Punctuation & Quotes
-        623, 236743, 236761, 236764, 236768, 236787, 236788, 236789, 236799, 236881 => true,
-        // Common Contractions ('m, 's, 't, 'd, 're, 've, 'll)
-        500, 560, 859, 236745, 236751, 236753, 236757 => true,
-        else => false,
-    };
-}
-
 inline fn isCritiqueToken(tok: u32) bool {
     return switch (tok) {
         // "Wait", " Wait", "wait", " wait", "WAIT", " WAIT"
@@ -120,8 +109,6 @@ pub const Sampler = struct {
 
         if (recent_tokens != null and (self.repeat_penalty > 1.0 or self.frequency_penalty > 0.0 or self.presence_penalty > 0.0)) {
             for (recent_tokens.?, 0..) |tok, i| {
-                if (isExcludedFromRepeatPenalty(tok)) continue;
-
                 var already_seen = false;
                 for (recent_tokens.?[0..i]) |prev| {
                     if (prev == tok) { already_seen = true; break; }
@@ -236,8 +223,6 @@ pub const Sampler = struct {
 
         if (recent_tokens != null and has_penalties) {
             for (recent_tokens.?, 0..) |tok, i| {
-                if (isExcludedFromRepeatPenalty(tok)) continue;
-
                 var already_seen = false;
                 for (recent_tokens.?[0..i]) |prev| {
                     if (prev == tok) {
