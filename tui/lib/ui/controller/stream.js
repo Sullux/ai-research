@@ -79,19 +79,35 @@ const buildCardSpans = (item, isSel, width) => {
   return spans
 }
 
-const liveNode = (title, text, fg, bg, width, time) => ({
-  type: 'layout', direction: 'vertical', bg, margin: { top: 0, bottom: 1 }, padding: { top: 0, bottom: 0, left: 1, right: 1 },
-  inner: [{
-    type: 'rich',
-    inner: [
-      { type: 'text', text: '  ', fg },
-      { type: 'text', text: `[${formatTimestamp(time || Date.now())}] `, fg: '#565f89' },
-      { type: 'text', text: `${title}`, bold: true, fg },
-      { type: 'text', text: wrapLines(text, width).slice(-3).map((l) => `\n  ${l}`).join(''), fg },
-      { type: 'text', text: ' ▍', fg, bold: true },
-    ],
-  }],
-})
+const liveNode = (title, text, fg, bg, width, time, isSel, expanded) => {
+  const lines = wrapLines(text, width)
+  const spans = [
+    { type: 'text', text: isSel ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
+    { type: 'text', text: `[${formatTimestamp(time || Date.now())}] `, fg: '#565f89' },
+    { type: 'text', text: `${title}`, bold: true, fg },
+  ]
+  if (lines.length <= 3) {
+    spans.push({ type: 'text', text: `: ${lines[0] || ''}`, fg })
+    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: `\n    ${lines[i]}`, fg })
+  } else if (!expanded) {
+    spans.push({ type: 'text', text: `  (↑ ${lines.length - 3} more)`, fg: '#565f89', italic: true })
+    if (isSel) spans.push({ type: 'text', text: '  (x to expand)', fg: '#e0af68', bold: true })
+    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: `\n  ${l}`, fg })
+  } else {
+    if (isSel) spans.push({ type: 'text', text: '  (x to collapse)', fg: '#e0af68', bold: true })
+    for (const l of lines) spans.push({ type: 'text', text: `\n  ${l}`, fg })
+  }
+  spans.push({ type: 'text', text: ' ▍', fg, bold: true })
+
+  return {
+    type: 'layout',
+    direction: 'vertical',
+    bg,
+    margin: { top: 0, bottom: 1 },
+    padding: { top: 0, bottom: 0, left: 1, right: 1 },
+    inner: [{ type: 'rich', inner: spans }],
+  }
+}
 
 const cleanThought = (raw) => (raw || '').trim().replace(/^thought\s*/, '')
 
@@ -103,9 +119,16 @@ const getStreamNodes = () => {
     type: 'layout', direction: 'vertical', bg: getItemColors(item.type).bg, margin: { top: 0, bottom: 1 }, padding: { top: 0, bottom: 0, left: 1, right: 1 },
     inner: [{ type: 'rich', inner: buildCardSpans(item, idx === selIdx, width) }],
   }))
+  let curIdx = refs.store.state.stream.length
   const th = cleanThought(refs.store.state.activeThought)
-  if (th) nodes.push(liveNode('💭 THOUGHT', th, '#bb9af7', '#14141e', width, refs.store.state.activeThoughtTime))
-  if (refs.store.state.activeResponse) nodes.push(liveNode('🤖 ASSISTANT', refs.store.state.activeResponse, '#7dcfff', '#132133', width, refs.store.state.activeResponseTime))
+  if (th) {
+    nodes.push(liveNode('💭 THOUGHT', th, '#bb9af7', '#14141e', width, refs.store.state.activeThoughtTime, curIdx === selIdx, !!refs.store.state.activeThoughtExpanded))
+    curIdx++
+  }
+  if (refs.store.state.activeResponse) {
+    nodes.push(liveNode('🤖 ASSISTANT', refs.store.state.activeResponse, '#7dcfff', '#132133', width, refs.store.state.activeResponseTime, curIdx === selIdx, !!refs.store.state.activeResponseExpanded))
+    curIdx++
+  }
   return nodes
 }
 

@@ -9,12 +9,20 @@ const toggleOverlay = (store, key, tier, minTier) => {
 
 const scrollList = (store, delta) => {
   const mode = store?.state.mode
-  const list = mode === 'chat' ? store?.state.conversation : store?.state.stream
   const selKey = mode === 'chat' ? 'chat' : 'stream'
+  let totalCount = 0
+  if (mode === 'chat') {
+    totalCount = (store?.state.conversation?.length || 0) + (store?.state.activeResponse ? 1 : 0)
+  } else if (mode === 'stream') {
+    totalCount = (store?.state.stream?.length || 0) + (store?.state.activeThought ? 1 : 0) + (store?.state.activeResponse ? 1 : 0)
+  } else {
+    totalCount = store?.state.plan?.length || 0
+  }
   const next = (store?.state.selectedIdx[selKey] || 0) + delta
-  if (next >= 0 && next < (list?.length || 0)) {
+  if (next >= 0 && next < totalCount) {
     store.state.selectedIdx[selKey] = next
     if (delta < 0) store.state.stickyScroll[selKey] = false
+    else if (next === totalCount - 1) store.state.stickyScroll[selKey] = true
   }
 }
 

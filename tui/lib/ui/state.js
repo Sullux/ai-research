@@ -23,8 +23,10 @@ const stateStoreFactory = () => (onStreamItem) => {
     ],
     activeThought: '',
     activeThoughtTime: 0,
+    activeThoughtExpanded: false,
     activeResponse: '',
     activeResponseTime: 0,
+    activeResponseExpanded: false,
     status: 'Idle | tok/s: 0.0 | Memory: 0 episodes',
     isGenerating: false,
     isPaused: false,
@@ -98,6 +100,9 @@ const stateStoreFactory = () => (onStreamItem) => {
       state.activeThoughtTime = Date.now()
     }
     state.activeThought += chunk
+    if (state.stickyScroll.stream) {
+      state.selectedIdx.stream = state.stream.length
+    }
   }
 
   const cleanThought = (raw) => {
@@ -113,6 +118,7 @@ const stateStoreFactory = () => (onStreamItem) => {
     const time = state.activeThoughtTime || Date.now()
     state.activeThought = ''
     state.activeThoughtTime = 0
+    state.activeThoughtExpanded = false
     if (!content) return
     addStreamEntry({
       type: 'thought',
@@ -127,6 +133,13 @@ const stateStoreFactory = () => (onStreamItem) => {
       state.activeResponseTime = Date.now()
     }
     state.activeResponse += chunk
+    if (state.stickyScroll.chat) {
+      state.selectedIdx.chat = state.conversation.length
+    }
+    if (state.stickyScroll.stream) {
+      const th = cleanThought(state.activeThought)
+      state.selectedIdx.stream = state.stream.length + (th ? 1 : 0)
+    }
   }
 
   const flushActiveResponse = () => {
@@ -135,6 +148,7 @@ const stateStoreFactory = () => (onStreamItem) => {
     const time = state.activeResponseTime || Date.now()
     state.activeResponse = ''
     state.activeResponseTime = 0
+    state.activeResponseExpanded = false
     addConversationMessage({
       sender: 'Assistant',
       text: text.trim(),
@@ -157,6 +171,17 @@ const stateStoreFactory = () => (onStreamItem) => {
   const setDimensions = (cols, rows) => { state.dimensions = { cols, rows } }
 
   const toggleExpandStreamItem = (idx) => {
+    const liveThoughtIdx = cleanThought(state.activeThought) ? state.stream.length : -1
+    const liveRespIdx = state.activeResponse ? (state.stream.length + (liveThoughtIdx !== -1 ? 1 : 0)) : -1
+
+    if (idx === liveThoughtIdx && liveThoughtIdx !== -1) {
+      state.activeThoughtExpanded = !state.activeThoughtExpanded
+      return
+    }
+    if (idx === liveRespIdx && liveRespIdx !== -1) {
+      state.activeResponseExpanded = !state.activeResponseExpanded
+      return
+    }
     const item = state.stream[idx]
     if (item) item.expanded = !item.expanded
   }

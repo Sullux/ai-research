@@ -102,4 +102,29 @@ describe('UI StateStore', () => {
     assert.strictEqual(store.state.stream[3].type, 'thought')
     assert.strictEqual(store.state.stream[3].content, 'Second mid-turn thought')
   })
+
+  it('selects and toggles expansion on in-progress thought and response', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+
+    store.appendActiveThought('Step 1 thinking...')
+    assert.strictEqual(store.state.selectedIdx.stream, 1) // Points to live thought
+    assert.strictEqual(store.state.activeThoughtExpanded, false)
+
+    store.toggleExpandStreamItem(1)
+    assert.strictEqual(store.state.activeThoughtExpanded, true)
+
+    store.toggleExpandStreamItem(1)
+    assert.strictEqual(store.state.activeThoughtExpanded, false)
+
+    store.flushActiveThought()
+    assert.strictEqual(store.state.activeThoughtExpanded, false)
+
+    store.appendActiveResponse('Streaming answer...')
+    assert.strictEqual(store.state.selectedIdx.chat, 1) // Points to live response
+    assert.strictEqual(store.state.activeResponseExpanded, false)
+
+    store.toggleExpandStreamItem(2)
+    assert.strictEqual(store.state.activeResponseExpanded, true)
+  })
 })

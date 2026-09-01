@@ -52,6 +52,7 @@ const getConversationNodes = () => {
   })
 
   if (activeResponse) {
+    const isSelected = isChatFocused && selectedIdx.chat === conversation.length
     const timeStr = formatTimestamp(refs.store.state.activeResponseTime || Date.now())
     nodes.push({
       type: 'layout',
@@ -62,7 +63,7 @@ const getConversationNodes = () => {
       inner: [{
         type: 'rich',
         inner: [
-          { type: 'text', text: '  ', fg: '#7dcfff' },
+          { type: 'text', text: isSelected ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
           { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
           { type: 'text', text: '🤖 Assistant: ', bold: true, fg: '#7dcfff' },
           { type: 'text', text: activeResponse, fg: '#c0caf5' },
