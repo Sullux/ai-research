@@ -261,10 +261,11 @@ pub const Server = struct {
                     continue;
                 }
                 self.in_thinking_channel = true;
+                thinking_count = 0;
                 cur = self.advanceToken(cur, window_tokens);
                 continue;
             }
-            if (cur == 101) { self.in_thinking_channel = false; cur = self.advanceToken(cur, window_tokens); continue; }
+            if (cur == 101) { self.in_thinking_channel = false; self.sampler.suppress_critique = false; cur = self.advanceToken(cur, window_tokens); continue; }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, window_tokens); continue; }
 
             if (self.in_thinking_channel) {
@@ -283,27 +284,29 @@ pub const Server = struct {
             writer.flush();
 
             if (self.in_thinking_channel) {
+                self.sampler.suppress_critique = (cur == 107 or cur == 108 or (str.len > 0 and str[str.len - 1] == '\n'));
                 const grace_ceiling = self.thinking_budget + 32;
                 const is_boundary = (str.len > 0 and (str[str.len - 1] == '\n' or str[str.len - 1] == '.' or str[str.len - 1] == '!' or str[str.len - 1] == '?' or str[str.len - 1] == ':'));
 
                 if ((thinking_count >= self.thinking_budget and is_boundary) or thinking_count >= grace_ceiling) {
-                    if (thinking_count >= grace_ceiling and !is_boundary) {
-                        const bridge_text = "\n\nWrapping up reasoning to synthesize the final answer:\n";
-                        const bridge_tokens = try self.tok.encode(self.allocator, bridge_text, false);
-                        defer self.allocator.free(bridge_tokens);
-                        for (bridge_tokens) |bt| {
-                            _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-                            self.clock += 1;
-                            const b_str = self.tok.decode(bt);
-                            try protocol.writeToken(writer, msg_id, protocol.OP_STREAM_THOUGHT, bt, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, b_str);
-                        }
-                        writer.flush();
+                    const bridge_text = "\n\nIdentified steps complete. To execute across multiple stages, invoke `plan()`. Otherwise, deliver the final answer.\n";
+                    const bridge_tokens = try self.tok.encode(self.allocator, bridge_text, false);
+                    defer self.allocator.free(bridge_tokens);
+                    for (bridge_tokens) |bt| {
+                        _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
+                        self.clock += 1;
+                        const b_str = self.tok.decode(bt);
+                        try protocol.writeToken(writer, msg_id, protocol.OP_STREAM_THOUGHT, bt, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, b_str);
                     }
+                    writer.flush();
                     self.in_thinking_channel = false;
-                    self.sampler.suppress_thinking = true;
+                    self.sampler.suppress_critique = false;
+                    thinking_count = 0;
                     cur = self.advanceToken(101, window_tokens);
                     continue;
                 }
+            } else {
+                self.sampler.suppress_critique = false;
             }
 
             const total_gen = thinking_count + response_count;

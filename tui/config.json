@@ -7,7 +7,7 @@
     "--q4"
   ],
   "runtime": {
-    "thinkingBudget": 1024,
+    "thinkingBudget": 256,
     "maxTokens": 1024,
     "temp": 0.7,
     "topP": 0.95,
