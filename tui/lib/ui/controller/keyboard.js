@@ -1,6 +1,7 @@
 const { KeyHandler } = require('@sullux/tui')
 const { refs } = require('./state')
 const { getLayoutTier } = require('./layout')
+const { copyToClipboard, getSelectedText } = require('./clipboard')
 
 const toggleOverlay = (store, key, tier, minTier) => {
   store?.setMode(key)
@@ -63,6 +64,11 @@ const normalModeRouter = KeyHandler({
       refs.store.toggleExpandStreamItem(refs.store.state.selectedIdx.stream)
       ctx.redraw()
     }
+  },
+  c: (ctx, e) => {
+    e.stopPropagation()
+    const text = getSelectedText(refs.store?.state)
+    if (text) copyToClipboard(text)
   },
   j: (ctx, e) => { e.stopPropagation(); scrollList(refs.store, 1); ctx.redraw() },
   k: (ctx, e) => { e.stopPropagation(); scrollList(refs.store, -1); ctx.redraw() },

@@ -109,4 +109,43 @@ describe('UI Controller & Layout Tiering', () => {
     const longSpansExpanded = nodes[1].inner[0].inner
     assert(longSpansExpanded.some((s) => s.text.includes('(x to collapse)')))
   })
+
+  it('copies selected conversation or stream item on c key', () => {
+    const { getSelectedText, copyToClipboard } = require('../lib/ui/controller/clipboard')
+    const store = StateStore()
+    controller.init(store, null, null, null, null)
+
+    // Chat mode copy
+    store.state.mode = 'chat'
+    store.state.conversation = [
+      { id: '1', sender: 'User', text: 'First user prompt', time: 1000 },
+      { id: '2', sender: 'Assistant', text: 'First assistant reply', time: 2000 },
+    ]
+    store.state.selectedIdx.chat = 1
+
+    let written = ''
+    const mockOut = {
+      write: (data) => { written += data },
+    }
+
+    assert.strictEqual(getSelectedText(store.state), 'First assistant reply')
+    copyToClipboard(getSelectedText(store.state), mockOut)
+    assert.ok(written.startsWith('\x1b]52;c;'))
+    assert.ok(written.endsWith('\x07'))
+    const b64 = written.slice(7, -1)
+    assert.strictEqual(Buffer.from(b64, 'base64').toString('utf-8'), 'First assistant reply')
+
+    // Stream mode copy
+    store.state.mode = 'stream'
+    store.state.stream = [
+      { id: 's1', type: 'thought', title: '💭 THOUGHT', content: 'Deep reasoning steps', time: 3000 },
+    ]
+    store.state.selectedIdx.stream = 0
+    assert.strictEqual(getSelectedText(store.state), 'Deep reasoning steps')
+
+    // Test key routing
+    let keyHandled = false
+    controller.onGlobalKey({ redraw: () => {} }, { key: 'c', stopPropagation: () => { keyHandled = true } })
+    assert.strictEqual(keyHandled, true)
+  })
 })
