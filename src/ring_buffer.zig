@@ -160,6 +160,52 @@ pub const DynamicRingBuffer = struct {
         return count;
     }
 
+    pub fn getPrefillPrevSlots(self: *const DynamicRingBuffer, layer: usize, start_clock: usize, chunk_len: usize, out_slots: []usize) usize {
+        const layer_offset = layer * self.total_slots;
+        var count: usize = 0;
+
+        if (start_clock == 0 or chunk_len == 0) return 0;
+
+        const end_clock = start_clock + chunk_len - 1;
+        const w_size = self.windowSize(layer);
+        const min_valid_clock: usize = if (end_clock >= w_size) end_clock - w_size + 1 else 0;
+
+        // 1. Anchors (clock = s)
+        const anchor_limit = @min(start_clock, self.num_anchors);
+        for (0..anchor_limit) |s| {
+            if (self.active[layer_offset + s]) {
+                out_slots[count] = s;
+                count += 1;
+            }
+        }
+
+        // 2. Dynamic Window (tokens that won't be overwritten by incoming chunk)
+        const w_start = self.recallStart(layer);
+        if (start_clock > self.num_anchors) {
+            for (self.num_anchors..w_start) |s| {
+                const global_idx = layer_offset + s;
+                if (!self.active[global_idx]) continue;
+                const slot_clock = self.clocks[global_idx];
+                if (slot_clock >= min_valid_clock and slot_clock < start_clock) {
+                    out_slots[count] = s;
+                    count += 1;
+                }
+            }
+        }
+
+        // 3. Recall slots
+        for (w_start..self.total_slots) |s| {
+            const global_idx = layer_offset + s;
+            if (!self.active[global_idx]) continue;
+            if (self.clocks[global_idx] < start_clock) {
+                out_slots[count] = s;
+                count += 1;
+            }
+        }
+
+        return count;
+    }
+
     pub fn getSlotKV(self: *const DynamicRingBuffer, layer: usize, slot: usize, kv_dim: usize) struct { k: []const f32, v: []const f32, clock: usize } {
         const slot_idx = layer * self.total_slots + slot;
         const offset = slot_idx * self.max_kv_dim;
@@ -209,4 +255,30 @@ test "recall slots are written, cleared, and included in active set" {
     ring.clearRecall();
     const after_clear = ring.getActiveSlots(16, 101, &slots_buf);
     try std.testing.expectEqual(@as(usize, 0), after_clear);
+}
+
+test "prefill slot calculation strictly respects physical ring buffer bounds" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 512, 3456, 128);
+    defer ring.deinit();
+
+    var dummy_k: [64]f32 = undefined;
+    var dummy_v: [64]f32 = undefined;
+    @memset(&dummy_k, 1.0);
+    @memset(&dummy_v, 2.0);
+
+    // Simulate 5000 tokens ingested over multiple turns
+    for (0..5000) |c| {
+        _ = ring.activateSlot(0, c);
+        ring.writeKV(0, c, &dummy_k, &dummy_v);
+    }
+
+    var slots_buf: [4096]usize = undefined;
+    const chunk_len = 226;
+    const prev_count = ring.getPrefillPrevSlots(0, 5000, chunk_len, &slots_buf);
+
+    // Combined total must never exceed TOTAL_SLOTS (4096)
+    try std.testing.expect(prev_count + chunk_len <= ring.total_slots);
+
+    // Anchors must be preserved
+    try std.testing.expect(prev_count >= 512);
 }

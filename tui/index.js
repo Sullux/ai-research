@@ -187,6 +187,18 @@ const main = () => {
 
   client.on('drain', requestRedraw)
 
+  client.on('exit', ({ code }) => {
+    store.setGenerating(false)
+    store.setStatus(`[Error] Inference backend stopped (exit code: ${code})`)
+    requestRedraw()
+  })
+
+  client.on('error', ({ error }) => {
+    store.setGenerating(false)
+    store.setStatus(`[Error] Backend process error: ${error}`)
+    requestRedraw()
+  })
+
   const cleanup = () => {
     try { streamLog.close() } catch (_) {}
     try { session.kill() } catch (_) {}

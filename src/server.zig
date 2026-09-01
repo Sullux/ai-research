@@ -164,7 +164,7 @@ pub const Server = struct {
                 if (self.is_aborted.load(.monotonic)) break;
                 const chunk = tokens[off..@min(tokens.len, off + bp.max_tokens)];
                 const is_last = (off + chunk.len == tokens.len);
-                const prev_count = self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots);
+                const prev_count = self.ring.getPrefillPrevSlots(0, self.clock, chunk.len, self.scratch.active_slots);
                 var c_slots = try self.allocator.alloc(u32, prev_count + chunk.len); defer self.allocator.free(c_slots);
                 for (self.scratch.active_slots[0..prev_count], 0..) |s, j| c_slots[j] = @intCast(s);
                 for (chunk, 0..) |_, i| {
