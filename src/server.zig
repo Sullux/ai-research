@@ -268,12 +268,6 @@ pub const Server = struct {
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, window_tokens); continue; }
 
             if (self.in_thinking_channel) {
-                if (thinking_count >= self.thinking_budget) {
-                    self.in_thinking_channel = false;
-                    self.sampler.suppress_thinking = true;
-                    cur = self.advanceToken(101, window_tokens);
-                    continue;
-                }
                 thinking_count += 1;
             } else {
                 if (response_count >= self.max_tokens) {
@@ -287,6 +281,30 @@ pub const Server = struct {
             const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
             writer.flush();
+
+            if (self.in_thinking_channel) {
+                const grace_ceiling = self.thinking_budget + 32;
+                const is_boundary = (str.len > 0 and (str[str.len - 1] == '\n' or str[str.len - 1] == '.' or str[str.len - 1] == '!' or str[str.len - 1] == '?' or str[str.len - 1] == ':'));
+
+                if ((thinking_count >= self.thinking_budget and is_boundary) or thinking_count >= grace_ceiling) {
+                    if (thinking_count >= grace_ceiling and !is_boundary) {
+                        const bridge_text = "\n\nWrapping up reasoning to synthesize the final answer:\n";
+                        const bridge_tokens = try self.tok.encode(self.allocator, bridge_text, false);
+                        defer self.allocator.free(bridge_tokens);
+                        for (bridge_tokens) |bt| {
+                            _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
+                            self.clock += 1;
+                            const b_str = self.tok.decode(bt);
+                            try protocol.writeToken(writer, msg_id, protocol.OP_STREAM_THOUGHT, bt, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, b_str);
+                        }
+                        writer.flush();
+                    }
+                    self.in_thinking_channel = false;
+                    self.sampler.suppress_thinking = true;
+                    cur = self.advanceToken(101, window_tokens);
+                    continue;
+                }
+            }
 
             const total_gen = thinking_count + response_count;
             if (total_gen % 8 == 0) {

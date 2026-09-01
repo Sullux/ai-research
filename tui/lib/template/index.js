@@ -1,8 +1,8 @@
 const formatTurn1 = (systemPrompt, userText) =>
-  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`
+  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
 
 const formatUserTurn = (userText) =>
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
 
 const formatUserDecisionTurn = (userText, waitingTasks = []) => {
   const waitingLines = waitingTasks
