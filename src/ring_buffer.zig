@@ -152,15 +152,14 @@ pub const DynamicRingBuffer = struct {
             }
         }
 
-        // 2. Dynamic Window
-        const w_start = self.recallStart(layer);
-        if (curr_clock >= self.num_anchors) {
-            for (self.num_anchors..w_start) |s| {
-                const global_idx = layer_offset + s;
-                if (!self.active[global_idx]) continue;
-                const slot_clock = self.clocks[global_idx];
-                if (slot_clock >= min_valid_clock and slot_clock <= curr_clock) {
-                    out_slots[count] = s;
+        // 2. Dynamic Window in strict chronological order
+        const dynamic_start = @max(min_valid_clock, self.num_anchors);
+        if (curr_clock >= dynamic_start) {
+            for (dynamic_start..curr_clock + 1) |c| {
+                const slot = self.getSlotIndexLayer(layer, c);
+                const global_idx = layer_offset + slot;
+                if (self.active[global_idx] and self.clocks[global_idx] == c) {
+                    out_slots[count] = slot;
                     count += 1;
                 }
             }
@@ -168,6 +167,7 @@ pub const DynamicRingBuffer = struct {
 
         // 3. Recall slots (Full attention layers only)
         if (!is_sliding) {
+            const w_start = self.recallStart(layer);
             for (w_start..self.total_slots) |s| {
                 const global_idx = layer_offset + s;
                 if (!self.active[global_idx]) continue;
@@ -201,21 +201,21 @@ pub const DynamicRingBuffer = struct {
             }
         }
 
-        // 2. Dynamic Window (tokens that won't be overwritten by incoming chunk)
-        const w_start = self.recallStart(layer);
-        if (start_clock > self.num_anchors) {
-            for (self.num_anchors..w_start) |s| {
-                const global_idx = layer_offset + s;
-                if (!self.active[global_idx]) continue;
-                const slot_clock = self.clocks[global_idx];
-                if (slot_clock >= min_valid_clock and slot_clock < start_clock) {
-                    out_slots[count] = s;
+        // 2. Dynamic Window in strict chronological order
+        const dynamic_start = @max(min_valid_clock, self.num_anchors);
+        if (start_clock > dynamic_start) {
+            for (dynamic_start..start_clock) |c| {
+                const slot = self.getSlotIndexLayer(layer, c);
+                const global_idx = layer_offset + slot;
+                if (self.active[global_idx] and self.clocks[global_idx] == c) {
+                    out_slots[count] = slot;
                     count += 1;
                 }
             }
         }
 
         // 3. Recall slots
+        const w_start = self.recallStart(layer);
         for (w_start..self.total_slots) |s| {
             const global_idx = layer_offset + s;
             if (!self.active[global_idx]) continue;
@@ -303,4 +303,15 @@ test "prefill slot calculation strictly respects physical ring buffer bounds" {
 
     // Anchors must be preserved
     try std.testing.expect(prev_count >= 512);
+
+    // Slots returned must be in strictly monotonic increasing clock order
+    var last_c: usize = 0;
+    for (0..prev_count) |i| {
+        const slot = slots_buf[i];
+        const clock = ring.clocks[slot];
+        if (i > 0) {
+            try std.testing.expect(clock > last_c);
+        }
+        last_c = clock;
+    }
 }
