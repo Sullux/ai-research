@@ -144,12 +144,16 @@ pub const GpuEngine = struct {
         const pc = extern struct { h: u32, eps: f32 }{ .h = @intCast(H), .eps = eps };
         self.rmsnorm_pipe.recordIndirect(cmd, set, std.mem.asBytes(&pc), ind, off);
     }
-    pub fn recordDecodeAttn(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, num_q_heads: usize) void {
-        const pc = extern struct { head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32 }{ .head_dim = @intCast(head_dim), .kv_dim = @intCast(kv_dim), .gqa_ratio = @intCast(gqa_ratio), .inv_sqrt_dim = inv_sqrt_dim };
+    pub fn recordDecodeAttn(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, is_sliding: bool, num_q_heads: usize) void {
+        const pc = extern struct { head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32, is_sliding: u32, pad: u32 }{
+            .head_dim = @intCast(head_dim), .kv_dim = @intCast(kv_dim), .gqa_ratio = @intCast(gqa_ratio), .inv_sqrt_dim = inv_sqrt_dim, .is_sliding = if (is_sliding) 1 else 0, .pad = 0,
+        };
         self.attn_pipe.record(cmd, set, std.mem.asBytes(&pc), @intCast(num_q_heads), 1, 1);
     }
-    pub fn recordDecodeAttnIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, ind: types.VkBuffer, off: u64) void {
-        const pc = extern struct { head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32 }{ .head_dim = @intCast(head_dim), .kv_dim = @intCast(kv_dim), .gqa_ratio = @intCast(gqa_ratio), .inv_sqrt_dim = inv_sqrt_dim };
+    pub fn recordDecodeAttnIndirect(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, head_dim: usize, kv_dim: usize, gqa_ratio: usize, inv_sqrt_dim: f32, is_sliding: bool, ind: types.VkBuffer, off: u64) void {
+        const pc = extern struct { head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32, is_sliding: u32, pad: u32 }{
+            .head_dim = @intCast(head_dim), .kv_dim = @intCast(kv_dim), .gqa_ratio = @intCast(gqa_ratio), .inv_sqrt_dim = inv_sqrt_dim, .is_sliding = if (is_sliding) 1 else 0, .pad = 0,
+        };
         self.attn_pipe.recordIndirect(cmd, set, std.mem.asBytes(&pc), ind, off);
     }
     pub fn recordQkvRope(self: *const GpuEngine, cmd: types.VkCommandBuffer, set: types.VkDescriptorSet, num_q: usize, num_kv: usize, head_dim: usize, rotary_dim: usize, k_eq_v: bool, theta: f32, eps: f32) void {

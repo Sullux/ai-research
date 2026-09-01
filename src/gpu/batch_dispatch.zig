@@ -96,11 +96,11 @@ pub fn gpuDispatchPrefillBatch(
 
         const pc_attn = extern struct {
             head_dim: u32, kv_dim: u32, gqa_ratio: u32, inv_sqrt_dim: f32,
-            num_q_heads: u32, N: u32, num_prev_slots: u32, pad: u32,
+            num_q_heads: u32, N: u32, num_prev_slots: u32, is_sliding: u32,
         }{
             .head_dim = head_dim, .kv_dim = kv_dim, .gqa_ratio = @intCast(config.num_attention_heads / l_cpu.num_kv_heads),
             .inv_sqrt_dim = 1.0, .num_q_heads = @intCast(config.num_attention_heads), .N = N,
-            .num_prev_slots = @intCast(num_prev_slots), .pad = 0,
+            .num_prev_slots = @intCast(num_prev_slots), .is_sliding = if (l_cpu.layer_type == .sliding_attention) 1 else 0,
         };
         prefill.pipe_causal_attn.record(prefill.cmd_buf, d.causal_attn, std.mem.asBytes(&pc_attn), @intCast(config.num_attention_heads), N, 1);
         recordBarrier(gpu, prefill.cmd_buf);

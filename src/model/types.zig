@@ -135,6 +135,7 @@ pub const ForwardScratch = struct {
     logits: []f32,
     topk_candidates: [64]TopKCandidate = [_]TopKCandidate{.{}} ** 64,
     active_slots: []usize,
+    sliding_slots: []usize,
     prev_normed_x: []f32,
     recall_indices: []usize,
 
@@ -162,6 +163,7 @@ pub const ForwardScratch = struct {
             .ple_buf_2 = try allocator.alloc(f32, config.hidden_size),
             .logits = try allocator.alloc(f32, config.vocab_size),
             .active_slots = try allocator.alloc(usize, max_slots),
+            .sliding_slots = try allocator.alloc(usize, @min(max_slots, 1024)),
             .prev_normed_x = try allocator.alloc(f32, config.hidden_size),
             .recall_indices = try allocator.alloc(usize, MAX_RECALL_SLOTS),
         };
@@ -170,6 +172,7 @@ pub const ForwardScratch = struct {
     }
 
     pub fn deinit(self: *ForwardScratch, allocator: std.mem.Allocator) void {
+        allocator.free(self.sliding_slots);
         allocator.free(self.prev_normed_x);
         allocator.free(self.recall_indices);
         allocator.free(self.x);

@@ -6,7 +6,7 @@ struct PushConstants {
     num_q_heads: u32,
     N: u32,
     num_prev_slots: u32,
-    pad: u32,
+    is_sliding: u32,
 };
 
 @group(0) @binding(0) var<storage, read> Q: array<vec4<f32>>;
@@ -50,9 +50,10 @@ fn main(
     workgroupBarrier();
 
     let S = pc.num_prev_slots + t + 1u;
+    let start_slot = select(0u, select(0u, S - 1024u, S > 1024u), pc.is_sliding != 0u);
 
-    // 1. Compute dot product scores for all slots
-    for (var slot_i = lane; slot_i < S; slot_i = slot_i + 32u) {
+    // 1. Compute dot product scores for all slots in window
+    for (var slot_i = start_slot + lane; slot_i < S; slot_i = slot_i + 32u) {
         let physical_slot = Slots[slot_i];
         let kv_offset = physical_slot * kv_dim_vec4 + kv_h * D_vec4;
 
@@ -82,7 +83,7 @@ fn main(
 
     // 2. Softmax over scores
     var local_max: f32 = -1e9;
-    var i = lane;
+    var i = start_slot + lane;
     while (i < S) {
         if (s_scores[i] > local_max) { local_max = s_scores[i]; }
         i += 32u;
@@ -101,7 +102,7 @@ fn main(
 
     let max_val = s_max_val;
     var local_sum: f32 = 0.0;
-    i = lane;
+    i = start_slot + lane;
     while (i < S) {
         let exp_v = exp(s_scores[i] - max_val);
         s_scores[i] = exp_v;
@@ -121,23 +122,37 @@ fn main(
     workgroupBarrier();
 
     let inv_sum = s_inv_sum;
-    i = lane;
+    i = start_slot + lane;
     while (i < S) {
         s_scores[i] *= inv_sum;
         i += 32u;
     }
     workgroupBarrier();
 
-    // 3. Weighted Sum of V cache
-    var d_idx = lane;
-    while (d_idx < D_vec4) {
-        var acc = vec4<f32>(0.0);
-        for (var j = 0u; j < S; j = j + 1u) {
-            let physical_slot = Slots[j];
-            let kv_offset = physical_slot * kv_dim_vec4 + kv_h * D_vec4;
-            acc = fma(vec4<f32>(s_scores[j]), V_cache[kv_offset + d_idx], acc);
+    // 3. Value accumulation
+    var acc0 = vec4<f32>(0.0);
+    var acc1 = vec4<f32>(0.0);
+    var acc2 = vec4<f32>(0.0);
+    var acc3 = vec4<f32>(0.0);
+
+    for (var s = start_slot; s < S; s = s + 1u) {
+        let physical_slot = Slots[s];
+        let kv_offset = physical_slot * kv_dim_vec4 + kv_h * D_vec4;
+        let weight = s_scores[s];
+
+        acc0 += weight * V_cache[kv_offset + lane];
+        acc1 += weight * V_cache[kv_offset + lane + 32u];
+        if (D_vec4 > 64u) {
+            acc2 += weight * V_cache[kv_offset + lane + 64u];
+            acc3 += weight * V_cache[kv_offset + lane + 96u];
         }
-        Attn_out[q_offset + d_idx] = acc;
-        d_idx += 32u;
+    }
+
+    let out_offset = t * q_dim_vec4 + q_head * D_vec4;
+    Attn_out[out_offset + lane] = acc0;
+    Attn_out[out_offset + lane + 32u] = acc1;
+    if (D_vec4 > 64u) {
+        Attn_out[out_offset + lane + 64u] = acc2;
+        Attn_out[out_offset + lane + 96u] = acc3;
     }
 }

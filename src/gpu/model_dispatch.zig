@@ -18,6 +18,8 @@ fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerW
     const theta: f32 = if (l_cpu.layer_type == .full_attention) config.rope_theta_full else config.rope_theta;
     const gqa_ratio: u32 = @intCast(config.num_attention_heads / l_cpu.num_kv_heads);
 
+    const is_sliding = (l_cpu.layer_type == .sliding_attention);
+
     if (idx == 0) {
         gpu.engine.recordRmsNorm(cmd, l_gpu.desc.input_norm, H, eps);
         gpu.engine.recordBarrier(cmd);
@@ -26,7 +28,7 @@ fn recordLayerDirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLayerW
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordQkvRope(cmd, l_gpu.desc.qkv_rope, config.num_attention_heads, l_cpu.num_kv_heads, head_dim, rot_dim, l_cpu.k_eq_v, theta, eps);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordDecodeAttn(cmd, l_gpu.desc.attn, head_dim, kv_dim, gqa_ratio, 1.0, config.num_attention_heads);
+    gpu.engine.recordDecodeAttn(cmd, l_gpu.desc.attn, head_dim, kv_dim, gqa_ratio, 1.0, is_sliding, config.num_attention_heads);
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordGemv(cmd, l_gpu.desc.o_proj, H, q_dim);
     if (l_gpu.has_post_attn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNorm(cmd, l_gpu.desc.post_attn_norm, H, eps); }
@@ -52,6 +54,8 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
     const rot_dim: u32 = @intCast(l_cpu.rotary_dim);
     const theta: f32 = if (l_cpu.layer_type == .full_attention) config.rope_theta_full else config.rope_theta;
     const gqa_ratio: u32 = @intCast(config.num_attention_heads / l_cpu.num_kv_heads);
+
+    const is_sliding = (l_cpu.layer_type == .sliding_attention);
 
     var pc_gate = kernels.QuiescenceGatePushConstants{
         .hidden_size = @intCast(H), .threshold_sq = thresh, .base_cmd_idx = @intCast(idx * 16), .num_cmds = 11,
@@ -80,7 +84,7 @@ fn recordLayerIndirect(gpu: *model_gpu.GpuModelContext, l_gpu: model_gpu.GpuLaye
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordQkvRopeIndirect(cmd, l_gpu.desc.qkv_rope, config.num_attention_heads, l_cpu.num_kv_heads, head_dim, rot_dim, l_cpu.k_eq_v, theta, eps, buf, base + 2 * 12);
     gpu.engine.recordBarrier(cmd);
-    gpu.engine.recordDecodeAttnIndirect(cmd, l_gpu.desc.attn, head_dim, kv_dim, gqa_ratio, 1.0, buf, base + 3 * 12);
+    gpu.engine.recordDecodeAttnIndirect(cmd, l_gpu.desc.attn, head_dim, kv_dim, gqa_ratio, 1.0, is_sliding, buf, base + 3 * 12);
     gpu.engine.recordBarrier(cmd);
     gpu.engine.recordGemvIndirect(cmd, l_gpu.desc.o_proj, H, q_dim, buf, base + 4 * 12);
     if (l_gpu.has_post_attn_norm) { gpu.engine.recordBarrier(cmd); gpu.engine.recordRmsNormIndirect(cmd, l_gpu.desc.post_attn_norm, H, eps, buf, base + 5 * 12); }
@@ -121,17 +125,20 @@ pub fn recordForwardGraph(gpu: *model_gpu.GpuModelContext, config: *const model_
     _ = gpu.ctx.api.vkEndCommandBuffer(cmd_buf);
 }
 
-pub fn gpuDispatchForwardToken(gpu: *model_gpu.GpuModelContext, config: *const model_types.ModelConfig, layers: []const model_types.LayerWeights, x: []const f32, topk_out: ?[]model_types.TopKCandidate, clock: usize, slot_idx: usize, active_slots: []const usize) u32 {
+pub fn gpuDispatchForwardToken(gpu: *model_gpu.GpuModelContext, config: *const model_types.ModelConfig, layers: []const model_types.LayerWeights, x: []const f32, topk_out: ?[]model_types.TopKCandidate, clock: usize, slot_idx: usize, active_slots: []const usize, sliding_slots: []const usize) u32 {
     _ = layers;
     const H = config.hidden_size;
 
     @memcpy(gpu.buf_x.asSlice(f32)[0..H], x[0..H]);
-    for (gpu.buf_active_slots.asSlice(u32)[0..active_slots.len], active_slots) |*dst, s| dst.* = @intCast(s);
+    const slot_slice = gpu.buf_active_slots.asSlice(u32);
+    for (slot_slice[0..active_slots.len], active_slots) |*dst, s| dst.* = @intCast(s);
+    for (slot_slice[4096 .. 4096 + sliding_slots.len], sliding_slots) |*dst, s| dst.* = @intCast(s);
+
     const params = gpu.buf_step_params.asSlice(u32);
     params[0] = @intCast(clock);
     params[1] = @intCast(slot_idx);
     params[2] = @intCast(active_slots.len);
-    params[3] = 0;
+    params[3] = @intCast(sliding_slots.len);
 
     const cmd_buf = if (topk_out != null) gpu.cmd_buf_decode else gpu.cmd_buf_prefill;
     gpu.engine.submitPreRecorded(cmd_buf) catch return 0;

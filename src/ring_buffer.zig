@@ -117,19 +117,23 @@ pub const DynamicRingBuffer = struct {
         const layer_offset = layer * self.total_slots;
         var count: usize = 0;
 
+        const effective_window = if (is_sliding) sliding_window else self.windowSize(layer);
+        const min_valid_clock: usize = if (curr_clock >= effective_window) curr_clock - effective_window + 1 else 0;
+
+        // 1. Anchors (clock = s)
         const anchor_limit = @min(curr_clock + 1, self.num_anchors);
         for (0..anchor_limit) |s| {
             if (self.active[layer_offset + s]) {
-                out_slots[count] = s;
-                count += 1;
+                if (!is_sliding or s >= min_valid_clock) {
+                    out_slots[count] = s;
+                    count += 1;
+                }
             }
         }
 
+        // 2. Dynamic Window
         const w_start = self.recallStart(layer);
-        const max_cap = self.windowSize(layer);
-        const effective_window = if (is_sliding) @min(sliding_window, max_cap) else max_cap;
         if (curr_clock >= self.num_anchors) {
-            const min_valid_clock = if (curr_clock >= effective_window) curr_clock - effective_window + 1 else self.num_anchors;
             for (self.num_anchors..w_start) |s| {
                 const global_idx = layer_offset + s;
                 if (!self.active[global_idx]) continue;
@@ -141,12 +145,15 @@ pub const DynamicRingBuffer = struct {
             }
         }
 
-        for (w_start..self.total_slots) |s| {
-            const global_idx = layer_offset + s;
-            if (!self.active[global_idx]) continue;
-            if (self.clocks[global_idx] <= curr_clock) {
-                out_slots[count] = s;
-                count += 1;
+        // 3. Recall slots (Full attention layers only)
+        if (!is_sliding) {
+            for (w_start..self.total_slots) |s| {
+                const global_idx = layer_offset + s;
+                if (!self.active[global_idx]) continue;
+                if (self.clocks[global_idx] <= curr_clock) {
+                    out_slots[count] = s;
+                    count += 1;
+                }
             }
         }
 

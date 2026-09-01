@@ -41,9 +41,10 @@ pub fn forwardToken(
     if (gpu_opt) |g| {
         _ = ring.activateSlot(0, clock);
         const slot_idx = ring.getSlotIndex(clock);
-        const active_count = ring.getActiveSlots(0, clock, scratch.active_slots);
+        const active_count = ring.getActiveSlotsLayer(0, clock, false, self.config.sliding_window, scratch.active_slots);
+        const sliding_count = ring.getActiveSlotsLayer(0, clock, true, self.config.sliding_window, scratch.sliding_slots);
         const topk_out: ?[]model.TopKCandidate = if (compute_logits) &scratch.topk_candidates else null;
-        result_token = gpu.model_dispatch.gpuDispatchForwardToken(g, &self.config, self.layers, scratch.x, topk_out, clock, slot_idx, scratch.active_slots[0..active_count]);
+        result_token = gpu.model_dispatch.gpuDispatchForwardToken(g, &self.config, self.layers, scratch.x, topk_out, clock, slot_idx, scratch.active_slots[0..active_count], scratch.sliding_slots[0..sliding_count]);
     } else {
         if (ple_dim > 0) ple.preparePLE(self, scratch, token_id, H, ple_dim, tp);
 
@@ -78,7 +79,8 @@ pub fn forwardToken(
 }
 
 fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuffer, scratch: *ForwardScratch, kv_layer: usize, clock: usize) void {
-    const active_count = ring.getActiveSlots(kv_layer, clock, scratch.active_slots);
+    const is_sliding = (l.layer_type == .sliding_attention);
+    const active_count = ring.getActiveSlotsLayer(kv_layer, clock, is_sliding, self.config.sliding_window, scratch.active_slots);
     const gqa_group_size = self.config.num_attention_heads / l.num_kv_heads;
     const inv_sqrt_dim: f32 = 1.0;
 
