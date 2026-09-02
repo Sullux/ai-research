@@ -39,33 +39,51 @@ const loadConfig = (explicitPath) => {
   const cfgPath = explicitPath
     ? path.resolve(process.cwd(), explicitPath)
     : path.resolve(__dirname, './config.json')
+  const baseDir = path.dirname(cfgPath)
 
+  let raw = undefined
   if (fs.existsSync(cfgPath)) {
     try {
-      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
+      raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
     } catch (_) {}
   }
-  return {
+  const base = Object.assign({
     modelPath: '../../gemma-4-12B-it',
     memoryDir: './.memory',
     promptPath: './PROMPT.md',
     extraArgs: ['--gpu', '--q4'],
     runtime: {
-      maxTokens: 512,
-      thinkingBudget: 512,
+      thinkingBudget: 256,
+      maxTokens: 1024,
       temp: 0.7,
       topP: 0.95,
+      minP: 0.05,
+      repeatPenalty: 1.1,
+      repeatLastN: 64,
+      frequencyPenalty: 0.1,
+      presencePenalty: 0.1,
       qThresh: 0.001,
-    },
+    }
+  }, raw)
+
+  return {
+    ...base,
+    modelPath: base.modelPath ? path.resolve(baseDir, base.modelPath) : undefined,
+    memoryDir: base.memoryDir ? path.resolve(baseDir, base.memoryDir) : undefined,
+    promptPath: base.promptPath ? path.resolve(baseDir, base.promptPath) : undefined,
   }
 }
 
 const loadSystemPrompt = (promptPath) => {
   const kernelPath = path.resolve(__dirname, './PROMPT_KERNEL.md')
-  const userPromptPath = path.resolve(__dirname, promptPath || './PROMPT.md')
+  const userPromptPath = promptPath || path.resolve(__dirname, './PROMPT.md')
 
-  const kernel = fs.existsSync(kernelPath) ? fs.readFileSync(kernelPath, 'utf-8').trim() : ''
-  const userPrompt = fs.existsSync(userPromptPath) ? fs.readFileSync(userPromptPath, 'utf-8').trim() : ''
+  const kernel = fs.existsSync(kernelPath)
+    ? fs.readFileSync(kernelPath, 'utf-8').trim()
+    : ''
+  const userPrompt = fs.existsSync(userPromptPath)
+    ? fs.readFileSync(userPromptPath, 'utf-8').trim()
+    : ''
 
   return [userPrompt, kernel].filter(Boolean).join('\n\n')
 }
@@ -74,12 +92,12 @@ const main = () => {
   const { configPath, extraArgs: cliExtraArgs } = parseCliArgs(process.argv.slice(2))
   const config = loadConfig(configPath)
   const extraArgs = [...(cliExtraArgs.length > 0 ? cliExtraArgs : config.extraArgs || [])]
-  const modelPath = path.resolve(__dirname, config.modelPath)
+  const modelPath = config.modelPath
   const systemPrompt = loadSystemPrompt(config.promptPath)
 
-  let streamLog = StreamLog(null)
+  let streamLog = StreamLog(undefined)
   if (config.memoryDir) {
-    const memDir = path.resolve(__dirname, config.memoryDir)
+    const memDir = config.memoryDir
     fs.mkdirSync(memDir, { recursive: true })
     const episodicMemPath = path.join(memDir, '.episodic.mem')
     if (!extraArgs.includes('--memory') && !extraArgs.includes('--storage')) {
@@ -226,4 +244,13 @@ const main = () => {
   }, 250)
 }
 
-main()
+if (require.main === module) {
+  main()
+}
+
+module.exports = {
+  loadConfig,
+  loadSystemPrompt,
+  parseCliArgs,
+  main,
+}
