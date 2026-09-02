@@ -13,6 +13,14 @@ const onSubmitInput = (ctx, payload) => {
   }
   if (!val || !refs.client) return
 
+  // Flush any in-flight thought or response before recording barge-in user turn
+  if (refs.store?.state?.activeThought) {
+    refs.store.flushActiveThought()
+  }
+  if (refs.store?.state?.activeResponse) {
+    refs.store.flushActiveResponse()
+  }
+
   refs.store?.pushHistory(val)
   refs.store?.addConversationMessage({ sender: 'User', text: val })
   refs.store?.addStreamEntry({ type: 'user', title: '👤 USER', content: val })

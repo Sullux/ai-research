@@ -60,8 +60,8 @@ const SyntaxTracker = () => {
 
   const isNaturalBoundary = (text) => {
     if (!text || !isAtRest()) return false
+    if (text.endsWith('\n\n')) return true
     const trimmed = text.trimEnd()
-    if (trimmed.endsWith('\n\n')) return true
     if (trimmed.endsWith('.') || trimmed.endsWith('?') || trimmed.endsWith('!')) {
       return true
     }
