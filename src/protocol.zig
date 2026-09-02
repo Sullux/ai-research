@@ -109,13 +109,15 @@ pub const STATUS_GENERATING: u8 = 2;
 pub const STATUS_MEMORY: u8 = 3;
 pub const STATUS_CONSOLIDATING: u8 = 4;
 
-pub fn writeStatus(writer: anytype, msg_id: u16, status: u8, tok_sec: f32, active_slots: u16, archived_diffs: u16, current_tok: u32, total_tok: u32, is_gpu: u8) !void {
+pub const STATUS_FLAG_SATURATED: u16 = 0x0001;
+
+pub fn writeStatus(writer: anytype, msg_id: u16, status: u8, tok_sec: f32, active_slots: u16, archived_diffs: u16, current_tok: u32, total_tok: u32, is_gpu: u8, flags: u16) !void {
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_STATUS, .payload_len = 20 });
     try writer.writeByte(status);
     try writer.writeByte(is_gpu);
     try writer.writeInt(u16, active_slots, .little);
     try writer.writeInt(u16, archived_diffs, .little);
-    try writer.writeInt(u16, 0, .little);
+    try writer.writeInt(u16, flags, .little);
     try writer.writeInt(u32, @bitCast(tok_sec), .little);
     try writer.writeInt(u32, current_tok, .little);
     try writer.writeInt(u32, total_tok, .little);

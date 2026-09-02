@@ -22,8 +22,16 @@ const orchestratorFactory = (now) => (timers) => {
   let planCounter = 1000
   const plans = []
   const stack = []
+  let saturated = false
+
+  const setSaturated = (val) => {
+    saturated = Boolean(val)
+  }
+
+  const isSaturated = () => saturated
 
   const createPlan = (brief, steps = []) => {
+    saturated = false
     planCounter += 1
     const planId = `${planCounter}`
     const stepList = Array.isArray(steps) ? steps : [steps]
@@ -144,19 +152,22 @@ const orchestratorFactory = (now) => (timers) => {
 
   const buildThoughtPrefix = (type, meta = {}) => {
     const waiting = getWaitingForUserTasks()
+    const satNotice = saturated
+      ? '\n[Working memory capacity threshold reached. Consolidate current progress, state, and remaining milestones into plan() now.]\n'
+      : ''
 
     if (type === 'USER_PROMPT') {
       if (waiting.length === 0) {
-        return '<|turn>model\n'
+        return `<|turn>model\n${satNotice}`
       }
-      return formatUserDecisionTurn(meta.message || '', waiting)
+      return `${formatUserDecisionTurn(meta.message || '', waiting)}${satNotice}`
     }
 
     if (type === 'STEP_TICK') {
       const active = meta.step || getActiveStep()
       if (!active) return '<|turn>model\n<|channel>thought\nAll tasks complete.\n'
       const parent = plans.find((p) => p.id === active.parentId)
-      return formatStepTick(parent?.id, parent?.brief, active.id, active.brief)
+      return `${formatStepTick(parent?.id, parent?.brief, active.id, active.brief)}${satNotice}`
     }
 
     if (type === 'RESUME_AFTER_INTERRUPT') {
@@ -176,6 +187,8 @@ const orchestratorFactory = (now) => (timers) => {
   return {
     plans,
     stack,
+    setSaturated,
+    isSaturated,
     createPlan,
     getActiveStep,
     getWaitingForUserTasks,

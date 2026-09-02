@@ -5,6 +5,7 @@ const {
   streamInputFrame,
   abortFrame,
   memQueryFrame,
+  memCommitFrame,
   configFrame,
   pingFrame,
   parsedFrame,
@@ -14,6 +15,7 @@ const {
   OP_STREAM_INPUT,
   OP_ABORT,
   OP_MEM_QUERY,
+  OP_MEM_COMMIT,
   OP_SET_CONFIG,
   OP_PING,
 } = require('../lib/protocol/constants')
@@ -46,6 +48,15 @@ test('memQueryFrame serializes query and topK correctly', () => {
   assert.strictEqual(parsed.header.opcode, OP_MEM_QUERY)
   assert.strictEqual(parsed.payload.readUInt8(1), 3) // topK
   assert.strictEqual(parsed.payload.subarray(24).toString('utf-8'), 'matrix multiplication')
+})
+
+test('memCommitFrame serializes commit opcode properly', () => {
+  const frame = memCommitFrame(12)
+  const parsed = parsedFrame(frame)
+  assert.notStrictEqual(parsed, null)
+  assert.strictEqual(parsed.header.msgId, 12)
+  assert.strictEqual(parsed.header.opcode, OP_MEM_COMMIT)
+  assert.strictEqual(parsed.payload.length, 0)
 })
 
 test('configFrame serializes penalty and runtime options properly', () => {

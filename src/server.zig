@@ -12,13 +12,13 @@ const gpu = @import("gpu.zig");
 const sampler = @import("sampler.zig");
 
 const PrefillProgress = struct {
-    w: *server_queue.AsyncWriter, msg_id: u16, slots: u16, diff_count: u16, total_tok: u32, is_gpu: u8, start_time: i64,
+    w: *server_queue.AsyncWriter, msg_id: u16, slots: u16, diff_count: u16, total_tok: u32, is_gpu: u8, flags: u16, start_time: i64,
     fn cb(layer_idx: usize, total_layers: usize, ctx_ptr: ?*anyopaque) void {
         const ptr: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
         const el = @max(1, std.time.milliTimestamp() - ptr.start_time);
         const tok_prog: u32 = @intCast((layer_idx * ptr.total_tok) / total_layers);
         const tok_sec = (@as(f32, @floatFromInt(tok_prog)) / @as(f32, @floatFromInt(el))) * 1000.0;
-        protocol.writeStatus(ptr.w, ptr.msg_id, protocol.STATUS_ENCODING, tok_sec, ptr.slots, ptr.diff_count, tok_prog, ptr.total_tok, ptr.is_gpu) catch {};
+        protocol.writeStatus(ptr.w, ptr.msg_id, protocol.STATUS_ENCODING, tok_sec, ptr.slots, ptr.diff_count, tok_prog, ptr.total_tok, ptr.is_gpu, ptr.flags) catch {};
         ptr.w.flush();
     }
 };
@@ -43,6 +43,13 @@ pub const Server = struct {
         if (self.hippo) |*h| h.deinit();
     }
     inline fn slots(self: *Server) u16 { return @intCast(self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots)); }
+    inline fn statusFlags(self: *Server) u16 {
+        var flags: u16 = 0;
+        if (self.ring.isWorkingSetSaturated(0.85, 0.35)) {
+            flags |= protocol.STATUS_FLAG_SATURATED;
+        }
+        return flags;
+    }
 
     pub fn run(self: *Server, reader: anytype, writer: anytype) !void {
         var in_queue = server_queue.MessageQueue.init(self.allocator); defer in_queue.deinit();
@@ -64,7 +71,7 @@ pub const Server = struct {
         var async_writer = server_queue.AsyncWriter.init(&out_queue, self.allocator);
         defer async_writer.deinit();
 
-        try protocol.writeStatus(&async_writer, 0, protocol.STATUS_IDLE, 0.0, 0, 0, 0, 0, if (self.gpu_opt != null) 1 else 0);
+        try protocol.writeStatus(&async_writer, 0, protocol.STATUS_IDLE, 0.0, 0, 0, 0, 0, if (self.gpu_opt != null) 1 else 0, 0);
         async_writer.flush();
 
         const ReaderThread = struct {
@@ -93,6 +100,7 @@ pub const Server = struct {
                 protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_CONFIG => self.handleSetConfig(p),
                 protocol.OP_MEM_QUERY => try self.handleMemQuery(hdr.msg_id, p, &async_writer),
+                protocol.OP_MEM_COMMIT => self.handleMemCommit(),
                 protocol.OP_PING => { try protocol.writePong(&async_writer, hdr.msg_id); async_writer.flush(); },
                 protocol.OP_SHUTDOWN => break,
                 else => {},
@@ -162,7 +170,7 @@ pub const Server = struct {
             }
         }
 
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, 0.0, self.slots(), diff_count, 0, total_prefill, is_gpu);
+        try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, 0.0, self.slots(), diff_count, 0, total_prefill, is_gpu, self.statusFlags());
         writer.flush();
 
         var cur: u32 = 0;
@@ -181,7 +189,7 @@ pub const Server = struct {
                     for (0..self.config.num_hidden_layers) |l| _ = self.ring.activateSlot(l, c);
                 }
                 const l_dst = if (is_last) self.scratch.logits else self.scratch.logits[0..0];
-                var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .total_tok = total_prefill, .is_gpu = is_gpu, .start_time = prefill_start };
+                var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .total_tok = total_prefill, .is_gpu = is_gpu, .flags = self.statusFlags(), .start_time = prefill_start };
                 try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, chunk, self.m.embed_tokens, c_slots, self.clock, prev_count, l_dst, PrefillProgress.cb, &p_prog);
                 if (is_last) {
                     const ids = gmc.buf_topk_ids.asSlice(u32)[0..64];
@@ -199,14 +207,14 @@ pub const Server = struct {
                 self.clock += 1;
                 if ((i + 1) % 16 == 0 or i == tokens.len - 1) {
                     const el = @max(1, std.time.milliTimestamp() - prefill_start);
-                    try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, @intCast(i + 1), total_prefill, is_gpu);
+                    try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, @intCast(i + 1), total_prefill, is_gpu, self.statusFlags());
                     writer.flush();
                 }
             }
         }
         if (self.is_aborted.load(.monotonic)) {
             try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_ABORTED);
-            try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu);
+            try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
             writer.flush(); return;
         }
         if (tokens.len > 0) {
@@ -323,7 +331,7 @@ pub const Server = struct {
                 const el = @max(1, std.time.milliTimestamp() - start);
                 const dividend = if (total_gen > 1) total_gen - 1 else total_gen;
                 const total_budget: u32 = @intCast(self.max_tokens + self.thinking_budget);
-                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, total_gen, total_budget, is_gpu);
+                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, total_gen, total_budget, is_gpu, self.statusFlags());
                 writer.flush();
             }
             cur = self.advanceToken(cur, window_tokens);
@@ -334,8 +342,15 @@ pub const Server = struct {
         const dividend = if (total_gen > 1) total_gen - 1 else total_gen;
         const tok_sec = (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
         try protocol.writeTurnComplete(writer, msg_id, total_gen, elapsed, tok_sec, reason);
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, total_gen, total_gen, is_gpu);
+        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, total_gen, total_gen, is_gpu, self.statusFlags());
         writer.flush();
+        if (self.hippo) |*h| {
+            const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
+            _ = h.commit(self.archive, self.ring, self.store, start_clock);
+        }
+    }
+
+    fn handleMemCommit(self: *Server) void {
         if (self.hippo) |*h| {
             const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
             _ = h.commit(self.archive, self.ring, self.store, start_clock);

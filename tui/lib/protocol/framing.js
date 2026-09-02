@@ -5,6 +5,7 @@ const {
   OP_ABORT,
   OP_MEM_QUERY,
   OP_SET_CONFIG,
+  OP_MEM_COMMIT,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -31,6 +32,8 @@ const streamInputFrame = (text, msgId = 1) => {
 }
 
 const abortFrame = (msgId = 0) => headerBuffer(OP_ABORT, msgId, 0)
+
+const memCommitFrame = (msgId = 1) => headerBuffer(OP_MEM_COMMIT, msgId, 0)
 
 const pingFrame = (msgId = 1) => headerBuffer(OP_PING, msgId, 0)
 
@@ -95,6 +98,7 @@ module.exports = {
   headerBuffer,
   streamInputFrame,
   abortFrame,
+  memCommitFrame,
   pingFrame,
   shutdownFrame,
   memQueryFrame,

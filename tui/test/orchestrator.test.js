@@ -108,4 +108,27 @@ describe('Orchestrator & Task Stack', () => {
     assert.strictEqual(step.status, 'IN_PROGRESS')
     assert.strictEqual(orch.plans.length, 1)
   })
+
+  it('injects cognitive saturation consolidation directive and clears upon plan creation', () => {
+    let mockTime = 1000
+    const Orchestrator = orchestratorFactory(() => mockTime)
+    const orch = Orchestrator()
+
+    // When not saturated, thought prefix is standard
+    assert.strictEqual(orch.isSaturated(), false)
+    const prefix1 = orch.buildThoughtPrefix('USER_PROMPT', { message: 'hi' })
+    assert.strictEqual(prefix1.includes('capacity threshold reached'), false)
+
+    // Saturated condition triggered by backend
+    orch.setSaturated(true)
+    assert.strictEqual(orch.isSaturated(), true)
+    const prefix2 = orch.buildThoughtPrefix('USER_PROMPT', { message: 'hi' })
+    assert.strictEqual(prefix2.includes('Working memory capacity threshold reached'), true)
+
+    // Model creates a plan -> clears saturated state
+    orch.createPlan('Consolidated architecture plan', ['Step 1', 'Step 2'])
+    assert.strictEqual(orch.isSaturated(), false)
+    const prefix3 = orch.buildThoughtPrefix('USER_PROMPT', { message: 'next' })
+    assert.strictEqual(prefix3.includes('capacity threshold reached'), false)
+  })
 })

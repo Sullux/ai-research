@@ -3,6 +3,7 @@ const toolRegistryFactory = () => (session, client, timers, orchestrator) => {
     plan: async (args) => {
       if (!orchestrator) return { error: 'No orchestrator available' }
       const plan = orchestrator.createPlan(args.brief, args.steps)
+      client?.sendMemCommit?.()
       return {
         status: 'plan_created',
         id: plan.id,

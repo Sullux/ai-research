@@ -122,6 +122,51 @@ pub const DynamicRingBuffer = struct {
         return sum / @as(f32, @floatFromInt(self.num_layers));
     }
 
+    pub fn getWorkingSetGini(self: *const DynamicRingBuffer) f32 {
+        var saliences: [4096]f32 = undefined;
+        var count: usize = 0;
+        var total_sum: f32 = 0.0;
+
+        const w_end = self.recallStart(0);
+        for (self.num_anchors..w_end) |slot| {
+            if (self.active[slot]) {
+                const s = self.getSlotSalience(slot);
+                saliences[count] = s;
+                total_sum += s;
+                count += 1;
+            }
+        }
+
+        if (count < 2 or total_sum <= 0.0) return 1.0;
+
+        std.mem.sort(f32, saliences[0..count], {}, std.sort.asc(f32));
+
+        var weighted_sum: f32 = 0.0;
+        for (0..count) |i| {
+            weighted_sum += @as(f32, @floatFromInt(i + 1)) * saliences[i];
+        }
+
+        const n_f = @as(f32, @floatFromInt(count));
+        const gini = (2.0 * weighted_sum) / (n_f * total_sum) - (n_f + 1.0) / n_f;
+        return @max(0.0, @min(1.0, gini));
+    }
+
+    pub fn isWorkingSetSaturated(self: *const DynamicRingBuffer, capacity_threshold: f32, gini_threshold: f32) bool {
+        const w_end = self.recallStart(0);
+        const tier2_cap = if (w_end > self.num_anchors) w_end - self.num_anchors else 1;
+        var active_count: usize = 0;
+
+        for (self.num_anchors..w_end) |slot| {
+            if (self.active[slot]) active_count += 1;
+        }
+
+        const fill_ratio = @as(f32, @floatFromInt(active_count)) / @as(f32, @floatFromInt(tier2_cap));
+        if (fill_ratio < capacity_threshold) return false;
+
+        const gini = self.getWorkingSetGini();
+        return gini < gini_threshold;
+    }
+
     pub fn evictLowSalienceSlots(self: *DynamicRingBuffer, min_clock: usize, max_clock: usize, evict_count: usize) usize {
         if (min_clock >= max_clock or evict_count == 0) return 0;
 
@@ -436,4 +481,49 @@ test "evictLowSalienceSlots evicts low salience tokens and preserves heavy hitte
 
     // slot6 (heavy hitter) must still be active!
     try std.testing.expectEqual(true, ring.active[slot6]);
+}
+
+test "getWorkingSetGini distinguishes focused vs diffuse attention distributions" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 4, 8, 4);
+    defer ring.deinit();
+
+    var dummy_k: [64]f32 = undefined;
+    var dummy_v: [64]f32 = undefined;
+    @memset(&dummy_k, 1.0);
+    @memset(&dummy_v, 2.0);
+
+    for (4..8) |c| {
+        ring.writeKV(0, c, &dummy_k, &dummy_v);
+    }
+
+    // 1. Perfectly flat/diffuse distribution -> low Gini
+    for (4..8) |c| {
+        const slot = ring.getSlotIndex(c);
+        ring.recordAttention(0, slot, 1.0);
+    }
+    const flat_gini = ring.getWorkingSetGini();
+    try std.testing.expect(flat_gini < 0.10);
+    // 4 active slots out of 4092 tier2 capacity ~ 0.00097 fill ratio
+    try std.testing.expect(ring.isWorkingSetSaturated(0.0005, 0.35));
+
+    // 2. Skewed / concentrated distribution -> high Gini
+    var ring2 = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 4, 8, 4);
+    defer ring2.deinit();
+
+    for (4..8) |c| {
+        ring2.writeKV(0, c, &dummy_k, &dummy_v);
+    }
+    const slot4 = ring2.getSlotIndex(4);
+    const slot5 = ring2.getSlotIndex(5);
+    const slot6 = ring2.getSlotIndex(6);
+    const slot7 = ring2.getSlotIndex(7);
+
+    ring2.recordAttention(0, slot4, 0.05);
+    ring2.recordAttention(0, slot5, 0.05);
+    ring2.recordAttention(0, slot6, 0.10);
+    ring2.recordAttention(0, slot7, 10.00); // 1 dominant anchor
+
+    const concentrated_gini = ring2.getWorkingSetGini();
+    try std.testing.expect(concentrated_gini > 0.60);
+    try std.testing.expect(!ring2.isWorkingSetSaturated(0.0005, 0.35));
 }

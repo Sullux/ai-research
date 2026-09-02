@@ -167,7 +167,8 @@ const main = () => {
     requestRedraw()
   })
 
-  client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, tokSec, currentTok, totalTok }) => {
+  client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, isSaturated, tokSec, currentTok, totalTok }) => {
+    orchestrator.setSaturated(isSaturated)
     const sName = STATUS_NAMES[status] || 'Active'
     const isMixed = extraArgs.includes('--mixed')
     const devTag = isGpu ? (isMixed ? 'GPU Mixed' : 'GPU Q4_0') : 'CPU BF16'
@@ -175,8 +176,9 @@ const main = () => {
       ? ` (${currentTok}/${totalTok} tok)`
       : (status === 2 ? ` (${currentTok} tok)` : '')
     const rate = tokSec > 0 ? ` | ${tokSec.toFixed(1)} tok/s` : ''
+    const satTag = isSaturated ? ' [SATURATED]' : ''
     store.setStatus(
-      `[${devTag}] ${sName}${prog}${rate} | Slots: ${activeSlots} | Memory: ${archivedDiffs} diffs`,
+      `[${devTag}] ${sName}${prog}${rate} | Slots: ${activeSlots}${satTag} | Memory: ${archivedDiffs} diffs`,
     )
     requestRedraw()
   })

@@ -2,10 +2,10 @@ const { spawn } = require('child_process')
 const { EventEmitter } = require('events')
 const {
   OP_STREAM_CONTENT, OP_STREAM_THOUGHT, OP_TURN_COMPLETE,
-  OP_MEM_RESPONSE, OP_STATUS, OP_PONG, OP_ERROR,
+  OP_MEM_RESPONSE, OP_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
 } = require('../protocol/constants')
 const {
-  streamInputFrame, abortFrame, memQueryFrame, configFrame, shutdownFrame, parsedFrame,
+  streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -24,6 +24,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     })
     else if (h.opcode === OP_STATUS) emitter.emit('status', {
       status: p.readUInt8(0), isGpu: p.readUInt8(1), activeSlots: p.readUInt16LE(2), archivedDiffs: p.readUInt16LE(4),
+      flags: p.readUInt16LE(6), isSaturated: Boolean(p.readUInt16LE(6) & STATUS_FLAG_SATURATED),
       tokSec: p.readFloatLE(8), currentTok: p.readUInt32LE(12), totalTok: p.readUInt32LE(16), msgId: h.msgId,
     })
     else if (h.opcode === OP_MEM_RESPONSE) emitter.emit('memResponse', { count: p.readUInt16LE(0), status: p.readUInt8(2), msgId: h.msgId })
@@ -62,6 +63,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   const sendMemQuery = (query, topK = 5) => {
     const id = nextMsgId++
     if (proc?.stdin?.writable) proc.stdin.write(memQueryFrame(query, id, topK))
+    return id
+  }
+
+  const sendMemCommit = () => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(memCommitFrame(id))
     return id
   }
 
@@ -104,7 +111,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     setTimeout(kill, 500).unref?.()
   }
 
-  return { start, sendInput, sendAbort, sendMemQuery, setConfig, shutdown, kill, on: emitter.on.bind(emitter) }
+  return { start, sendInput, sendAbort, sendMemQuery, sendMemCommit, setConfig, shutdown, kill, on: emitter.on.bind(emitter) }
 }
 
 module.exports = {
