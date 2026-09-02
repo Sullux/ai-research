@@ -103,6 +103,7 @@ fn runAttentionHeads(self: *const Model, l: LayerWeights, ring: *DynamicRingBuff
             const slot_kv = ring.getSlotKV(kv_layer, slot, l.kv_dim);
             const v_head = slot_kv.v[kv_h * l.head_dim .. (kv_h + 1) * l.head_dim];
             const weight = head_scores[i];
+            ring.recordAttention(kv_layer, slot, weight);
             for (out_head, v_head) |*o, v_val| o.* += weight * v_val;
         }
     }

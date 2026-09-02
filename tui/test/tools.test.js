@@ -102,4 +102,5 @@ test('ToolParser intercepts streaming tool call and pushes response', async () =
 
   assert.strictEqual(sentResponse.includes('<|tool_response>'), true)
   assert.strictEqual(sentResponse.includes('executed terminal_reset'), true)
+  assert.strictEqual(parser.syntaxTracker.isAtRest(), true)
 })

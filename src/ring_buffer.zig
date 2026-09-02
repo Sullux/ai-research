@@ -122,6 +122,45 @@ pub const DynamicRingBuffer = struct {
         return sum / @as(f32, @floatFromInt(self.num_layers));
     }
 
+    pub fn evictLowSalienceSlots(self: *DynamicRingBuffer, min_clock: usize, max_clock: usize, evict_count: usize) usize {
+        if (min_clock >= max_clock or evict_count == 0) return 0;
+
+        const Candidate = struct { slot: usize, salience: f32 };
+        var candidates: [1024]Candidate = undefined;
+        var cand_count: usize = 0;
+
+        for (min_clock..max_clock + 1) |c| {
+            if (c < self.num_anchors) continue;
+            const slot = self.getSlotIndexLayer(0, c);
+            const g_idx = slot;
+            if (self.active[g_idx] and self.clocks[g_idx] == c) {
+                if (cand_count < candidates.len) {
+                    candidates[cand_count] = .{ .slot = slot, .salience = self.getSlotSalience(slot) };
+                    cand_count += 1;
+                }
+            }
+        }
+
+        if (cand_count == 0) return 0;
+
+        std.mem.sort(Candidate, candidates[0..cand_count], {}, struct {
+            fn lessThan(_: void, a: Candidate, b: Candidate) bool {
+                return a.salience < b.salience;
+            }
+        }.lessThan);
+
+        const to_evict = @min(evict_count, cand_count);
+        for (0..to_evict) |i| {
+            const slot = candidates[i].slot;
+            for (0..self.num_layers) |l| {
+                const idx = l * self.total_slots + slot;
+                self.active[idx] = false;
+            }
+        }
+
+        return to_evict;
+    }
+
     pub fn writeKV(self: *DynamicRingBuffer, layer: usize, clock: usize, k_src: []const f32, v_src: []const f32) void {
         const slot = self.getSlotIndexLayer(layer, clock);
         const slot_idx = layer * self.total_slots + slot;
@@ -355,4 +394,46 @@ test "attention mass accumulation and salience scoring" {
 
     try std.testing.expectEqual(@as(f32, 0.5), ring.getAttentionMass(0, 0));
     try std.testing.expectEqual(@as(f32, 0.6), ring.getSlotSalience(0));
+}
+
+test "evictLowSalienceSlots evicts low salience tokens and preserves heavy hitters" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 4, 8, 4);
+    defer ring.deinit();
+
+    var dummy_k: [64]f32 = undefined;
+    var dummy_v: [64]f32 = undefined;
+    @memset(&dummy_k, 1.0);
+    @memset(&dummy_v, 2.0);
+
+    // Ingest slots for clocks 4..9 (Tier 2 dynamic window)
+    for (4..10) |c| {
+        ring.writeKV(0, c, &dummy_k, &dummy_v);
+        ring.writeKV(1, c, &dummy_k, &dummy_v);
+    }
+
+    // Assign high attention mass to clock 6 (heavy hitter) and clocks 7..9
+    const slot6 = ring.getSlotIndex(6);
+    const slot4 = ring.getSlotIndex(4);
+    const slot5 = ring.getSlotIndex(5);
+
+    ring.recordAttention(0, slot6, 10.0);
+    ring.recordAttention(1, slot6, 10.0);
+    for (7..10) |c| {
+        const sc = ring.getSlotIndex(c);
+        ring.recordAttention(0, sc, 1.0);
+        ring.recordAttention(1, sc, 1.0);
+    }
+    ring.recordAttention(0, slot4, 0.1);
+    ring.recordAttention(0, slot5, 0.2);
+
+    // Evict 2 lowest salience slots in range 4..9 (slot4=0.05, slot5=0.10)
+    const evicted = ring.evictLowSalienceSlots(4, 9, 2);
+    try std.testing.expectEqual(@as(usize, 2), evicted);
+
+    // slot4 and slot5 should now be inactive
+    try std.testing.expectEqual(false, ring.active[slot4]);
+    try std.testing.expectEqual(false, ring.active[slot5]);
+
+    // slot6 (heavy hitter) must still be active!
+    try std.testing.expectEqual(true, ring.active[slot6]);
 }

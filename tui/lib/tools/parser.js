@@ -1,4 +1,5 @@
 const { formatToolResponse } = require('../template')
+const { SyntaxTracker } = require('../stream/syntax')
 
 const TOOL_CALL_START = '<|tool_call>'
 const TOOL_CALL_END = '<tool_call|>'
@@ -33,8 +34,10 @@ const parseToolCall = (str) => {
 
 const toolParserFactory = () => (registry, client, store) => {
   let streamAccumulator = ''
+  const syntaxTracker = SyntaxTracker()
 
   const ingestChunk = async (chunk) => {
+    syntaxTracker.ingestChunk(chunk)
     streamAccumulator += chunk
     const parsed = parseToolCall(streamAccumulator)
     if (!parsed) return
@@ -71,9 +74,10 @@ const toolParserFactory = () => (registry, client, store) => {
 
   const reset = () => {
     streamAccumulator = ''
+    syntaxTracker.reset()
   }
 
-  return { ingestChunk, reset }
+  return { ingestChunk, reset, syntaxTracker }
 }
 
 module.exports = {
