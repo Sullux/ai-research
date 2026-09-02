@@ -162,7 +162,100 @@ $$\text{Salience}(i) = \sum_{t = t_{\text{insert}}}^{T} \alpha_{t, i}$$
 
 ---
 
-## 6. Hardware Dynamics: Sub-Millisecond Defragmentation on UMA
+## 6. Cognitive Saturation & The Dual-Engine Architecture
+
+### The Problem: Working Memory Saturation (Cognitive Load Cliff)
+During large, complex engineering tasks (e.g. implementing a complete multi-tier subsystem or building a full multi-file application), the model generates dozens of guiding macro-thoughts and invariant architectural rules. Over hundreds of decode steps, all of these tokens accumulate high cumulative attention mass.
+
+Eventually, the 4,096-slot physical ring buffer fills. However, when the compaction algorithm scans Tier 2, **even the lowest-salience candidate tokens possess substantial attention mass**. The disposable tail of transient micro-thoughts has completely vanished.
+
+```
+ HEALTHY WORKING MEMORY (High Gini)           SATURATED COGNITIVE STATE (Low Gini)
+ Attention                                   Attention
+ Mass                                        Mass
+  ▲   █                                       ▲   ████████████████████████████████
+  │   █ █                                     │   ████████████████████████████████
+  │   █ █ █                                   │   ████████████████████████████████
+  │   █ █ █ █ ▄ ▂                             │   ████████████████████████████████
+  └────────────────────────► Slots            └────────────────────────► Slots
+   [Clear targets for eviction:                [NO disposable tail:
+    80% disposable scaffolding]                 Eviction causes amnesia / amorphic drift]
+```
+
+### Mathematical & Empirical Indicators of Saturation
+
+The engine detects this condition in real time without fine-tuning via three complementary signals:
+
+1. **Salience Floor Elevation ($S_{\min}$ / $S_{\text{p10}}$)**:
+   - When scanning the oldest candidate eviction window, if the 10th percentile salience score exceeds a critical threshold ($S_{\text{p10}} > \Theta_{\text{sat}}$), no safe eviction candidate exists.
+2. **The Attention Gini Coefficient ($G$)**:
+   - Evaluates the dispersion of attention across all active Tier 2 slots:
+     $$G = \frac{\sum_{i=1}^{n} \sum_{j=1}^{n} |\alpha_i - \alpha_j|}{2n \sum_{i=1}^{n} \alpha_i}$$
+   - **$G \ge 0.65$ (Focused)**: Attention is concentrated on a small set of dominant anchors and recent tokens.
+   - **$G < 0.35$ (Attention Starvation)**: Attention is diffuse and stretched thin across the entire ring buffer.
+3. **Upper-Layer Attention Entropy ($H_{\text{attn}}$ in $L_{16}\dots L_{47}$)**:
+   - In the 8 full-attention reasoning layers, softmax entropy spikes toward maximum ($\log S$), signifying that attention heads are thrashing across competing requirements.
+
+---
+
+### The "Legs vs. Wheels" Dilemma: Articulation vs. Latent Memory
+
+When cognitive saturation occurs, humans and machines face two fundamentally different solutions:
+
+1. **"Writing It Down" (Symbolic Articulation — The "Legs")**:
+   - **Why humans write things down**: Writing forces an **autoregressive compression & disentanglement pass**. Vague, conflicting sub-goals that coexist ambiguously in latent space must be resolved into clean, discrete symbolic tokens.
+   - **Cognitive Benefit**: Creating a structured `plan()` or outline reinforces clarity, resolves latent contradictions, and creates a crystal-clear prompt anchor that steers subsequent attention heads with minimal entropy.
+   - **The Flaw**: It is lossy. You discard 95% of the mechanical code syntax, variable registers, and fine details.
+
+2. **Latent Archival (Subconscious Snapshotting — The "Wheels")**:
+   - **The Superpower**: Instantaneous, bit-exact snapshotting of 48-layer FP16 $(K, V)$ slabs into `.episodic.mem` without prompt bloat or token generation latency.
+   - **The Flaw**: If the latent space is messy or entangled, snapshotting it preserves the confusion alongside the context.
+
+---
+
+### The Synthesis: The Dual-Engine Architecture
+
+Rather than treating symbolic tool calls and latent archival as mutually exclusive, the architecture assigns each mechanism to its optimal cognitive tier:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        THE DUAL-ENGINE ARCHITECTURE                    │
+├───────────────────────────────────┬────────────────────────────────────┤
+│ EXECUTIVE META-COGNITION (Legs)   │ LATENT WORKING SUBSTRATE (Wheels)  │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ Mechanism: `plan()` Tool Calls    │ Mechanism: Hippocampus KV Slabs    │
+│ Target: High-Level Macro Intent   │ Target: Detailed Code / Syntax     │
+│ Why: Resolves ambiguity, clarifies│ Why: 100% loss-free, instantaneous │
+│      strategy, anchors attention  │      recall without token bloat    │
+└───────────────────────────────────┴────────────────────────────────────┘
+```
+
+```
+               COGNITIVE SATURATION RECOVERY FLOW
+               
+ [ Engine Detects Saturated Buffer: G < 0.35 or Sp10 > Θ ]
+                            │
+                            ▼
+ [ Step 1: Orchestrator Consolidation Nudge ]
+ 💭 "[Cognitive load limit reached. Externalizing plan into tool.]"
+ 🤖 `<|tool_call>call:plan{steps: ["1. Parse AST", "2. Build IR", ...]}`
+                            │
+                            ▼
+ [ Step 2: Hippocampus Subconscious Flush ]
+ 💾 Flushes active code/derivation (K, V) slabs into `.episodic.mem`.
+ 🧹 Compacts working buffer, retaining newly structured `plan()` anchor.
+                            │
+                            ▼
+ [ Step 3: Zero-Cost Associative Rehydration ]
+ ⚡ When model later executes Step 2, `primeTier3` associative recall
+    effortlessly re-injects the exact AST (K, V) slab into L16..L47.
+```
+
+This dual-engine approach gives the system **human-level strategic clarity through symbolic articulation** combined with **machine-level eidetic precision through latent memory persistence**.
+
+---
+
+## 7. Hardware Dynamics: Sub-Millisecond Defragmentation on UMA
 
 In discrete GPU systems, memory compaction across PCIe is a bottleneck. However, on unified memory architectures (e.g. AMD Ryzen AI Max+ 395 with LPDDR5X-8000 at $\approx 160\text{ GB/s}$ practical bandwidth), defragmenting the KV cache is nearly instantaneous.
 
@@ -183,7 +276,7 @@ When slots are evicted non-contiguously and compacted into contiguous physical m
 
 ---
 
-## 7. Phased Implementation Roadmap
+## 8. Phased Implementation Roadmap
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
