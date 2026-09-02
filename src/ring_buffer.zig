@@ -19,6 +19,7 @@ pub const DynamicRingBuffer = struct {
     v: []f32,
     clocks: []usize,
     active: []bool,
+    attention_mass: []f32,
     total_ingested: usize,
     turn_boundaries: [128]usize = [_]usize{0} ** 128,
     num_turn_boundaries: usize = 0,
@@ -32,23 +33,27 @@ pub const DynamicRingBuffer = struct {
         const v_buf = try allocator.alloc(f32, total_elements);
         const clocks_buf = try allocator.alloc(usize, num_layers * slots);
         const active_buf = try allocator.alloc(bool, num_layers * slots);
+        const attn_buf = try allocator.alloc(f32, num_layers * slots);
 
         @memset(k_buf, 0); @memset(v_buf, 0); @memset(clocks_buf, 0); @memset(active_buf, false);
+        @memset(attn_buf, 0);
 
         return .{
             .allocator = allocator, .num_layers = num_layers, .max_kv_dim = max_kv_dim,
             .num_anchors = num_anchors, .total_slots = slots, .k = k_buf, .v = v_buf,
-            .clocks = clocks_buf, .active = active_buf, .total_ingested = 0,
+            .clocks = clocks_buf, .active = active_buf, .attention_mass = attn_buf, .total_ingested = 0,
         };
     }
 
     pub fn deinit(self: *DynamicRingBuffer) void {
         self.allocator.free(self.k); self.allocator.free(self.v);
         self.allocator.free(self.clocks); self.allocator.free(self.active);
+        self.allocator.free(self.attention_mass);
     }
     pub fn reset(self: *DynamicRingBuffer) void {
         @memset(self.k, 0); @memset(self.v, 0);
         @memset(self.clocks, 0); @memset(self.active, false);
+        @memset(self.attention_mass, 0);
         self.total_ingested = 0;
         self.num_turn_boundaries = 0;
     }
@@ -95,8 +100,26 @@ pub const DynamicRingBuffer = struct {
         const slot_idx = layer * self.total_slots + slot;
         self.clocks[slot_idx] = clock;
         self.active[slot_idx] = true;
+        self.attention_mass[slot_idx] = 0.0;
         if (layer == 0 and clock >= self.total_ingested) self.total_ingested = clock + 1;
         return slot;
+    }
+
+    pub fn recordAttention(self: *DynamicRingBuffer, layer: usize, slot: usize, mass: f32) void {
+        if (layer < self.num_layers and slot < self.total_slots) {
+            self.attention_mass[layer * self.total_slots + slot] += mass;
+        }
+    }
+
+    pub fn getAttentionMass(self: *const DynamicRingBuffer, layer: usize, slot: usize) f32 {
+        return if (layer < self.num_layers and slot < self.total_slots) self.attention_mass[layer * self.total_slots + slot] else 0.0;
+    }
+
+    pub fn getSlotSalience(self: *const DynamicRingBuffer, slot: usize) f32 {
+        if (slot >= self.total_slots) return 0.0;
+        var sum: f32 = 0;
+        for (0..self.num_layers) |l| sum += self.attention_mass[l * self.total_slots + slot];
+        return sum / @as(f32, @floatFromInt(self.num_layers));
     }
 
     pub fn writeKV(self: *DynamicRingBuffer, layer: usize, clock: usize, k_src: []const f32, v_src: []const f32) void {
@@ -314,4 +337,22 @@ test "prefill slot calculation strictly respects physical ring buffer bounds" {
         }
         last_c = clock;
     }
+}
+
+test "attention mass accumulation and salience scoring" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 4, 64, 4, 8, 4);
+    defer ring.deinit();
+
+    _ = ring.activateSlot(0, 0);
+    _ = ring.activateSlot(1, 0);
+    _ = ring.activateSlot(2, 0);
+    _ = ring.activateSlot(3, 0);
+
+    ring.recordAttention(0, 0, 0.5);
+    ring.recordAttention(1, 0, 0.7);
+    ring.recordAttention(2, 0, 0.4);
+    ring.recordAttention(3, 0, 0.8);
+
+    try std.testing.expectEqual(@as(f32, 0.5), ring.getAttentionMass(0, 0));
+    try std.testing.expectEqual(@as(f32, 0.6), ring.getSlotSalience(0));
 }
