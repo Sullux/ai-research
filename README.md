@@ -10,6 +10,7 @@ The engine implements a **Streaming Hierarchical Architecture** designed for zer
 
 For detailed architectural principles, design specifications, and mathematical foundations, see:
 
+- [FEATURES.md](FEATURES.md) – Executive overview of all technical innovations and differences from classical monolithic inference.
 - [PROBLEM.md](PROBLEM.md) – Problem space, continuous conversation requirements, memory limits, and cognitive constraints.
 - [APPROACH.md](APPROACH.md) – Hierarchical temporal stream, delta tracking, associative memory recall, and quiescent layer skipping.
 - [ARCHITECTURE.md](ARCHITECTURE.md) – Structural blueprints, 3-tier ring buffer layout, memory-mapped persistence, and full-duplex execution model.
