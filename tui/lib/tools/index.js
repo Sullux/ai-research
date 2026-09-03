@@ -1,4 +1,4 @@
-const toolRegistryFactory = () => (session, client, timers, orchestrator) => {
+const toolRegistryFactory = () => (vfs, cmdRunner, trmManager, notManager, client, orchestrator) => {
   const tools = {
     plan: async (args) => {
       if (!orchestrator) return { error: 'No orchestrator available' }
@@ -25,23 +25,6 @@ const toolRegistryFactory = () => (session, client, timers, orchestrator) => {
       }
     },
 
-    defer: async (args) => {
-      if (!orchestrator) return { error: 'No orchestrator available' }
-      const duration = args.duration || '10s'
-      const reason = args.reason || 'waiting'
-      const res = orchestrator.deferActiveStep(duration, reason, (step) => {
-        const thought = orchestrator.buildThoughtPrefix('TIMER_WAKE', { step })
-        client?.sendInput?.(thought)
-      })
-      if (!res) return { status: 'no_active_step_to_defer' }
-      return {
-        status: 'step_deferred',
-        step: res.deferredStep.id,
-        duration: duration,
-        reason: reason,
-      }
-    },
-
     ask_user: async (args) => {
       if (!orchestrator) return { error: 'No orchestrator available' }
       const brief = args.brief || 'user action required'
@@ -62,47 +45,77 @@ const toolRegistryFactory = () => (session, client, timers, orchestrator) => {
       return { status: 'query_submitted', query, topK }
     },
 
-    terminal_write: async (args) => {
-      const input = args.input || ''
-      const watch = args.watch || 'none'
+    // VFS Bounded Streaming Reader (Capped at 512 chars)
+    read: async (args) => {
+      if (!vfs) return { error: 'No VFS available' }
+      const path = args.path || args.file || ''
+      const offset = args.offset || 0
+      return vfs.read(path, offset)
+    },
 
-      session?.write?.(input)
+    // Ephemeral Subshell Command
+    cmd: async (args) => {
+      if (!cmdRunner) return { error: 'No command runner available' }
+      const command = args.command || args.cmd || ''
+      const remind = args.remind !== undefined ? args.remind : '1m'
+      return await cmdRunner.run(command, remind)
+    },
 
-      if (watch === 'screen_change' || watch === 'completion') {
-        session?.setWatch?.((screen) => {
-          client?.sendInput?.(`\n<|terminal_screen|>\n${screen}\n<|end_terminal_screen|>\n`)
+    // Terminate Ephemeral Command
+    cmd_kill: async (args) => {
+      if (!cmdRunner) return { error: 'No command runner available' }
+      const id = args.id || ''
+      const signal = args.signal || 'SIGTERM'
+      return cmdRunner.kill(id, signal)
+    },
+
+    // Open Persistent PTY Session
+    trm_open: async (args) => {
+      if (!trmManager) return { error: 'No terminal manager available' }
+      const name = args.name || 'dev'
+      const command = args.command || ''
+      return trmManager.open(name, command)
+    },
+
+    // Close Persistent PTY Session
+    trm_close: async (args) => {
+      if (!trmManager) return { error: 'No terminal manager available' }
+      const name = args.name || ''
+      return trmManager.close(name)
+    },
+
+    // Send Key to Persistent PTY
+    key: async (args) => {
+      if (!trmManager) return { error: 'No terminal manager available' }
+      const trm = args.trm || args.name || ''
+      const name = args.name || args.key || ''
+      return trmManager.key(trm, name)
+    },
+
+    // Permanent Interrupt Dismissal
+    ack: async (args) => {
+      if (!notManager) return { error: 'No notification manager available' }
+      const id = args.id || ''
+      return notManager.ack(id)
+    },
+
+    // Temporary Interrupt or Plan Step Suppression
+    snooze: async (args) => {
+      const id = args.id || ''
+      const duration = args.duration || '1m'
+
+      if (id.startsWith('step_')) {
+        const res = orchestrator?.deferActiveStep(duration, 'snoozed by model', (step) => {
+          const thought = orchestrator?.buildThoughtPrefix('TIMER_WAKE', { step })
+          client?.sendInput?.(thought)
         })
+        return { status: 'step_snoozed', id, duration, success: Boolean(res) }
       }
-      return { status: 'written', bytes: input.length, watch }
-    },
 
-    terminal_read: async (args) => {
-      const view = args.view || 'screen'
-      if (view === 'screen') {
-        return { view: 'screen', content: session?.buffer?.screenText?.() || '' }
+      if (notManager) {
+        return notManager.snooze(id, duration)
       }
-      if (args.page_offset !== undefined) {
-        return { view: 'scrollback', lines: session?.buffer?.pageSlice?.(args.page_offset) || [] }
-      }
-      const start = args.line_start || 0
-      const count = args.line_count || 30
-      return { view: 'scrollback', lines: session?.buffer?.scrollbackSlice?.(start, count) || [] }
-    },
-
-    terminal_search: async (args) => {
-      const pattern = args.pattern || ''
-      const maxResults = args.max_results || 10
-      return { pattern, results: session?.buffer?.search?.(pattern, maxResults) || [] }
-    },
-
-    terminal_key: async (args) => {
-      session?.sendKey?.(args.key)
-      return { status: 'key_sent', key: args.key }
-    },
-
-    terminal_reset: async () => {
-      session?.reset?.()
-      return { status: 'terminal_reset' }
+      return { status: 'not_found', id }
     },
   }
 

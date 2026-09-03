@@ -33,7 +33,7 @@ const orchestratorFactory = (now) => (timers) => {
   const createPlan = (brief, steps = []) => {
     saturated = false
     planCounter += 1
-    const planId = `${planCounter}`
+    const planId = `plan_${planCounter}`
     const stepList = Array.isArray(steps) ? steps : [steps]
     const normSteps = stepList.length > 0 ? stepList : [brief]
 
@@ -44,7 +44,7 @@ const orchestratorFactory = (now) => (timers) => {
       completed: null,
       status: 'IN_PROGRESS',
       steps: normSteps.map((s, idx) => ({
-        id: `${planId}.${idx + 1}`,
+        id: `step_${planCounter}.${idx + 1}`,
         parentId: planId,
         brief: typeof s === 'string' ? s : (s?.brief || `Step ${idx + 1}`),
         timestamp: now(),

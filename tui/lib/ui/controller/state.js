@@ -12,9 +12,11 @@ const refs = {
   timers: null,
   systemPrompt: '',
   hasSentFirstTurn: false,
+  vfs: null,
+  notManager: null,
 }
 
-const init = (s, c, sess, orch, tmrs, sysPrompt = '') => {
+const init = (s, c, sess, orch, tmrs, sysPrompt = '', vfs = null, notManager = null) => {
   refs.store = s
   refs.client = c
   refs.session = sess
@@ -22,6 +24,8 @@ const init = (s, c, sess, orch, tmrs, sysPrompt = '') => {
   refs.timers = tmrs
   refs.systemPrompt = sysPrompt
   refs.hasSentFirstTurn = false
+  refs.vfs = vfs
+  refs.notManager = notManager
 }
 
 module.exports = {

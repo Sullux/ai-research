@@ -14,25 +14,23 @@ test('parseToolCall extracts tool name and json arguments', () => {
   assert.strictEqual(parsed.args.watch, 'completion')
 })
 
-test('ToolRegistry executes terminal_write and key tools', async () => {
-  let written = ''
-  let keySent = ''
-  const mockSession = {
-    write: (txt) => { written += txt },
-    sendKey: (k) => { keySent = k },
-    buffer: { screenText: () => 'terminal screen ok' },
+test('ToolRegistry executes cmd and key tools', async () => {
+  const mockCmdRunner = {
+    run: async (cmd, remind) => ({ exit_code: 0, output: 'ok\n' }),
+  }
+  const mockTrmManager = {
+    key: (trm, k) => ({ status: 'key_sent', trm, key: k }),
   }
   const mockClient = { sendInput: () => {} }
-  const mockTimers = {}
 
-  const registry = ToolRegistry(mockSession, mockClient, mockTimers)
-  const res1 = await registry.execute('terminal_write', { input: 'git status\n' })
-  assert.strictEqual(res1.status, 'written')
-  assert.strictEqual(written, 'git status\n')
+  const registry = ToolRegistry(null, mockCmdRunner, mockTrmManager, null, mockClient, null)
+  const res1 = await registry.execute('cmd', { command: 'git status\n' })
+  assert.strictEqual(res1.exit_code, 0)
+  assert.strictEqual(res1.output, 'ok\n')
 
-  const res2 = await registry.execute('terminal_key', { key: 'ctrl+c' })
+  const res2 = await registry.execute('key', { trm: 'dev', name: 'ctrl+c' })
   assert.strictEqual(res2.status, 'key_sent')
-  assert.strictEqual(keySent, 'ctrl+c')
+  assert.strictEqual(res2.key, 'ctrl+c')
 
   let memQueried = ''
   let memTopK = 0
@@ -43,21 +41,21 @@ test('ToolRegistry executes terminal_write and key tools', async () => {
       memTopK = k
     },
   }
-  const registry2 = ToolRegistry(mockSession, mockClient2, mockTimers)
+  const registry2 = ToolRegistry(null, null, null, null, mockClient2, null)
   const res3 = await registry2.execute('recall', { query: 'archived thoughts on memory', top_k: 3 })
   assert.strictEqual(res3.status, 'query_submitted')
   assert.strictEqual(memQueried, 'archived thoughts on memory')
   assert.strictEqual(memTopK, 3)
 })
 
-test('ToolRegistry executes plan, done, defer, and ask_user with orchestrator', async () => {
+test('ToolRegistry executes plan, done, snooze, and ask_user with orchestrator', async () => {
   const timers = TimerManager()
   const orch = Orchestrator(timers)
   let sentPayload = ''
   const mockClient = {
     sendInput: (p) => { sentPayload = p },
   }
-  const registry = ToolRegistry(null, mockClient, timers, orch)
+  const registry = ToolRegistry(null, null, null, null, mockClient, orch)
 
   // 1. plan
   const planRes = await registry.execute('plan', {
@@ -65,8 +63,8 @@ test('ToolRegistry executes plan, done, defer, and ask_user with orchestrator', 
     steps: ['Check dependencies', 'Compile'],
   })
   assert.strictEqual(planRes.status, 'plan_created')
-  assert.strictEqual(planRes.id, '1001')
-  assert.strictEqual(planRes.active_step, '1001.1')
+  assert.strictEqual(planRes.id, 'plan_1001')
+  assert.strictEqual(planRes.active_step, 'step_1001.1')
 
   // 2. ask_user
   const askRes = await registry.execute('ask_user', {
@@ -74,18 +72,18 @@ test('ToolRegistry executes plan, done, defer, and ask_user with orchestrator', 
     message: 'Please authorize apt install',
   })
   assert.strictEqual(askRes.status, 'waiting_for_user')
-  assert.strictEqual(askRes.step, '1001.1')
+  assert.strictEqual(askRes.step, 'step_1001.1')
 
   // 3. done
   const doneRes = await registry.execute('done', { summary: 'Dependencies installed' })
   assert.strictEqual(doneRes.status, 'step_completed')
-  assert.strictEqual(doneRes.completed_step, '1001.1')
-  assert.strictEqual(doneRes.next_step, '1001.2')
+  assert.strictEqual(doneRes.completed_step, 'step_1001.1')
+  assert.strictEqual(doneRes.next_step, 'step_1001.2')
 
-  // 4. defer
-  const deferRes = await registry.execute('defer', { duration: '500ms', reason: 'compilation' })
-  assert.strictEqual(deferRes.status, 'step_deferred')
-  assert.strictEqual(deferRes.step, '1001.2')
+  // 4. snooze
+  const snoozeRes = await registry.execute('snooze', { id: 'step_1001.2', duration: '500ms' })
+  assert.strictEqual(snoozeRes.status, 'step_snoozed')
+  assert.strictEqual(snoozeRes.id, 'step_1001.2')
 })
 
 test('ToolParser intercepts streaming tool call and pushes response', async () => {

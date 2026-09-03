@@ -5,6 +5,10 @@ const { Client } = require('./lib/client')
 const { TerminalSession } = require('./lib/terminal/session')
 const { TimerManager } = require('./lib/timers')
 const { Orchestrator } = require('./lib/orchestrator')
+const { Vfs } = require('./lib/vfs')
+const { CommandRunner } = require('./lib/cmd')
+const { TerminalManager } = require('./lib/terminal/manager')
+const { NotificationManager } = require('./lib/notify')
 const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
@@ -50,6 +54,7 @@ const loadConfig = (explicitPath) => {
   const base = Object.assign({
     modelPath: '../../gemma-4-12B-it',
     memoryDir: './.memory',
+    filesystemRoot: './.agent',
     promptPath: './PROMPT.md',
     extraArgs: ['--gpu', '--q4'],
     runtime: {
@@ -70,6 +75,7 @@ const loadConfig = (explicitPath) => {
     ...base,
     modelPath: base.modelPath ? path.resolve(baseDir, base.modelPath) : undefined,
     memoryDir: base.memoryDir ? path.resolve(baseDir, base.memoryDir) : undefined,
+    filesystemRoot: base.filesystemRoot ? path.resolve(baseDir, base.filesystemRoot) : undefined,
     promptPath: base.promptPath ? path.resolve(baseDir, base.promptPath) : undefined,
   }
 }
@@ -113,6 +119,21 @@ const main = () => {
     store.hydrateFromStream(tail.items)
   }
 
+  const vfs = Vfs(config.filesystemRoot)
+  vfs.init()
+
+  const notManager = NotificationManager(timers)
+
+  const cmdRunner = CommandRunner(vfs, timers, (n) => {
+    notManager.notify(n.log || n.cmdId, n.preview, n.cmdId)
+    requestRedraw()
+  })
+
+  const trmManager = TerminalManager(vfs, (n) => {
+    notManager.notify(n.log, n.preview, n.name)
+    requestRedraw()
+  })
+
   const session = TerminalSession({ rows: 30, cols: 100 })
   const client = Client({
     binaryPath: path.resolve(__dirname, '../zig-out/bin/infer'),
@@ -121,10 +142,10 @@ const main = () => {
   })
   const timers = TimerManager()
   const orchestrator = Orchestrator(timers)
-  const registry = ToolRegistry(session, client, timers, orchestrator)
+  const registry = ToolRegistry(vfs, cmdRunner, trmManager, notManager, client, orchestrator)
   const parser = ToolParser(registry, client, store)
 
-  controller.init(store, client, session, orchestrator, timers, systemPrompt)
+  controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager)
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
@@ -220,6 +241,8 @@ const main = () => {
   })
 
   const cleanup = () => {
+    try { cmdRunner.killAll() } catch (_) {}
+    try { trmManager.closeAll() } catch (_) {}
     try { streamLog.close() } catch (_) {}
     try { session.kill() } catch (_) {}
     try { client.shutdown() } catch (_) {}

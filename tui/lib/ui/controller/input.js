@@ -28,15 +28,36 @@ const onSubmitInput = (ctx, payload) => {
   refs.store?.setEditMode(false)
   ctx.setFocus?.(null)
 
+  // VFS message persistence & notification generation
+  let turnContent = val
+  if (refs.vfs) {
+    const savedMsg = refs.vfs.saveUserMessage(val)
+    if (savedMsg.isTruncated) {
+      // Create notification alert for large inputs
+      refs.notManager?.notify(
+        savedMsg.relPath,
+        savedMsg.preview,
+        savedMsg.id,
+      )
+      turnContent = `[🔔 ${savedMsg.id} (${savedMsg.relPath} | ${savedMsg.tokenCount} tok): "${savedMsg.preview}..." | read: ${savedMsg.relPath}]`
+    } else {
+      // Short message: deliver 100% content directly in notification banner
+      turnContent = `[🔔 ${savedMsg.relPath}: "${savedMsg.payload}"]`
+    }
+  }
+
+  // Prepend any pending alerts rollup
+  const alertsRollup = refs.notManager?.formatTurnAlerts?.() || ''
+
   let payloadText = ''
   if (!refs.hasSentFirstTurn && refs.systemPrompt) {
     refs.hasSentFirstTurn = true
-    payloadText = formatTurn1(refs.systemPrompt, val)
+    payloadText = formatTurn1(refs.systemPrompt, `${alertsRollup}${turnContent}`)
   } else {
     const waitingTasks = refs.orchestrator?.getWaitingForUserTasks?.() || []
     payloadText = waitingTasks.length > 0
-      ? formatUserDecisionTurn(val, waitingTasks)
-      : formatUserTurn(val)
+      ? formatUserDecisionTurn(`${alertsRollup}${turnContent}`, waitingTasks)
+      : formatUserTurn(`${alertsRollup}${turnContent}`)
   }
 
   refs.store?.setGenerating(true)

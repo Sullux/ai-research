@@ -23,15 +23,15 @@ describe('Orchestrator & Task Stack', () => {
       'Execute script',
     ])
 
-    assert.strictEqual(plan.id, '1001')
+    assert.strictEqual(plan.id, 'plan_1001')
     assert.strictEqual(plan.steps.length, 3)
-    assert.strictEqual(plan.steps[0].id, '1001.1')
-    assert.strictEqual(plan.steps[1].id, '1001.2')
-    assert.strictEqual(plan.steps[2].id, '1001.3')
+    assert.strictEqual(plan.steps[0].id, 'step_1001.1')
+    assert.strictEqual(plan.steps[1].id, 'step_1001.2')
+    assert.strictEqual(plan.steps[2].id, 'step_1001.3')
 
     // Active step should be step 1
     const active = orch.getActiveStep()
-    assert.strictEqual(active.id, '1001.1')
+    assert.strictEqual(active.id, 'step_1001.1')
     assert.strictEqual(active.status, 'IN_PROGRESS')
   })
 
@@ -43,12 +43,12 @@ describe('Orchestrator & Task Stack', () => {
     orch.createPlan('Short task', ['Step 1', 'Step 2'])
 
     const step1Result = orch.completeActiveStep('Finished step 1')
-    assert.strictEqual(step1Result.completedStep.id, '1001.1')
+    assert.strictEqual(step1Result.completedStep.id, 'step_1001.1')
     assert.strictEqual(step1Result.completedStep.status, 'DONE')
-    assert.strictEqual(step1Result.nextStep.id, '1001.2')
+    assert.strictEqual(step1Result.nextStep.id, 'step_1001.2')
 
     const step2Result = orch.completeActiveStep('Finished step 2')
-    assert.strictEqual(step2Result.completedStep.id, '1001.2')
+    assert.strictEqual(step2Result.completedStep.id, 'step_1001.2')
     assert.strictEqual(step2Result.nextStep, null)
 
     assert.strictEqual(orch.plans[0].status, 'DONE')
@@ -65,14 +65,15 @@ describe('Orchestrator & Task Stack', () => {
 
     const deferred = orch.deferActiveStep('1s', 'compiling LLVM', (step) => {
       wokeUp = true
-      assert.strictEqual(step.id, '1001.1')
+      assert.strictEqual(step.id, 'step_1001.1')
     })
     assert.strictEqual(deferred.deferredStep.status, 'DEFERRED')
     assert.strictEqual(deferred.durationMs, 1000)
 
     // While deferred, active step should be step 2
     const activeNext = orch.getActiveStep()
-    assert.strictEqual(activeNext.id, '1001.2')
+    assert.strictEqual(activeNext.id, 'step_1001.2')
+    timers.clearAll()
   })
 
   it('handles ask_user blocking state and wake-up thought generation', () => {
@@ -82,7 +83,7 @@ describe('Orchestrator & Task Stack', () => {
 
     orch.createPlan('Install software', ['Check sudo', 'Install curl'])
     const active = orch.getActiveStep()
-    assert.strictEqual(active.id, '1001.1')
+    assert.strictEqual(active.id, 'step_1001.1')
 
     orch.askUserActiveStep('Need sudo access', 'Please run sudo apt update')
     assert.strictEqual(active.status, 'WAITING_FOR_USER')
@@ -90,11 +91,11 @@ describe('Orchestrator & Task Stack', () => {
 
     const waiting = orch.getWaitingForUserTasks()
     assert.strictEqual(waiting.length, 1)
-    assert.strictEqual(waiting[0].id, '1001.1')
+    assert.strictEqual(waiting[0].id, 'step_1001.1')
 
     // Thought prefix should include the waiting task
     const thought = orch.buildThoughtPrefix('USER_PROMPT', { message: 'Done, sudo ran' })
-    assert(thought.includes('Step 1001.1: Need sudo access'))
+    assert(thought.includes('step_1001.1: Need sudo access'))
     assert(thought.includes('Done, sudo ran'))
   })
 

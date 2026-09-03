@@ -1,6 +1,7 @@
 {
   "modelPath": "../../gemma-4-12B-it-qat-q4_0-unquantized",
   "memoryDir": "./.memory",
+  "filesystemRoot": "./.agent",
   "promptPath": "./PROMPT.md",
   "extraArgs": [
     "--gpu",
