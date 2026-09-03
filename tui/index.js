@@ -119,10 +119,11 @@ const main = () => {
     store.hydrateFromStream(tail.items)
   }
 
+  const timers = TimerManager()
+  const notManager = NotificationManager(timers)
+
   const vfs = Vfs(config.filesystemRoot)
   vfs.init()
-
-  const notManager = NotificationManager(timers)
 
   const cmdRunner = CommandRunner(vfs, timers, (n) => {
     notManager.notify(n.log || n.cmdId, n.preview, n.cmdId)
@@ -140,7 +141,6 @@ const main = () => {
     modelPath,
     extraArgs,
   })
-  const timers = TimerManager()
   const orchestrator = Orchestrator(timers)
   const registry = ToolRegistry(vfs, cmdRunner, trmManager, notManager, client, orchestrator)
   const parser = ToolParser(registry, client, store)
