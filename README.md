@@ -15,6 +15,7 @@ For detailed architectural principles, design specifications, and mathematical f
 - [ARCHITECTURE.md](ARCHITECTURE.md) – Structural blueprints, 3-tier ring buffer layout, memory-mapped persistence, and full-duplex execution model.
 - [MEMORY.md](MEMORY.md) – Dual-process cognitive memory architecture, 6-second debounce consolidation, non-destructive interruption, and foreground streaming recall.
 - [STREAMING.md](STREAMING.md) – Continuous streaming transduction, dynamic action gating (entropy/urgency/cost), attention-mass eviction, and UMA cache defragmentation.
+- [TOOLS.md](TOOLS.md) – Virtual file subsystem (VFS), capped streaming reader, fast-path subshell execution, persistent PTY devices, and interrupt state machine (`ack`/`snooze`).
 - [MODEL_SELECTION.md](MODEL_SELECTION.md) – Evaluation and selection of Gemma 4 architectures (E2B and 12B-it), layer typologies, and tokenization formats.
 - [ENGINEERING.md](ENGINEERING.md) – Implementation roadmap, GPU kernel execution guidelines, and project coding standards.
 - [API.md](API.md) – Low-level binary wire protocol specification, STDIN/STDOUT framing, opcodes, and full-duplex interaction models.
