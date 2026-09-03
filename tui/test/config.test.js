@@ -43,4 +43,25 @@ describe('Config & Path Resolution', () => {
     assert.ok(path.isAbsolute(cfg.memoryDir))
     assert.ok(path.isAbsolute(cfg.promptPath))
   })
+
+  it('discovers config.json in CWD before falling back to __dirname', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tui-cwd-config-'))
+    const cwdCfg = path.join(tmpDir, 'config.json')
+    fs.writeFileSync(
+      cwdCfg,
+      JSON.stringify({
+        memoryDir: './cwd_memory',
+      }),
+    )
+
+    const origCwd = process.cwd()
+    try {
+      process.chdir(tmpDir)
+      const cfg = loadConfig()
+      assert.strictEqual(cfg.memoryDir, path.join(tmpDir, 'cwd_memory'))
+    } finally {
+      process.chdir(origCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
 })

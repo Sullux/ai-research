@@ -39,10 +39,19 @@ const parseCliArgs = (argv) => {
   return { configPath, extraArgs }
 }
 
+const resolveConfigPath = (explicitPath) => {
+  if (explicitPath) {
+    return path.resolve(process.cwd(), explicitPath)
+  }
+  const cwdConfig = path.resolve(process.cwd(), './config.json')
+  if (fs.existsSync(cwdConfig)) {
+    return cwdConfig
+  }
+  return path.resolve(__dirname, './config.json')
+}
+
 const loadConfig = (explicitPath) => {
-  const cfgPath = explicitPath
-    ? path.resolve(process.cwd(), explicitPath)
-    : path.resolve(__dirname, './config.json')
+  const cfgPath = resolveConfigPath(explicitPath)
   const baseDir = path.dirname(cfgPath)
 
   let raw = undefined
