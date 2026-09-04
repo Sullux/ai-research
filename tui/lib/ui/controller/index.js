@@ -1,4 +1,4 @@
-const { init } = require('./state')
+const { init, refs } = require('./state')
 const {
   getLayoutTier,
   isClipped,
@@ -14,6 +14,7 @@ const { onGlobalKey } = require('./keyboard')
 
 module.exports = {
   init,
+  refs,
   getLayoutTier,
   isClipped,
   getClippedBanner,
