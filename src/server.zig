@@ -23,6 +23,71 @@ const PrefillProgress = struct {
     }
 };
 
+const SyntaxTracker = struct {
+    in_code_fence: bool = false,
+    in_inline_code: bool = false,
+    in_double_quote: bool = false,
+    paren_depth: u32 = 0,
+    brace_depth: u32 = 0,
+    bracket_depth: u32 = 0,
+
+    pub fn reset(self: *SyntaxTracker) void {
+        self.in_code_fence = false;
+        self.in_inline_code = false;
+        self.in_double_quote = false;
+        self.paren_depth = 0;
+        self.brace_depth = 0;
+        self.bracket_depth = 0;
+    }
+
+    pub fn ingestChunk(self: *SyntaxTracker, chunk: []const u8) void {
+        var i: usize = 0;
+        while (i < chunk.len) {
+            const ch = chunk[i];
+            if (i + 3 <= chunk.len and std.mem.eql(u8, chunk[i .. i + 3], "```")) {
+                self.in_code_fence = !self.in_code_fence;
+                i += 3;
+                continue;
+            }
+            if (ch == '`' and !self.in_code_fence) {
+                self.in_inline_code = !self.in_inline_code;
+                i += 1;
+                continue;
+            }
+            if (self.in_code_fence or self.in_inline_code) {
+                i += 1;
+                continue;
+            }
+
+            if (ch == '"') {
+                self.in_double_quote = !self.in_double_quote;
+            } else if (ch == '(') {
+                self.paren_depth += 1;
+            } else if (ch == ')' and self.paren_depth > 0) {
+                self.paren_depth -= 1;
+            } else if (ch == '{') {
+                self.brace_depth += 1;
+            } else if (ch == '}' and self.brace_depth > 0) {
+                self.brace_depth -= 1;
+            } else if (ch == '[') {
+                self.bracket_depth += 1;
+            } else if (ch == ']' and self.bracket_depth > 0) {
+                self.bracket_depth -= 1;
+            }
+            i += 1;
+        }
+    }
+
+    pub fn isAtRest(self: *const SyntaxTracker) bool {
+        return !self.in_code_fence and
+            !self.in_inline_code and
+            !self.in_double_quote and
+            self.paren_depth == 0 and
+            self.brace_depth == 0 and
+            self.bracket_depth == 0;
+    }
+};
+
 pub const Server = struct {
     allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
 
@@ -247,6 +312,7 @@ pub const Server = struct {
         defer self.allocator.free(recent_buf);
         var recent_count: usize = 0;
         self.sampler.suppress_thinking = false;
+        var syntax = SyntaxTracker{};
 
         while (true) {
             if (self.is_aborted.load(.monotonic)) {
@@ -302,11 +368,11 @@ pub const Server = struct {
 
             if (!self.in_thinking_channel) {
                 self.sampler.suppress_critique = false;
-                // Elastic micro-burst resting boundary:
-                // After producing an initial substantive thought/action (>= 32 tokens),
-                // if we hit a natural resting point (paragraph break "\n\n", or sentence ending followed by newline),
-                // yield control cleanly so external queues can process.
-                if (response_count >= 32) {
+                syntax.ingestChunk(str);
+
+                // Continuous Streaming Transduction: Elastic Syntactic Unit Gating
+                // Only yield when syntactically at rest (no unclosed code fences, quotes, parens, brackets, or braces)
+                if (syntax.isAtRest() and response_count >= 10) {
                     const is_para_break = (cur == 108 or (str.len > 0 and std.mem.endsWith(u8, str, "\n\n")));
                     const is_sentence_newline = (cur == 107 and recent_count >= 2 and (
                         recent_buf[recent_count - 2] == 108 or
@@ -314,7 +380,23 @@ pub const Server = struct {
                         recent_buf[recent_count - 2] == 235327 or // '?'
                         recent_buf[recent_count - 2] == 235272    // '!'
                     ));
-                    if (is_para_break or is_sentence_newline) {
+
+                    // Evaluate cognitive confidence via Top-1 vs Top-2 logit margin
+                    const top1_val = self.scratch.topk_candidates[0].val;
+                    const top2_val = self.scratch.topk_candidates[1].val;
+                    const logit_margin = top1_val - top2_val;
+                    const high_confidence = logit_margin >= 1.5;
+
+                    // Elastic yield conditions:
+                    // 1. Definite boundary: paragraph break (\n\n) after >= 16 tokens
+                    // 2. High-confidence clause/sentence boundary: sentence ending + newline with strong logit certainty after >= 12 tokens
+                    // 3. Maximum elastic micro-burst: substantive sentence boundary reached after >= 32 tokens
+                    const should_yield = (response_count >= 16 and is_para_break) or
+                        (response_count >= 12 and is_sentence_newline and high_confidence) or
+                        (response_count >= 32 and is_sentence_newline) or
+                        (response_count >= 48 and (is_para_break or is_sentence_newline));
+
+                    if (should_yield) {
                         reason = protocol.STOP_END_OF_TURN;
                         _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                         self.clock += 1;
