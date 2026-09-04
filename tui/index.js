@@ -27,6 +27,7 @@ const STATUS_NAMES = [
 
 const parseCliArgs = (argv) => {
   let configPath = null
+  let debug = false
   const extraArgs = []
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -34,11 +35,13 @@ const parseCliArgs = (argv) => {
       configPath = argv[++i]
     } else if (arg.startsWith('--config=')) {
       configPath = arg.slice('--config='.length)
+    } else if (arg === '--debug' || arg === '-d') {
+      debug = true
     } else {
       extraArgs.push(arg)
     }
   }
-  return { configPath, extraArgs }
+  return { configPath, debug, extraArgs }
 }
 
 const resolveConfigPath = (explicitPath) => {
@@ -106,11 +109,20 @@ const loadSystemPrompt = (promptPath) => {
 }
 
 const main = () => {
-  const { configPath, extraArgs: cliExtraArgs } = parseCliArgs(process.argv.slice(2))
+  const { configPath, debug: cliDebug, extraArgs: cliExtraArgs } = parseCliArgs(process.argv.slice(2))
   const config = loadConfig(configPath)
+  const isDebug = cliDebug || Boolean(config.debug || process.env.DEBUG_TUI)
   const extraArgs = [...(cliExtraArgs.length > 0 ? cliExtraArgs : config.extraArgs || [])]
   const modelPath = config.modelPath
   const systemPrompt = loadSystemPrompt(config.promptPath)
+
+  const debugLogPath = path.resolve(process.cwd(), 'debug.log')
+  const logDebug = (msg) => {
+    if (!isDebug) return
+    try {
+      fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${msg}\n`)
+    } catch (_) {}
+  }
 
   let streamLog = StreamLog(undefined)
   if (config.memoryDir) {
@@ -282,12 +294,6 @@ const main = () => {
 
   client.on('drain', requestRedraw)
 
-  const debugLogPath = path.resolve(process.cwd(), 'debug.log')
-  const logDebug = (msg) => {
-    try {
-      fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${msg}\n`)
-    } catch (_) {}
-  }
   logDebug('TUI main() started')
 
   client.on('exit', ({ code }) => {

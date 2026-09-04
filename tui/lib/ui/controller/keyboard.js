@@ -1,15 +1,7 @@
-const fs = require('fs')
-const path = require('path')
 const { KeyHandler } = require('@sullux/tui')
 const { refs } = require('./state')
 const { getLayoutTier } = require('./layout')
 const { copyToClipboard, getSelectedText } = require('./clipboard')
-
-const logDebug = (msg) => {
-  try {
-    fs.appendFileSync(path.resolve(process.cwd(), 'debug.log'), `[${new Date().toISOString()}] ${msg}\n`)
-  } catch (_) {}
-}
 
 const toggleOverlay = (store, key, tier, minTier) => {
   store?.setMode(key)
@@ -85,9 +77,7 @@ const normalModeRouter = KeyHandler({
 })
 
 const onGlobalKey = (ctx, event) => {
-  logDebug(`onGlobalKey: stroke="${event.stroke}" key="${event.key}" ctrl=${event.ctrl} isEditMode=${refs.store?.state.isEditMode}`)
   if ((event.ctrl && (event.key === 'q' || event.key === 'c')) || event.stroke === 'ctrl+q') {
-    logDebug('onGlobalKey matched exit sequence. Exiting...')
     process.exit(0)
   }
 
