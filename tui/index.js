@@ -233,21 +233,21 @@ const main = () => {
     store.setGenerating(false)
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
 
-    const pendingAlerts = notManager.getPending()
     const activeTurnId = controller.refs?.activeTurnNotificationId
 
     // 1. Elastic Yield Handling (Syntactic micro-burst boundary reached)
     if (reason === STOP_ELASTIC_YIELD) {
-      // Find any real external interrupts (excluding the active user message currently being processed)
-      const externalInterrupts = pendingAlerts.filter(a => a.id !== activeTurnId)
-      if (externalInterrupts.length > 0) {
-        // High-priority external interrupt arrived mid-stream! Surface top interrupt to thought channel
-        const topInterrupt = externalInterrupts[0]
+      // Find unserviced interrupts that have NOT yet been delivered/serviced
+      const unserviced = notManager.getUnserviced().filter(a => a.id !== activeTurnId)
+      if (unserviced.length > 0) {
+        // High-priority external interrupt arrived mid-stream!
+        const topInterrupt = unserviced[0]
+        notManager.markServicing(topInterrupt.id)
         const interruptNudge = formatNotificationInterrupt(topInterrupt)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
       } else {
-        // No external interruption: seamless autonomous continuation of the current response
+        // No new unserviced interruption: seamless autonomous continuation of the current response
         const continuation = formatContinuationNudge()
         store.setGenerating(true)
         client.sendInput(continuation)
@@ -264,11 +264,25 @@ const main = () => {
         if (controller.refs) controller.refs.activeTurnNotificationId = null
       }
 
-      // Check for remaining pending external interrupts in LIFO order
-      const remainingAlerts = notManager.getPending().filter(a => !a.isDeferred)
-      if (remainingAlerts.length > 0) {
-        const nextAlert = remainingAlerts[0]
+      // Check for remaining unserviced interrupts in LIFO order
+      const remainingUnserviced = notManager.getUnserviced()
+      if (remainingUnserviced.length > 0) {
+        const nextAlert = remainingUnserviced[0]
+        notManager.markServicing(nextAlert.id)
         const interruptNudge = formatNotificationInterrupt(nextAlert)
+        store.setGenerating(true)
+        client.sendInput(interruptNudge)
+        requestRedraw()
+        return
+      }
+
+      // If no immediate unserviced alerts, check for deferred alerts that were snoozed without duration
+      const deferred = notManager.getPending().filter(a => a.isDeferred)
+      if (deferred.length > 0) {
+        const nextDeferred = deferred[0]
+        nextDeferred.isDeferred = false
+        notManager.markServicing(nextDeferred.id)
+        const interruptNudge = formatNotificationInterrupt(nextDeferred)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
         requestRedraw()

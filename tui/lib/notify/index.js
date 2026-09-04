@@ -106,8 +106,20 @@ const notificationManagerFactory = (now) => (timers) => {
     pending.set(id, item)
   }
 
+  const markServicing = (id) => {
+    const item = pending.get(id)
+    if (item) {
+      item.status = 'SERVICING'
+      return item
+    }
+    return null
+  }
+
   // Returns in LIFO order (most recent interrupt first)
   const getPending = () => Array.from(pending.values()).reverse()
+
+  // Returns only unserviced interrupts in LIFO order
+  const getUnserviced = () => getPending().filter((item) => item.status === 'PENDING' && !item.isDeferred)
 
   const getSnoozed = () => Array.from(snoozed.values())
 
@@ -123,7 +135,9 @@ const notificationManagerFactory = (now) => (timers) => {
     ack,
     snooze,
     wake,
+    markServicing,
     getPending,
+    getUnserviced,
     getSnoozed,
     formatTurnAlerts,
   }
