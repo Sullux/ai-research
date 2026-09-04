@@ -1,8 +1,8 @@
 const formatTurn1 = (systemPrompt, userText) =>
-  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`
+  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
 
 const formatUserTurn = (userText) =>
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
 
 const formatUserDecisionTurn = (userText, waitingTasks = []) => {
   const waitingLines = waitingTasks
@@ -51,6 +51,19 @@ const formatResumeAfterInterrupt = (stepId, brief) => [
   'Next action:',
 ].join('\n') + '\n'
 
+const formatNotificationInterrupt = (notItem) => [
+  '<|turn>model',
+  '<|channel>thought',
+  `[Interrupt: ${notItem.id} (${notItem.source}): "${notItem.preview}"]`,
+  'Evaluate interrupt: execute immediate action, snooze() to defer, or ack() when addressed.',
+  'Next action:',
+].join('\n') + '\n'
+
+const formatContinuationNudge = () => [
+  '<|turn>model',
+  '',
+].join('\n')
+
 module.exports = {
   formatTurn1,
   formatUserTurn,
@@ -59,4 +72,6 @@ module.exports = {
   formatStepTick,
   formatTimerWake,
   formatResumeAfterInterrupt,
+  formatNotificationInterrupt,
+  formatContinuationNudge,
 }

@@ -38,6 +38,7 @@ pub const STOP_END_OF_TURN: u8 = 0x00;
 pub const STOP_MAX_TOKENS: u8 = 0x01;
 pub const STOP_ABORTED: u8 = 0x02;
 pub const STOP_TOOL_CALL: u8 = 0x03;
+pub const STOP_ELASTIC_YIELD: u8 = 0x04;
 
 pub const QUERY_KEYWORDS: u8 = 0x00;
 pub const QUERY_FULLTEXT: u8 = 0x01;

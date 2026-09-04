@@ -47,7 +47,7 @@ const notificationManagerFactory = (now) => (timers) => {
     return { status: 'not_found', id }
   }
 
-  const snooze = (id, duration = '1m') => {
+  const snooze = (id, duration = null) => {
     let item = pending.get(id)
     if (!item && snoozed.has(id)) {
       item = snoozed.get(id)
@@ -56,6 +56,24 @@ const notificationManagerFactory = (now) => (timers) => {
     if (!item) return { status: 'not_found', id }
 
     pending.delete(id)
+
+    // Duration-free snooze: queue deferral to the bottom of the pending LIFO stack
+    if (!duration || duration === 'idle' || duration === 'defer') {
+      const deferredItem = {
+        ...item,
+        status: 'PENDING',
+        isDeferred: true,
+      }
+      // Put at the very bottom (first key in map iteration)
+      const currentEntries = Array.from(pending.entries())
+      pending.clear()
+      pending.set(id, deferredItem)
+      for (const [k, v] of currentEntries) {
+        pending.set(k, v)
+      }
+      return { status: 'deferred_to_tail', id }
+    }
+
     const ms = parseDurationMs(duration)
     const sec = Math.max(1, Math.round(ms / 1000))
 
@@ -84,10 +102,12 @@ const notificationManagerFactory = (now) => (timers) => {
     if (!item) return
     snoozed.delete(id)
     item.status = 'PENDING'
+    item.isDeferred = false
     pending.set(id, item)
   }
 
-  const getPending = () => Array.from(pending.values())
+  // Returns in LIFO order (most recent interrupt first)
+  const getPending = () => Array.from(pending.values()).reverse()
 
   const getSnoozed = () => Array.from(snoozed.values())
 

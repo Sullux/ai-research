@@ -13,6 +13,8 @@ const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
+const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD } = require('./lib/protocol/constants')
+const { formatNotificationInterrupt, formatContinuationNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
 const STATUS_NAMES = [
@@ -213,13 +215,55 @@ const main = () => {
     requestRedraw()
   })
 
-  client.on('turnComplete', ({ tokSec, elapsedMs, totalTok }) => {
+  client.on('turnComplete', ({ tokSec, elapsedMs, totalTok, reason }) => {
     store.flushActiveThought()
     store.flushActiveResponse()
     store.setGenerating(false)
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
 
-    // Autonomous tick loop check
+    const pendingAlerts = notManager.getPending()
+
+    // 1. Elastic Yield Handling (Syntactic micro-burst boundary reached)
+    if (reason === STOP_ELASTIC_YIELD) {
+      if (pendingAlerts.length > 0) {
+        // High-priority interrupt arrived mid-stream! Surface top interrupt to thought channel
+        const topAlert = pendingAlerts[0]
+        const interruptNudge = formatNotificationInterrupt(topAlert)
+        store.setGenerating(true)
+        client.sendInput(interruptNudge)
+      } else {
+        // No interruption: seamless autonomous continuation of the current response
+        const continuation = formatContinuationNudge()
+        store.setGenerating(true)
+        client.sendInput(continuation)
+      }
+      requestRedraw()
+      return
+    }
+
+    // 2. Explicit Turn Completion (<turn|>)
+    if (reason === STOP_END_OF_TURN) {
+      // Auto-ACK the current top-of-stack notification if it was not snoozed or deferred
+      if (pendingAlerts.length > 0) {
+        const activeAlert = pendingAlerts[0]
+        if (!activeAlert.isDeferred) {
+          notManager.ack(activeAlert.id)
+        }
+      }
+
+      // Check for remaining pending or deferred interrupts in LIFO order
+      const remainingAlerts = notManager.getPending()
+      if (remainingAlerts.length > 0) {
+        const nextAlert = remainingAlerts[0]
+        const interruptNudge = formatNotificationInterrupt(nextAlert)
+        store.setGenerating(true)
+        client.sendInput(interruptNudge)
+        requestRedraw()
+        return
+      }
+    }
+
+    // 3. Autonomous tick loop for active plan steps
     const activeStep = orchestrator.getActiveStep()
     if (activeStep && activeStep.status === 'IN_PROGRESS') {
       const nextThought = orchestrator.buildThoughtPrefix('STEP_TICK', { step: activeStep })

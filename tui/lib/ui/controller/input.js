@@ -33,30 +33,28 @@ const onSubmitInput = (ctx, payload) => {
     refs.store.flushActiveResponse()
   }
 
-  refs.store?.pushHistory(val)
-  refs.store?.addConversationMessage({ sender: 'User', text: val })
-  refs.store?.addStreamEntry({ type: 'user', title: '👤 USER', content: val })
-
-  refs.store?.setEditMode(false)
-  ctx.setFocus?.(null)
-
   // VFS message persistence & notification generation
   let turnContent = val
   if (refs.vfs) {
     const savedMsg = refs.vfs.saveUserMessage(val)
+    const notItem = refs.notManager?.notify(
+      savedMsg.relPath,
+      savedMsg.preview,
+      savedMsg.id,
+    )
     if (savedMsg.isTruncated) {
-      // Create notification alert for large inputs
-      refs.notManager?.notify(
-        savedMsg.relPath,
-        savedMsg.preview,
-        savedMsg.id,
-      )
-      turnContent = `[🔔 ${savedMsg.id} (${savedMsg.relPath} | ${savedMsg.tokenCount} tok): "${savedMsg.preview}..." | read: ${savedMsg.relPath}]`
+      turnContent = `[🔔 ${notItem?.id || savedMsg.id} (${savedMsg.relPath} | ${savedMsg.tokenCount} tok): "${savedMsg.preview}..." | read: ${savedMsg.relPath}]`
     } else {
-      // Short message: deliver 100% content directly in notification banner
-      turnContent = `[🔔 ${savedMsg.relPath}: "${savedMsg.payload}"]`
+      turnContent = `[🔔 ${notItem?.id || savedMsg.id} (${savedMsg.relPath}): "${savedMsg.payload}"]`
     }
   }
+
+  refs.store?.pushHistory(val)
+  refs.store?.addConversationMessage({ sender: 'User', text: val })
+  refs.store?.addStreamEntry({ type: 'user', title: '👤 USER', content: turnContent })
+
+  refs.store?.setEditMode(false)
+  ctx.setFocus?.(null)
 
   // Prepend any pending alerts rollup
   const alertsRollup = refs.notManager?.formatTurnAlerts?.() || ''

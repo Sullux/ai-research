@@ -284,9 +284,7 @@ pub const Server = struct {
         }
         if (tokens.len > 0) {
             cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
-            var is_thk = false;
-            for (tokens) |t| { if (t == 100) is_thk = true else if (t == 101) is_thk = false; }
-            self.in_thinking_channel = is_thk;
+            self.in_thinking_channel = false;
         }
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
@@ -397,7 +395,7 @@ pub const Server = struct {
                         (response_count >= 48 and (is_para_break or is_sentence_newline));
 
                     if (should_yield) {
-                        reason = protocol.STOP_END_OF_TURN;
+                        reason = protocol.STOP_ELASTIC_YIELD;
                         _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                         self.clock += 1;
                         break;
