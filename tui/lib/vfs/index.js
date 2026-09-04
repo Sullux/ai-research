@@ -8,6 +8,24 @@ const vfsFactory = () => (rootDir) => {
   const root = path.resolve(rootDir || './.agent')
   let msgCounter = 1000
 
+  const scanHighestMsgId = () => {
+    try {
+      const userDir = path.join(root, 'msg', 'user')
+      if (fs.existsSync(userDir)) {
+        const files = fs.readdirSync(userDir)
+        for (const file of files) {
+          const m = file.match(/^msg_(\d+)\.txt$/)
+          if (m) {
+            const seq = parseInt(m[1], 10)
+            if (seq > msgCounter) {
+              msgCounter = seq
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   const init = () => {
     const dirs = [
       path.join(root, 'msg', 'user'),
@@ -21,6 +39,7 @@ const vfsFactory = () => (rootDir) => {
     for (const d of dirs) {
       fs.mkdirSync(d, { recursive: true })
     }
+    scanHighestMsgId()
     return root
   }
 
@@ -46,6 +65,14 @@ const vfsFactory = () => (rootDir) => {
     const filePath = path.join(root, 'msg', 'user', fileName)
 
     const payload = typeof text === 'string' ? text : String(text || '')
+
+    // Remove existing file if present (even if 0444 read-only) before writing fresh
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath)
+      } catch (_) {}
+    }
+
     fs.writeFileSync(filePath, payload, 'utf-8')
     try {
       // Mark read-only (chmod 0444)

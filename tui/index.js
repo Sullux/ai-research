@@ -237,19 +237,30 @@ const main = () => {
 
   client.on('drain', requestRedraw)
 
+  const debugLogPath = path.resolve(process.cwd(), 'debug.log')
+  const logDebug = (msg) => {
+    try {
+      fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${msg}\n`)
+    } catch (_) {}
+  }
+  logDebug('TUI main() started')
+
   client.on('exit', ({ code }) => {
+    logDebug(`client on exit: code=${code}`)
     store.setGenerating(false)
     store.setStatus(`[Error] Inference backend stopped (exit code: ${code})`)
     requestRedraw()
   })
 
   client.on('error', ({ error }) => {
+    logDebug(`client on error: ${error}`)
     store.setGenerating(false)
     store.setStatus(`[Error] Backend process error: ${error}`)
     requestRedraw()
   })
 
-  const cleanup = () => {
+  const cleanup = (trigger) => {
+    logDebug(`cleanup() invoked from trigger: ${trigger}`)
     try { cmdRunner.killAll() } catch (_) {}
     try { trmManager.closeAll() } catch (_) {}
     try { streamLog.close() } catch (_) {}
@@ -258,13 +269,35 @@ const main = () => {
     try { client.kill() } catch (_) {}
   }
 
-  app.onExit(cleanup)
-  process.on('exit', cleanup)
-  process.on('SIGINT', () => { cleanup(); process.exit(0) })
-  process.on('SIGTERM', () => { cleanup(); process.exit(0) })
-  process.on('SIGHUP', () => { cleanup(); process.exit(0) })
+  app.onExit(() => cleanup('app.onExit'))
+  process.on('exit', (code) => {
+    logDebug(`process exit event: code=${code}`)
+    cleanup(`process.exit(${code})`)
+  })
+  process.on('SIGINT', () => { logDebug('SIGINT received'); cleanup('SIGINT'); process.exit(0) })
+  process.on('SIGTERM', () => { logDebug('SIGTERM received'); cleanup('SIGTERM'); process.exit(0) })
+  process.on('SIGHUP', () => { logDebug('SIGHUP received'); cleanup('SIGHUP'); process.exit(0) })
   process.on('uncaughtException', (err) => {
-    cleanup()
+    logDebug(`uncaughtException: ${err?.stack || err}`)
+    try {
+      fs.appendFileSync(
+        path.resolve(process.cwd(), 'crash.log'),
+        `[${new Date().toISOString()}] Uncaught exception:\n${err.stack || err}\n\n`,
+      )
+    } catch (_) {}
+    cleanup('uncaughtException')
+    console.error(err)
+    process.exit(1)
+  })
+  process.on('unhandledRejection', (err) => {
+    logDebug(`unhandledRejection: ${err?.stack || err}`)
+    try {
+      fs.appendFileSync(
+        path.resolve(process.cwd(), 'crash.log'),
+        `[${new Date().toISOString()}] Unhandled rejection:\n${err?.stack || err}\n\n`,
+      )
+    } catch (_) {}
+    cleanup('unhandledRejection')
     console.error(err)
     process.exit(1)
   })

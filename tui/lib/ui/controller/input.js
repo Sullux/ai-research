@@ -1,3 +1,5 @@
+const fs = require('fs')
+const path = require('path')
 const { refs } = require('./state')
 const {
   formatTurn1,
@@ -5,13 +7,23 @@ const {
   formatUserDecisionTurn,
 } = require('../../template')
 
+const logDebug = (msg) => {
+  try {
+    fs.appendFileSync(path.resolve(process.cwd(), 'debug.log'), `[${new Date().toISOString()}] ${msg}\n`)
+  } catch (_) {}
+}
+
 const onSubmitInput = (ctx, payload) => {
+  logDebug(`onSubmitInput fired: value="${payload.value}"`)
   const val = payload.value?.trim()
   if (payload.node) {
     payload.node.value = ''
     payload.node.cursor = 0
   }
-  if (!val || !refs.client) return
+  if (!val || !refs.client) {
+    logDebug(`onSubmitInput early return: val="${val}", refs.client=${!!refs.client}`)
+    return
+  }
 
   // Flush any in-flight thought or response before recording barge-in user turn
   if (refs.store?.state?.activeThought) {
@@ -60,9 +72,12 @@ const onSubmitInput = (ctx, payload) => {
       : formatUserTurn(`${alertsRollup}${turnContent}`)
   }
 
+  logDebug(`onSubmitInput payloadText prepared (len=${payloadText.length}). Calling sendInput...`)
   refs.store?.setGenerating(true)
   refs.client.sendInput(payloadText)
+  logDebug('onSubmitInput sendInput returned. Calling redraw...')
   ctx.redraw()
+  logDebug('onSubmitInput finished successfully.')
 }
 
 module.exports = {
