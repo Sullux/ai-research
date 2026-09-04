@@ -222,17 +222,20 @@ const main = () => {
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
 
     const pendingAlerts = notManager.getPending()
+    const activeTurnId = controller.refs?.activeTurnNotificationId
 
     // 1. Elastic Yield Handling (Syntactic micro-burst boundary reached)
     if (reason === STOP_ELASTIC_YIELD) {
-      if (pendingAlerts.length > 0) {
-        // High-priority interrupt arrived mid-stream! Surface top interrupt to thought channel
-        const topAlert = pendingAlerts[0]
-        const interruptNudge = formatNotificationInterrupt(topAlert)
+      // Find any real external interrupts (excluding the active user message currently being processed)
+      const externalInterrupts = pendingAlerts.filter(a => a.id !== activeTurnId)
+      if (externalInterrupts.length > 0) {
+        // High-priority external interrupt arrived mid-stream! Surface top interrupt to thought channel
+        const topInterrupt = externalInterrupts[0]
+        const interruptNudge = formatNotificationInterrupt(topInterrupt)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
       } else {
-        // No interruption: seamless autonomous continuation of the current response
+        // No external interruption: seamless autonomous continuation of the current response
         const continuation = formatContinuationNudge()
         store.setGenerating(true)
         client.sendInput(continuation)
@@ -243,16 +246,14 @@ const main = () => {
 
     // 2. Explicit Turn Completion (<turn|>)
     if (reason === STOP_END_OF_TURN) {
-      // Auto-ACK the current top-of-stack notification if it was not snoozed or deferred
-      if (pendingAlerts.length > 0) {
-        const activeAlert = pendingAlerts[0]
-        if (!activeAlert.isDeferred) {
-          notManager.ack(activeAlert.id)
-        }
+      // Auto-ACK the active turn notification if it completed cleanly
+      if (activeTurnId) {
+        notManager.ack(activeTurnId)
+        if (controller.refs) controller.refs.activeTurnNotificationId = null
       }
 
-      // Check for remaining pending or deferred interrupts in LIFO order
-      const remainingAlerts = notManager.getPending()
+      // Check for remaining pending external interrupts in LIFO order
+      const remainingAlerts = notManager.getPending().filter(a => !a.isDeferred)
       if (remainingAlerts.length > 0) {
         const nextAlert = remainingAlerts[0]
         const interruptNudge = formatNotificationInterrupt(nextAlert)

@@ -12,6 +12,7 @@ const refs = {
   timers: null,
   systemPrompt: '',
   hasSentFirstTurn: false,
+  activeTurnNotificationId: null,
   vfs: null,
   notManager: null,
 }

@@ -41,7 +41,9 @@ const onSubmitInput = (ctx, payload) => {
       savedMsg.relPath,
       savedMsg.preview,
       savedMsg.id,
+      { isTurnContext: true },
     )
+    refs.activeTurnNotificationId = notItem?.id || null
     if (savedMsg.isTruncated) {
       turnContent = `[🔔 ${notItem?.id || savedMsg.id} (${savedMsg.relPath} | ${savedMsg.tokenCount} tok): "${savedMsg.preview}..." | read: ${savedMsg.relPath}]`
     } else {
