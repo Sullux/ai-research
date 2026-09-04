@@ -300,6 +300,29 @@ pub const Server = struct {
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
             writer.flush();
 
+            if (!self.in_thinking_channel) {
+                self.sampler.suppress_critique = false;
+                // Elastic micro-burst resting boundary:
+                // After producing an initial substantive thought/action (>= 32 tokens),
+                // if we hit a natural resting point (paragraph break "\n\n", or sentence ending followed by newline),
+                // yield control cleanly so external queues can process.
+                if (response_count >= 32) {
+                    const is_para_break = (cur == 108 or (str.len > 0 and std.mem.endsWith(u8, str, "\n\n")));
+                    const is_sentence_newline = (cur == 107 and recent_count >= 2 and (
+                        recent_buf[recent_count - 2] == 108 or
+                        recent_buf[recent_count - 2] == 235270 or // '.'
+                        recent_buf[recent_count - 2] == 235327 or // '?'
+                        recent_buf[recent_count - 2] == 235272    // '!'
+                    ));
+                    if (is_para_break or is_sentence_newline) {
+                        reason = protocol.STOP_END_OF_TURN;
+                        _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
+                        self.clock += 1;
+                        break;
+                    }
+                }
+            }
+
             if (self.in_thinking_channel) {
                 self.sampler.suppress_critique = (cur == 107 or cur == 108 or (str.len > 0 and str[str.len - 1] == '\n'));
                 const grace_ceiling = self.thinking_budget + 32;

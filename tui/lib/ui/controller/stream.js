@@ -65,16 +65,16 @@ const buildCardSpans = (item, isSel, width) => {
   ]
   if (lines.length <= 3) {
     spans.push({ type: 'text', text: `: ${lines[0] || ''}`, fg: contentFg })
-    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: `\n    ${lines[i]}`, fg: contentFg })
+    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: ` ${lines[i]}`, fg: contentFg })
     return spans
   }
   if (!item.expanded) {
     spans.push({ type: 'text', text: `  (↑ ${lines.length - 3} more)`, fg: '#565f89', italic: true })
     if (isSel) spans.push({ type: 'text', text: '  (x to expand)', fg: '#e0af68', bold: true })
-    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: `\n  ${l}`, fg: contentFg })
+    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: ` ${l}`, fg: contentFg })
   } else {
     if (isSel) spans.push({ type: 'text', text: '  (x to collapse)', fg: '#e0af68', bold: true })
-    for (const l of lines) spans.push({ type: 'text', text: `\n  ${l}`, fg: contentFg })
+    for (const l of lines) spans.push({ type: 'text', text: ` ${l}`, fg: contentFg })
   }
   return spans
 }
@@ -88,14 +88,14 @@ const liveNode = (title, text, fg, bg, width, time, isSel, expanded) => {
   ]
   if (lines.length <= 3) {
     spans.push({ type: 'text', text: `: ${lines[0] || ''}`, fg })
-    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: `\n    ${lines[i]}`, fg })
+    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: ` ${lines[i]}`, fg })
   } else if (!expanded) {
     spans.push({ type: 'text', text: `  (↑ ${lines.length - 3} more)`, fg: '#565f89', italic: true })
     if (isSel) spans.push({ type: 'text', text: '  (x to expand)', fg: '#e0af68', bold: true })
-    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: `\n  ${l}`, fg })
+    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: ` ${l}`, fg })
   } else {
     if (isSel) spans.push({ type: 'text', text: '  (x to collapse)', fg: '#e0af68', bold: true })
-    for (const l of lines) spans.push({ type: 'text', text: `\n  ${l}`, fg })
+    for (const l of lines) spans.push({ type: 'text', text: ` ${l}`, fg })
   }
   spans.push({ type: 'text', text: ' ▍', fg, bold: true })
 

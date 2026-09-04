@@ -1,8 +1,8 @@
 const formatTurn1 = (systemPrompt, userText) =>
-  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
+  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`
 
 const formatUserTurn = (userText) =>
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`
 
 const formatUserDecisionTurn = (userText, waitingTasks = []) => {
   const waitingLines = waitingTasks
@@ -10,8 +10,7 @@ const formatUserDecisionTurn = (userText, waitingTasks = []) => {
     .join('\n')
 
   return [
-    `<|turn>user\n${userText}\n<turn|>\n<|turn>model`,
-    '<|channel>thought',
+    `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`,
     `User message received: "${userText}"`,
     '',
     'Tasks currently awaiting user intervention:',
