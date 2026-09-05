@@ -280,7 +280,21 @@ pub const Server = struct {
 
         if (!is_system_only and tokens.len > 0) {
             cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
-            self.in_thinking_channel = false;
+            // If the prompt ended inside a thinking channel (<|channel>thought\n), preserve in_thinking_channel
+            var in_thought = false;
+            var t_idx: usize = tokens.len;
+            while (t_idx > 0) {
+                t_idx -= 1;
+                const tok_id = tokens[t_idx];
+                if (tok_id == 101 or tok_id == 106) {
+                    break;
+                }
+                if (tok_id == 100) {
+                    in_thought = true;
+                    break;
+                }
+            }
+            self.in_thinking_channel = in_thought;
         }
         return cur;
     }
@@ -553,28 +567,40 @@ pub const Server = struct {
             try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
             writer.flush();
 
-            if (!self.in_thinking_channel) {
-                self.sampler.suppress_critique = false;
-                syntax.ingestChunk(str);
+            syntax.ingestChunk(str);
 
-                // Continuous Streaming Transduction: Elastic Syntactic Unit Gating
-                // Only yield when syntactically at rest (no unclosed code fences, quotes, parens, brackets, or braces)
-                if (syntax.isAtRest() and response_count >= 10) {
-                    const is_para_break = (cur == 108 or (str.len > 0 and std.mem.endsWith(u8, str, "\n\n")));
-                    const is_sentence_newline = (cur == 107 and recent_count >= 2 and (
-                        recent_buf[recent_count - 2] == 108 or
-                        recent_buf[recent_count - 2] == 235270 or // '.'
-                        recent_buf[recent_count - 2] == 235327 or // '?'
-                        recent_buf[recent_count - 2] == 235272    // '!'
-                    ));
+            // Continuous Streaming Transduction: Elastic Syntactic Unit Gating
+            // Evaluates natural resting boundaries in both response generation and thinking channels.
+            // Only yields when syntactically at rest (no unclosed code fences, quotes, parens, brackets, or braces).
+            if (syntax.isAtRest()) {
+                const is_para_break = (cur == 108 or (str.len > 0 and std.mem.endsWith(u8, str, "\n\n")));
+                const is_sentence_newline = (cur == 107 and recent_count >= 2 and (
+                    recent_buf[recent_count - 2] == 108 or
+                    recent_buf[recent_count - 2] == 235270 or // '.'
+                    recent_buf[recent_count - 2] == 235327 or // '?'
+                    recent_buf[recent_count - 2] == 235272    // '!'
+                ));
 
+                if (self.in_thinking_channel) {
+                    // In thinking mode, yield at paragraph breaks or complete bullet/numbered thought steps (>= 24 tokens)
+                    const should_yield_thinking = (thinking_count >= 24 and is_para_break) or
+                        (thinking_count >= 36 and is_sentence_newline) or
+                        (thinking_count >= 64 and (is_para_break or is_sentence_newline));
+
+                    if (should_yield_thinking) {
+                        reason = protocol.STOP_ELASTIC_YIELD;
+                        _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
+                        self.clock += 1;
+                        break;
+                    }
+                } else if (response_count >= 10) {
                     // Evaluate cognitive confidence via Top-1 vs Top-2 logit margin
                     const top1_val = self.scratch.topk_candidates[0].val;
                     const top2_val = self.scratch.topk_candidates[1].val;
                     const logit_margin = top1_val - top2_val;
                     const high_confidence = logit_margin >= 1.5;
 
-                    // Elastic yield conditions:
+                    // Elastic yield conditions for visible response generation:
                     // 1. Definite boundary: paragraph break (\n\n) after >= 16 tokens
                     // 2. High-confidence clause/sentence boundary: sentence ending + newline with strong logit certainty after >= 12 tokens
                     // 3. Maximum elastic micro-burst: substantive sentence boundary reached after >= 32 tokens

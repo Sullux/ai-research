@@ -74,4 +74,46 @@ describe('Streaming Transduction Flow & In-Flight Barge-In', () => {
     assert.strictEqual(sentPayloads.length, 1)
     assert.strictEqual(sentPayloads[0].includes('Wait, focus on memory bandwidth instead.'), true)
   })
+
+  it('handles in-flight user barge-in during thinking phase before any response starts', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+
+    let sentPayloads = []
+    const mockClient = {
+      sendInput: (payload) => { sentPayloads.push(payload) },
+    }
+    const mockSession = {}
+    const mockOrchestrator = {
+      getWaitingForUserTasks: () => [],
+      getActiveStep: () => null,
+    }
+    const mockTimers = {}
+
+    controller.init(store, mockClient, mockSession, mockOrchestrator, mockTimers, 'You are Gemma.')
+
+    // Simulate model actively generating thoughts ONLY (thinking channel)
+    store.appendActiveThought('Step 1: Reading cache lines.\nStep 2: Checking bandwidth.')
+    store.setGenerating(true)
+
+    const mockCtx = {
+      setFocus: () => {},
+      redraw: () => {},
+    }
+    // User interrupts mid-thought!
+    controller.onSubmitInput(mockCtx, {
+      value: 'Hold on, cancel that and run a quick probe instead.',
+    })
+
+    // Verify thoughts were flushed and preserved in stream
+    const thoughts = store.state.stream.filter(s => s.type === 'thought')
+    assert.strictEqual(thoughts.length, 1)
+    assert.strictEqual(thoughts[0].content.includes('Step 1: Reading cache lines'), true)
+
+    // Verify conversation has user message
+    const conv = store.state.conversation
+    const userMsg = conv[conv.length - 1]
+    assert.strictEqual(userMsg.sender, 'User')
+    assert.strictEqual(sentPayloads[0].includes('cancel that and run a quick probe'), true)
+  })
 })

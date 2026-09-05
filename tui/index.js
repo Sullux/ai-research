@@ -238,7 +238,9 @@ const main = () => {
     })
   }
 
+  let isThinking = false
   client.on('thought', ({ text }) => {
+    isThinking = true
     const clean = text.replaceAll('\u2581', ' ')
     if (store.state.activeResponse) {
       store.flushActiveResponse()
@@ -248,6 +250,7 @@ const main = () => {
   })
 
   client.on('content', ({ text }) => {
+    isThinking = false
     const clean = text.replaceAll('\u2581', ' ')
     if (store.state.activeThought) {
       store.flushActiveThought()
@@ -274,17 +277,22 @@ const main = () => {
   })
 
   client.on('turnComplete', ({ tokSec, elapsedMs, totalTok, reason }) => {
-    store.flushActiveThought()
-    store.flushActiveResponse()
+    // On elastic yield without external interrupt, retain active thought card open
+    // so continued chunks smoothly append into the same card.
+    const activeTurnId = controller.refs?.activeTurnNotificationId
+    const unserviced = notManager.getUnserviced().filter(a => a.id !== activeTurnId)
+
+    if (reason !== STOP_ELASTIC_YIELD || unserviced.length > 0) {
+      store.flushActiveThought()
+      store.flushActiveResponse()
+      isThinking = false
+    }
+
     store.setGenerating(false)
     store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
 
-    const activeTurnId = controller.refs?.activeTurnNotificationId
-
     // 1. Elastic Yield Handling (Syntactic micro-burst boundary reached)
     if (reason === STOP_ELASTIC_YIELD) {
-      // Find unserviced interrupts that have NOT yet been delivered/serviced
-      const unserviced = notManager.getUnserviced().filter(a => a.id !== activeTurnId)
       if (unserviced.length > 0) {
         // High-priority external interrupt arrived mid-stream!
         const topInterrupt = unserviced[0]
@@ -293,8 +301,9 @@ const main = () => {
         store.setGenerating(true)
         client.sendInput(interruptNudge)
       } else {
-        // No new unserviced interruption: seamless autonomous continuation of the current response
-        const continuation = formatContinuationNudge()
+        // No new unserviced interruption: seamless autonomous continuation
+        // If yielded in thought, continue generating seamlessly inside or outside channel
+        const continuation = isThinking ? '<|turn>model\n<|channel>thought\n' : formatContinuationNudge()
         store.setGenerating(true)
         client.sendInput(continuation)
       }
