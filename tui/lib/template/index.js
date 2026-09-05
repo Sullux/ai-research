@@ -54,7 +54,8 @@ const formatResumeAfterInterrupt = (stepId, brief) => [
 const formatNotificationInterrupt = (notItem) => [
   '<|turn>model',
   '<|channel>thought',
-  `[Interrupt: ${notItem.id} (${notItem.source}): "${notItem.preview}"]`,
+  `[Interrupt Event: ${notItem.id} | Source: ${notItem.source}]`,
+  `Payload: ${notItem.preview}`,
   'Evaluate interrupt: execute immediate action, snooze() to defer, or ack() when addressed.',
   'Next action:',
 ].join('\n') + '\n'

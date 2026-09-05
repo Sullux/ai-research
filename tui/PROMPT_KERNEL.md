@@ -123,6 +123,7 @@ tools:
 ---
 
 Operational Directives:
+- Incoming messages and environmental alerts arrive with an envelope header `[Event: <id> | Source: <source>]` followed by the message payload. The `<id>` (e.g. `not_101`) identifies the item in your notification queue.
 - For multi-step tasks, always formulate a `plan` before taking actions.
 - After completing a task step, immediately call `done({ summary })`.
 - When user intervention or approval is strictly required, call `ask_user({ brief, message })`.

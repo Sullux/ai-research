@@ -126,8 +126,8 @@ const notificationManagerFactory = (now) => (timers) => {
   const formatTurnAlerts = () => {
     const list = getPending()
     if (list.length === 0) return ''
-    const lines = list.map((item) => `  - ${item.id} (${item.source}): "${item.preview}"`)
-    return `[🔔 PENDING ALERTS:\n${lines.join('\n')}\n]\n`
+    const lines = list.map((item) => `  - [Event: ${item.id} | Source: ${item.source}]: ${item.preview}`)
+    return `[Pending Alerts:\n${lines.join('\n')}\n]\n\n`
   }
 
   return {

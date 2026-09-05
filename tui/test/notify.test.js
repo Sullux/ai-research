@@ -28,9 +28,9 @@ describe('NotificationManager (Interrupt Queue)', () => {
     notManager.notify('/sys/cmd/cmd_101', 'Build ok', 'cmd_101')
 
     const rollup = notManager.formatTurnAlerts()
-    assert.ok(rollup.includes('[🔔 PENDING ALERTS:'))
-    assert.ok(rollup.includes('not_101 (/msg/user/msg_1042.txt): "DB down"'))
-    assert.ok(rollup.includes('not_102 (/sys/cmd/cmd_101): "Build ok"'))
+    assert.ok(rollup.includes('[Pending Alerts:'))
+    assert.ok(rollup.includes('[Event: not_101 | Source: /msg/user/msg_1042.txt]: DB down'))
+    assert.ok(rollup.includes('[Event: not_102 | Source: /sys/cmd/cmd_101]: Build ok'))
   })
 
   it('ack() permanently removes notification from pending queue', () => {

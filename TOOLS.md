@@ -111,16 +111,22 @@ sequenceDiagram
 #### A. Atomic / Short Messages ($\le 32$ tokens)
 When the message fits entirely within the 32-token preview budget:
 ```
-[🔔 /agent/msg/user/msg_1041.txt: "Please check if the test suite passes on the latest commit."]
+<|turn>user
+[Event: not_101 | Source: msg/user/msg_1041.txt]
+Please check if the test suite passes on the latest commit.
+<turn|>
 ```
-- **100% of the content is in the banner**.
+- **The routing envelope and message payload are cleanly separated**.
 - No truncation ellipsis, no file size tag, no `read` tool nudge.
 - The model immediately responds or executes actions with **zero tool overhead**.
 
 #### B. Large / Structured Documents ($> 32$ tokens)
 When a user pastes a large document, stack trace, or database schema:
 ```
-[🔔 not_47 (/agent/msg/user/msg_1042.txt | 1,840 tok): "CREATE TABLE users (id UUID PRIMARY KEY, email TEXT UNIQUE, created_at TIMESTAMPTZ NOT NULL..." | read: /agent/msg/user/msg_1042.txt]
+<|turn>user
+[Event: not_102 | Source: msg/user/msg_1042.txt | 1,840 tok | read: msg/user/msg_1042.txt]
+CREATE TABLE users (id UUID PRIMARY KEY, email TEXT UNIQUE... [Truncated. Use read({ path: "msg/user/msg_1042.txt" }) to inspect full content]
+<turn|>
 ```
 - The model receives immediate situational awareness without KV cache pollution.
 - The model pulls the content in bounded chunks using `read` only when it is ready.

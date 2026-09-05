@@ -22,7 +22,8 @@ const onSubmitInput = (ctx, payload) => {
   }
 
   // VFS message persistence & notification generation
-  let turnContent = val
+  let turnHeader = ''
+  let turnBody = val
   if (refs.vfs) {
     const savedMsg = refs.vfs.saveUserMessage(val)
     const notItem = refs.notManager?.notify(
@@ -32,13 +33,17 @@ const onSubmitInput = (ctx, payload) => {
       { isTurnContext: true },
     )
     refs.activeTurnNotificationId = notItem?.id || null
+    const eventId = notItem?.id || savedMsg.id
     if (savedMsg.isTruncated) {
-      turnContent = `[🔔 ${notItem?.id || savedMsg.id} (${savedMsg.relPath} | ${savedMsg.tokenCount} tok): "${savedMsg.preview}..." | read: ${savedMsg.relPath}]`
+      turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath} | ${savedMsg.tokenCount} tok | read: ${savedMsg.relPath}]\n`
+      turnBody = `${savedMsg.preview}... [Truncated. Use read({ path: "${savedMsg.relPath}" }) to inspect full content]`
     } else {
-      turnContent = `[🔔 ${notItem?.id || savedMsg.id} (${savedMsg.relPath}): "${savedMsg.payload}"]`
+      turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
+      turnBody = savedMsg.payload
     }
   }
 
+  const turnContent = `${turnHeader}${turnBody}`
   refs.store?.pushHistory(val)
   refs.store?.addConversationMessage({ sender: 'User', text: val })
   refs.store?.addStreamEntry({ type: 'user', title: '👤 USER', content: turnContent })
