@@ -23,6 +23,7 @@ const streamLogFactory = (fsMod, pathMod) => (memoryDir) => {
     return {
       enabled: false,
       append: () => {},
+      loadAll: () => [],
       loadTail: () => ({ items: [], startOffset: 0, endOffset: 0 }),
       loadPrevious: () => ({ items: [], startOffset: 0 }),
       close: () => {},
@@ -45,6 +46,16 @@ const streamLogFactory = (fsMod, pathMod) => (memoryDir) => {
     if (!item) return
     const row = JSON.stringify(item) + '\n'
     getWriteStream().write(row)
+  }
+
+  const loadAll = () => {
+    if (!fsMod.existsSync(filePath)) return []
+    try {
+      const content = fsMod.readFileSync(filePath, 'utf-8')
+      return parseJsonLines(content)
+    } catch (_) {
+      return []
+    }
   }
 
   const loadTail = (chunkSize = DEFAULT_CHUNK_SIZE) => {
@@ -114,6 +125,7 @@ const streamLogFactory = (fsMod, pathMod) => (memoryDir) => {
     enabled: true,
     filePath,
     append,
+    loadAll,
     loadTail,
     loadPrevious,
     close,

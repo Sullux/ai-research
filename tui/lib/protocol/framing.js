@@ -7,6 +7,8 @@ const {
   OP_SET_CONFIG,
   OP_MEM_COMMIT,
   OP_SET_SYSTEM,
+  OP_SNAPSHOT_SAVE,
+  OP_SNAPSHOT_LOAD,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -86,6 +88,24 @@ const configFrame = (
   return Buffer.concat([hdr, payload])
 }
 
+const snapshotSaveFrame = (snapPath, streamId = '', msgId = 1) => {
+  const pathBytes = Buffer.from(snapPath, 'utf-8')
+  const idBytes = Buffer.from(streamId, 'utf-8')
+  const payload = Buffer.alloc(2 + pathBytes.length + 2 + idBytes.length)
+  payload.writeUInt16LE(pathBytes.length, 0)
+  pathBytes.copy(payload, 2)
+  payload.writeUInt16LE(idBytes.length, 2 + pathBytes.length)
+  idBytes.copy(payload, 2 + pathBytes.length + 2)
+  const hdr = headerBuffer(OP_SNAPSHOT_SAVE, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
+const snapshotLoadFrame = (snapPath, msgId = 1) => {
+  const pathBytes = Buffer.from(snapPath, 'utf-8')
+  const hdr = headerBuffer(OP_SNAPSHOT_LOAD, msgId, pathBytes.length)
+  return Buffer.concat([hdr, pathBytes])
+}
+
 const parsedFrame = (buf) => {
   if (buf.length < 16) return null
   const magic = buf.readUInt32LE(0)
@@ -110,6 +130,8 @@ module.exports = {
   pingFrame,
   shutdownFrame,
   memQueryFrame,
+  snapshotSaveFrame,
+  snapshotLoadFrame,
   configFrame,
   parsedFrame,
 }

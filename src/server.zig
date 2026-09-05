@@ -5,6 +5,7 @@ const ring_buffer = @import("ring_buffer.zig");
 const tokenizer = @import("tokenizer.zig");
 const memory = @import("memory.zig");
 const storage = @import("storage.zig");
+const snapshot = @import("snapshot.zig");
 const quiescence = @import("quiescence.zig");
 const hippocampus = @import("hippocampus.zig");
 const server_queue = @import("server_queue.zig");
@@ -165,6 +166,8 @@ pub const Server = struct {
             switch (hdr.opcode) {
                 protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
+                protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
+                protocol.OP_SNAPSHOT_LOAD => try self.handleSnapshotLoad(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_CONFIG => self.handleSetConfig(p),
                 protocol.OP_MEM_QUERY => try self.handleMemQuery(hdr.msg_id, p, &async_writer),
                 protocol.OP_MEM_COMMIT => self.handleMemCommit(),
@@ -418,6 +421,49 @@ pub const Server = struct {
         }
 
         _ = try self.prefillTokens(msg_id, tokens, writer, true);
+
+        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
+        writer.flush();
+    }
+
+    fn handleSnapshotSave(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
+        // Payload format: path_len (u16), path (bytes), stream_id_len (u16), stream_id (bytes)
+        if (payload.len < 4) return;
+        const path_len = std.mem.readInt(u16, payload[0..2], .little);
+        if (payload.len < 2 + path_len + 2) return;
+        const snap_path = payload[2 .. 2 + path_len];
+        const stream_id_off = 2 + path_len;
+        const stream_id_len = std.mem.readInt(u16, payload[stream_id_off .. stream_id_off + 2][0..2], .little);
+        const stream_id = if (payload.len >= stream_id_off + 2 + stream_id_len) payload[stream_id_off + 2 .. stream_id_off + 2 + stream_id_len] else "";
+
+        snapshot.saveSnapshot(snap_path, stream_id, self.clock, self.ring, &self.config, self.gpu_opt) catch |err| {
+            try protocol.writeError(writer, msg_id, "Failed to save snapshot");
+            writer.flush();
+            return err;
+        };
+
+        try protocol.writeSnapshotStatus(writer, msg_id, 0, @intCast(self.clock), self.slots(), stream_id);
+        writer.flush();
+    }
+
+    fn handleSnapshotLoad(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
+        // Payload format: path (bytes)
+        if (payload.len == 0) return;
+        const snap_path = payload;
+
+        var restored_id: [64]u8 = undefined;
+        var restored_id_len: usize = 0;
+        const restored_clock = snapshot.loadSnapshot(snap_path, self.ring, &self.config, self.gpu_opt, &restored_id, &restored_id_len) catch |err| {
+            try protocol.writeError(writer, msg_id, "Failed to load snapshot");
+            writer.flush();
+            return err;
+        };
+
+        self.clock = restored_clock;
+        const stream_id = restored_id[0..restored_id_len];
+        try protocol.writeSnapshotStatus(writer, msg_id, 1, @intCast(self.clock), self.slots(), stream_id);
 
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;

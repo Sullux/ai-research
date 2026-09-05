@@ -161,6 +161,7 @@ const main = () => {
   }
 
   let streamLog = StreamLog(undefined)
+  let snapshotPath = null
   if (config.memoryDir) {
     const memDir = config.memoryDir
     fs.mkdirSync(memDir, { recursive: true })
@@ -168,6 +169,7 @@ const main = () => {
     if (!extraArgs.includes('--memory') && !extraArgs.includes('--storage')) {
       extraArgs.push('--memory', episodicMemPath)
     }
+    snapshotPath = path.join(memDir, '.snapshot.bin')
     streamLog = StreamLog(memDir)
   }
 
@@ -206,18 +208,88 @@ const main = () => {
 
   controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager)
 
-  // Send early session system prompt pre-caching the moment backend starts
+  // Automatic Snapshot Checkpointing State
+  let snapshotDebounceTimer = null
+  const scheduleSnapshot = () => {
+    if (!snapshotPath) return
+    if (snapshotDebounceTimer) {
+      clearTimeout(snapshotDebounceTimer)
+    }
+    snapshotDebounceTimer = setTimeout(() => {
+      snapshotDebounceTimer = null
+      const latestStreamId = store.state.stream?.[store.state.stream.length - 1]?.id || ''
+      client.sendSnapshotSave(snapshotPath, latestStreamId)
+    }, 5000)
+  }
+
+  // Handle Snapshot Status Response from Backend
+  client.on('snapshotStatus', ({ status, activeSlots, clock, streamId }) => {
+    if (status === 0) {
+      // Snapshot saved successfully
+      store.addStreamEntry({
+        type: 'checkpoint',
+        title: '💾 SNAPSHOT',
+        content: `Working state checkpointed (clock: ${clock}, active slots: ${activeSlots}, anchor: ${streamId}).`,
+      })
+      requestRedraw()
+    } else if (status === 1) {
+      // Snapshot restored successfully
+      controller.refs.hasSentFirstTurn = true
+      controller.refs.systemPrecacheLogged = true
+      store.addStreamEntry({
+        type: 'checkpoint',
+        title: '⚡ RESTORE',
+        content: `Cognitive state restored from snapshot (clock: ${clock}, active slots: ${activeSlots}, anchor: ${streamId || 'initial'}). 0 ms warm boot.`,
+      })
+
+      // Catch-up replay: check if the stream log contains turns beyond the checkpoint
+      if (streamLog.enabled && streamId) {
+        const allItems = streamLog.loadAll()
+        const anchorIdx = allItems.findIndex(it => it.id === streamId)
+        if (anchorIdx !== -1 && anchorIdx < allItems.length - 1) {
+          const missingItems = allItems.slice(anchorIdx + 1)
+          // Find un-checkpointed user turns or notification events that need replaying
+          const replayTurns = []
+          for (const it of missingItems) {
+            if (it.type === 'user' && it.content) {
+              replayTurns.push(it.content)
+            }
+          }
+          if (replayTurns.length > 0) {
+            store.addStreamEntry({
+              type: 'system',
+              title: '🔄 REPLAY',
+              content: `Replaying ${replayTurns.length} un-checkpointed turn(s) through cognitive pipeline...`,
+            })
+            for (const turn of replayTurns) {
+              client.sendInput(formatUserTurn(turn))
+            }
+          }
+        }
+      }
+
+      requestRedraw()
+    }
+  })
+
+  // Send early session system prompt pre-caching or restore from snapshot the moment backend starts
   let systemPrecached = false
   client.on('status', ({ status, activeSlots, currentTok, totalTok, tokSec }) => {
     if (status === 0 && !systemPrecached) {
       systemPrecached = true
       controller.refs.hasSentFirstTurn = true
-      client.sendSystem(systemConfig)
-      store.addStreamEntry({
-        type: 'system',
-        title: '⚙ SYSTEM',
-        content: 'Pre-caching system instructions and tool definitions into GPU KV cache...',
-      })
+      if (snapshotPath && fs.existsSync(snapshotPath)) {
+        // Instant warm boot: restore GPU KV state and clock from snapshot
+        client.sendSnapshotLoad(snapshotPath)
+      } else {
+        // Cold start: dispatch system instructions for KV pre-caching
+        client.sendSystem(systemConfig)
+        store.addStreamEntry({
+          type: 'system',
+          title: '⚙ SYSTEM',
+          content: 'Pre-caching system instructions and tool definitions into GPU KV cache...',
+        })
+      }
       requestRedraw()
     } else if (systemPrecached && status === 1 && !controller.refs.systemPrecacheLogged) {
       const rate = tokSec > 0 ? ` (${tokSec.toFixed(1)} tok/s)` : ''
@@ -230,6 +302,8 @@ const main = () => {
         title: '⚙ SYSTEM',
         content: `System instructions and abstract tools pre-cached into Tier 1 anchors (${activeSlots} slots). Cognitive engine ready.`,
       })
+      // Save initial system prompt snapshot for future instant boots
+      scheduleSnapshot()
       requestRedraw()
     }
   })
@@ -371,6 +445,9 @@ const main = () => {
         requestRedraw()
         return
       }
+
+      // Arm 5-second quiescence snapshot checkpoint
+      scheduleSnapshot()
     }
 
     // 3. Autonomous tick loop for active plan steps
@@ -409,6 +486,12 @@ const main = () => {
 
   const cleanup = (trigger) => {
     logDebug(`cleanup() invoked from trigger: ${trigger}`)
+    if (snapshotPath && store.state.stream?.length > 0) {
+      try {
+        const latestStreamId = store.state.stream[store.state.stream.length - 1]?.id || ''
+        client.sendSnapshotSave(snapshotPath, latestStreamId)
+      } catch (_) {}
+    }
     try { cmdRunner.killAll() } catch (_) {}
     try { trmManager.closeAll() } catch (_) {}
     try { streamLog.close() } catch (_) {}

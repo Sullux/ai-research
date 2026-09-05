@@ -191,6 +191,7 @@ To explore specific subsystems in depth, refer to the following companion specif
 - **[MEMORY_ENGINEERING.md](MEMORY_ENGINEERING.md)**: Binary file structures, alignment rules, and storage engine implementation.
 - **[STREAMING.md](STREAMING.md)**: Continuous streaming transduction, dynamic action gating, attention mass, and Gini saturation.
 - **[TOOLS.md](TOOLS.md)**: Virtual file subsystem (VFS), capped streaming reader, fast subshells, PTYs, and interrupt controllers.
+- **[SNAPSHOT.md](SNAPSHOT.md)**: Zero-copy UMA working state snapshots, 0 ms warm boot, and stream write-ahead log replay.
 - **[MODEL_SELECTION.md](MODEL_SELECTION.md)**: Evaluation of Gemma 4 (E2B and 12B-it) architectures, weight topologies, and quantization.
 - **[ENGINEERING.md](ENGINEERING.md)**: Vulkan compute kernels, batch prefill and decode tiling, and coding guidelines.
 - **[API.md](API.md)**: Binary wire protocol specification, STDIN/STDOUT framing, opcodes, and full-duplex control frames.

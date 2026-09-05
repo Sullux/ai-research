@@ -10,6 +10,8 @@ pub const OP_SET_CONFIG: u16 = 0x0004;
 pub const OP_TOOL_RETURN: u16 = 0x0005;
 pub const OP_MEM_COMMIT: u16 = 0x0006;
 pub const OP_SET_SYSTEM: u16 = 0x0007;
+pub const OP_SNAPSHOT_SAVE: u16 = 0x0008;
+pub const OP_SNAPSHOT_LOAD: u16 = 0x0009;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
 
@@ -19,6 +21,7 @@ pub const OP_TURN_COMPLETE: u16 = 0x0103;
 pub const OP_TOOL_CALL: u16 = 0x0104;
 pub const OP_MEM_RESPONSE: u16 = 0x0105;
 pub const OP_STATUS: u16 = 0x0106;
+pub const OP_SNAPSHOT_STATUS: u16 = 0x0107;
 pub const OP_PONG: u16 = 0x010E;
 pub const OP_ERROR: u16 = 0x01FF;
 
@@ -133,6 +136,18 @@ pub fn writeStatus(writer: anytype, msg_id: u16, status: u8, tok_sec: f32, activ
     try writer.writeInt(u32, @bitCast(tok_sec), .little);
     try writer.writeInt(u32, current_tok, .little);
     try writer.writeInt(u32, total_tok, .little);
+}
+
+pub fn writeSnapshotStatus(writer: anytype, msg_id: u16, status: u8, clock: u64, active_slots: u16, stream_id: []const u8) !void {
+    const s_len: u16 = @intCast(@min(stream_id.len, 64));
+    const payload_len: u32 = 1 + 1 + 2 + 8 + 2 + @as(u32, s_len);
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_SNAPSHOT_STATUS, .payload_len = payload_len });
+    try writer.writeByte(status);
+    try writer.writeByte(0); // reserved
+    try writer.writeInt(u16, active_slots, .little);
+    try writer.writeInt(u64, clock, .little);
+    try writer.writeInt(u16, s_len, .little);
+    if (s_len > 0) try writer.writeAll(stream_id[0..s_len]);
 }
 
 pub fn writeError(writer: anytype, msg_id: u16, msg: []const u8) !void {

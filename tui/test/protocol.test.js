@@ -7,6 +7,8 @@ const {
   memQueryFrame,
   memCommitFrame,
   configFrame,
+  snapshotSaveFrame,
+  snapshotLoadFrame,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -17,6 +19,8 @@ const {
   OP_MEM_QUERY,
   OP_MEM_COMMIT,
   OP_SET_CONFIG,
+  OP_SNAPSHOT_SAVE,
+  OP_SNAPSHOT_LOAD,
   OP_PING,
 } = require('../lib/protocol/constants')
 
@@ -69,6 +73,19 @@ test('configFrame serializes penalty and runtime options properly', () => {
   assert.strictEqual(parsed.payload.readUInt32LE(0), 512)
   assert.strictEqual(parsed.payload.readUInt32LE(16), 256)
   assert.strictEqual(parsed.payload.readUInt32LE(28), 64)
+})
+
+test('snapshotSaveFrame and snapshotLoadFrame serialize properly', () => {
+  const saveBuf = snapshotSaveFrame('/tmp/snap.bin', 'str-123', 5)
+  const parsedSave = parsedFrame(saveBuf)
+  assert.strictEqual(parsedSave.header.opcode, OP_SNAPSHOT_SAVE)
+  assert.strictEqual(parsedSave.header.msgId, 5)
+
+  const loadBuf = snapshotLoadFrame('/tmp/snap.bin', 6)
+  const parsedLoad = parsedFrame(loadBuf)
+  assert.strictEqual(parsedLoad.header.opcode, OP_SNAPSHOT_LOAD)
+  assert.strictEqual(parsedLoad.header.msgId, 6)
+  assert.strictEqual(parsedLoad.payload.toString('utf-8'), '/tmp/snap.bin')
 })
 
 test('parsedFrame handles incomplete buffers gracefully', () => {

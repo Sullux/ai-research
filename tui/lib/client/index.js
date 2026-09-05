@@ -3,10 +3,11 @@ const { EventEmitter } = require('events')
 const {
   OP_STREAM_CONTENT, OP_STREAM_THOUGHT, OP_TURN_COMPLETE,
   OP_TOOL_CALL,
-  OP_MEM_RESPONSE, OP_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
+  OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
 } = require('../protocol/constants')
 const {
-  streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame, parsedFrame,
+  streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
+  snapshotSaveFrame, snapshotLoadFrame, parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -35,6 +36,14 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
       flags: p.readUInt16LE(6), isSaturated: Boolean(p.readUInt16LE(6) & STATUS_FLAG_SATURATED),
       tokSec: p.readFloatLE(8), currentTok: p.readUInt32LE(12), totalTok: p.readUInt32LE(16), msgId: h.msgId,
     })
+    else if (h.opcode === OP_SNAPSHOT_STATUS) {
+      const status = p.readUInt8(0)
+      const activeSlots = p.readUInt16LE(2)
+      const clock = Number(p.readBigUInt64LE(4))
+      const idLen = p.readUInt16LE(12)
+      const streamId = p.subarray(14, 14 + idLen).toString('utf-8')
+      emitter.emit('snapshotStatus', { status, activeSlots, clock, streamId, msgId: h.msgId })
+    }
     else if (h.opcode === OP_MEM_RESPONSE) emitter.emit('memResponse', { count: p.readUInt16LE(0), status: p.readUInt8(2), msgId: h.msgId })
     else if (h.opcode === OP_PONG) emitter.emit('pong', { msgId: h.msgId })
     else if (h.opcode === OP_ERROR) emitter.emit('error', { error: p.toString('utf-8'), msgId: h.msgId })
@@ -86,6 +95,18 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     return id
   }
 
+  const sendSnapshotSave = (snapPath, streamId = '') => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(snapshotSaveFrame(snapPath, streamId, id))
+    return id
+  }
+
+  const sendSnapshotLoad = (snapPath) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(snapshotLoadFrame(snapPath, id))
+    return id
+  }
+
   const setConfig = (o) => {
     if (proc?.stdin?.writable) {
       const budget = o.thinkingBudget ?? o.budget ?? 512
@@ -125,7 +146,20 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     setTimeout(kill, 500).unref?.()
   }
 
-  return { start, sendInput, sendSystem, sendAbort, sendMemQuery, sendMemCommit, setConfig, shutdown, kill, on: emitter.on.bind(emitter) }
+  return {
+    start,
+    sendInput,
+    sendSystem,
+    sendSnapshotSave,
+    sendSnapshotLoad,
+    sendAbort,
+    sendMemQuery,
+    sendMemCommit,
+    setConfig,
+    shutdown,
+    kill,
+    on: emitter.on.bind(emitter),
+  }
 }
 
 module.exports = {

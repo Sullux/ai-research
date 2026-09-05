@@ -66,6 +66,8 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | `0x0005` | **`OP_TOOL_RETURN`** | Return tool execution result back into the model stream. |
 | `0x0006` | **`OP_MEM_COMMIT`** | Force immediate consolidation of staging buffer to NVMe storage. |
 | `0x0007` | **`OP_SET_SYSTEM`** | Initialize and prefill session system prompt with instructions and abstract tool definitions (JSON). |
+| `0x0008` | **`OP_SNAPSHOT_SAVE`** | Request atomic working state checkpoint save (`path`, `stream_id`). |
+| `0x0009` | **`OP_SNAPSHOT_LOAD`** | Request working state restore from snapshot (`path`). |
 | `0x000E` | **`OP_PING`** | Keepalive / round-trip latency probe. |
 | `0x000F` | **`OP_SHUTDOWN`** | Gracefully flush stores, release GPU memory, and exit. |
 
@@ -81,6 +83,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | `0x0104` | **`OP_TOOL_CALL`** | Model-generated tool call request (tool name + JSON arguments). |
 | `0x0105` | **`OP_MEM_RESPONSE`** | Results of an `OP_MEM_QUERY` returning injected episode counts, timestamps, and cursor. |
 | `0x0106` | **`OP_STATUS`** | Live engine telemetry (tok/s, active vs quiescent layer breakdown, ring slots, VRAM). |
+| `0x0107` | **`OP_SNAPSHOT_STATUS`** | Working state snapshot status (status code, clock, active slots, stream anchor ID). |
 | `0x010E` | **`OP_PONG`** | Reply to `OP_PING`. |
 | `0x01FF` | **`OP_ERROR`** | Structured error notification. |
 
