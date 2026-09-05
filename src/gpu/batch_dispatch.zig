@@ -139,7 +139,7 @@ pub fn gpuDispatchPrefillBatch(
         prefill.pipe_add_norm.record(prefill.cmd_buf, d.post_ffn_add, std.mem.asBytes(&pc_padd), N, 1, 1);
         recordBarrier(gpu, prefill.cmd_buf);
 
-        if ((i + 1) % 12 == 0 or i + 1 == gpu.layers.len) {
+        if ((i + 1) % 4 == 0 or i + 1 == gpu.layers.len) {
             if (i + 1 == gpu.layers.len and logits_out.len > 0) {
                 const last_tok_off = (N - 1) * H * 4;
                 const copy_region = types_dispatch.VkBufferCopy{ .srcOffset = last_tok_off, .dstOffset = 0, .size = H * 4 };

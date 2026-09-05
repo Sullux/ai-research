@@ -12,11 +12,12 @@ const gpu = @import("gpu.zig");
 const sampler = @import("sampler.zig");
 
 const PrefillProgress = struct {
-    w: *server_queue.AsyncWriter, msg_id: u16, slots: u16, diff_count: u16, total_tok: u32, is_gpu: u8, flags: u16, start_time: i64,
+    w: *server_queue.AsyncWriter, msg_id: u16, slots: u16, diff_count: u16, base_tok: u32, chunk_tok: u32, total_tok: u32, is_gpu: u8, flags: u16, start_time: i64,
     fn cb(layer_idx: usize, total_layers: usize, ctx_ptr: ?*anyopaque) void {
         const ptr: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
         const el = @max(1, std.time.milliTimestamp() - ptr.start_time);
-        const tok_prog: u32 = @intCast((layer_idx * ptr.total_tok) / total_layers);
+        const chunk_prog: u32 = @intCast((layer_idx * ptr.chunk_tok) / total_layers);
+        const tok_prog: u32 = @min(ptr.total_tok, ptr.base_tok + chunk_prog);
         const tok_sec = (@as(f32, @floatFromInt(tok_prog)) / @as(f32, @floatFromInt(el))) * 1000.0;
         protocol.writeStatus(ptr.w, ptr.msg_id, protocol.STATUS_ENCODING, tok_sec, ptr.slots, ptr.diff_count, tok_prog, ptr.total_tok, ptr.is_gpu, ptr.flags) catch {};
         ptr.w.flush();
@@ -254,7 +255,7 @@ pub const Server = struct {
                     for (0..self.config.num_hidden_layers) |l| _ = self.ring.activateSlot(l, c);
                 }
                 const l_dst = if (is_last) self.scratch.logits else self.scratch.logits[0..0];
-                var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .total_tok = total_prefill, .is_gpu = is_gpu, .flags = self.statusFlags(), .start_time = prefill_start };
+                var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .base_tok = @intCast(off), .chunk_tok = @intCast(chunk.len), .total_tok = total_prefill, .is_gpu = is_gpu, .flags = self.statusFlags(), .start_time = prefill_start };
                 try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, chunk, self.m.embed_tokens, c_slots, self.clock, prev_count, l_dst, PrefillProgress.cb, &p_prog);
                 if (is_last) {
                     const ids = gmc.buf_topk_ids.asSlice(u32)[0..64];
