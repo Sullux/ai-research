@@ -16,16 +16,11 @@ var<workgroup> s_X: array<vec4<f32>, 512>;
 var<workgroup> s_W: array<u32, 160>;
 
 fn unpack_dot2(w: u32, v_a: vec4<f32>, v_b: vec4<f32>) -> f32 {
-    let n0 = f32(w & 0xFu) - 8.0;
-    let n1 = f32((w >> 4u) & 0xFu) - 8.0;
-    let n2 = f32((w >> 8u) & 0xFu) - 8.0;
-    let n3 = f32((w >> 12u) & 0xFu) - 8.0;
-    let n4 = f32((w >> 16u) & 0xFu) - 8.0;
-    let n5 = f32((w >> 20u) & 0xFu) - 8.0;
-    let n6 = f32((w >> 24u) & 0xFu) - 8.0;
-    let n7 = f32(w >> 28u) - 8.0;
-    return n0 * v_a.x + n1 * v_a.y + n2 * v_a.z + n3 * v_a.w +
-           n4 * v_b.x + n5 * v_b.y + n6 * v_b.z + n7 * v_b.w;
+    let u_low = vec4<u32>(w & 0xFu, (w >> 4u) & 0xFu, (w >> 8u) & 0xFu, (w >> 12u) & 0xFu);
+    let u_high = vec4<u32>((w >> 16u) & 0xFu, (w >> 20u) & 0xFu, (w >> 24u) & 0xFu, w >> 28u);
+    let na = vec4<f32>(u_low) - vec4<f32>(8.0);
+    let nb = vec4<f32>(u_high) - vec4<f32>(8.0);
+    return dot(na, v_a) + dot(nb, v_b);
 }
 
 @compute @workgroup_size(16, 16, 1)

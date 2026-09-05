@@ -129,13 +129,77 @@ fn main(
     }
     workgroupBarrier();
 
-    // 3. Value accumulation
+    // 3. Value accumulation (8x burst accumulation)
     var acc0 = vec4<f32>(0.0);
     var acc1 = vec4<f32>(0.0);
     var acc2 = vec4<f32>(0.0);
     var acc3 = vec4<f32>(0.0);
 
-    for (var s = start_slot; s < S; s = s + 1u) {
+    var s = start_slot;
+    while (s + 8u <= S) {
+        let p0 = Slots[s];
+        let p1 = Slots[s + 1u];
+        let p2 = Slots[s + 2u];
+        let p3 = Slots[s + 3u];
+        let p4 = Slots[s + 4u];
+        let p5 = Slots[s + 5u];
+        let p6 = Slots[s + 6u];
+        let p7 = Slots[s + 7u];
+
+        let w0 = s_scores[s];
+        let w1 = s_scores[s + 1u];
+        let w2 = s_scores[s + 2u];
+        let w3 = s_scores[s + 3u];
+        let w4 = s_scores[s + 4u];
+        let w5 = s_scores[s + 5u];
+        let w6 = s_scores[s + 6u];
+        let w7 = s_scores[s + 7u];
+
+        let v0_0 = V_cache[p0 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v0_1 = V_cache[p0 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v1_0 = V_cache[p1 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v1_1 = V_cache[p1 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v2_0 = V_cache[p2 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v2_1 = V_cache[p2 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v3_0 = V_cache[p3 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v3_1 = V_cache[p3 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v4_0 = V_cache[p4 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v4_1 = V_cache[p4 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v5_0 = V_cache[p5 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v5_1 = V_cache[p5 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v6_0 = V_cache[p6 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v6_1 = V_cache[p6 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+        let v7_0 = V_cache[p7 * kv_dim_vec4 + kv_h * D_vec4 + lane];
+        let v7_1 = V_cache[p7 * kv_dim_vec4 + kv_h * D_vec4 + lane + 32u];
+
+        acc0 += w0 * v0_0 + w1 * v1_0 + w2 * v2_0 + w3 * v3_0 + w4 * v4_0 + w5 * v5_0 + w6 * v6_0 + w7 * v7_0;
+        acc1 += w0 * v0_1 + w1 * v1_1 + w2 * v2_1 + w3 * v3_1 + w4 * v4_1 + w5 * v5_1 + w6 * v6_1 + w7 * v7_1;
+
+        if (D_vec4 > 64u) {
+            let v0_2 = V_cache[p0 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v0_3 = V_cache[p0 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v1_2 = V_cache[p1 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v1_3 = V_cache[p1 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v2_2 = V_cache[p2 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v2_3 = V_cache[p2 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v3_2 = V_cache[p3 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v3_3 = V_cache[p3 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v4_2 = V_cache[p4 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v4_3 = V_cache[p4 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v5_2 = V_cache[p5 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v5_3 = V_cache[p5 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v6_2 = V_cache[p6 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v6_3 = V_cache[p6 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+            let v7_2 = V_cache[p7 * kv_dim_vec4 + kv_h * D_vec4 + lane + 64u];
+            let v7_3 = V_cache[p7 * kv_dim_vec4 + kv_h * D_vec4 + lane + 96u];
+
+            acc2 += w0 * v0_2 + w1 * v1_2 + w2 * v2_2 + w3 * v3_2 + w4 * v4_2 + w5 * v5_2 + w6 * v6_2 + w7 * v7_2;
+            acc3 += w0 * v0_3 + w1 * v1_3 + w2 * v2_3 + w3 * v3_3 + w4 * v4_3 + w5 * v5_3 + w6 * v6_3 + w7 * v7_3;
+        }
+        s += 8u;
+    }
+
+    while (s < S) {
         let physical_slot = Slots[s];
         let kv_offset = physical_slot * kv_dim_vec4 + kv_h * D_vec4;
         let weight = s_scores[s];
@@ -146,6 +210,7 @@ fn main(
             acc2 += weight * V_cache[kv_offset + lane + 64u];
             acc3 += weight * V_cache[kv_offset + lane + 96u];
         }
+        s += 1u;
     }
 
     let out_offset = t * q_dim_vec4 + q_head * D_vec4;
