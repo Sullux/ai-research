@@ -208,11 +208,21 @@ const main = () => {
 
   // Send early session system prompt pre-caching the moment backend starts
   let systemPrecached = false
-  client.on('status', ({ status, activeSlots }) => {
+  client.on('status', ({ status, activeSlots, currentTok, totalTok, tokSec }) => {
     if (status === 0 && !systemPrecached) {
       systemPrecached = true
       controller.refs.hasSentFirstTurn = true
       client.sendSystem(systemConfig)
+      store.addStreamEntry({
+        type: 'system',
+        title: '⚙ SYSTEM',
+        content: 'Pre-caching system instructions and tool definitions into GPU KV cache...',
+      })
+      requestRedraw()
+    } else if (systemPrecached && status === 1 && !controller.refs.systemPrecacheLogged) {
+      const rate = tokSec > 0 ? ` (${tokSec.toFixed(1)} tok/s)` : ''
+      store.setStatus(`[System Pre-cache] Encoding ${currentTok}/${totalTok} tokens${rate}...`)
+      requestRedraw()
     } else if (systemPrecached && status === 0 && !controller.refs.systemPrecacheLogged && activeSlots > 0) {
       controller.refs.systemPrecacheLogged = true
       store.addStreamEntry({

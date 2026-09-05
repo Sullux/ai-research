@@ -61,9 +61,9 @@ const formatNotificationInterrupt = (notItem) => {
   ]
   if (isTruncated) {
     lines.push(`Input event ${notItem.id} is truncated.`)
-    lines.push(`Required action: You must call read({ path: "${notItem.source}", offset: 0 }) to inspect the full content, snooze({ id: "${notItem.id}" }) to defer, or ack({ id: "${notItem.id}" }) before proceeding.`)
+    lines.push(`Required action: You must use read with path "${notItem.source}" and offset 0 to inspect the full content, snooze to defer, or ack to dismiss before proceeding.`)
   } else {
-    lines.push('Evaluate interrupt: execute immediate action, snooze() to defer, or ack() when addressed.')
+    lines.push('Evaluate interrupt: execute immediate action, snooze to defer, or ack when addressed.')
   }
   lines.push('Next action:')
   return lines.join('\n') + '\n'
@@ -77,9 +77,9 @@ const formatContinuationNudge = () => [
 const formatTruncatedTurn = (userText, eventId, relPath) => [
   `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`,
   `Input event ${eventId} is truncated.`,
-  `Required action: You must call read({ path: "${relPath}", offset: 0 }) to inspect the full content, snooze({ id: "${eventId}" }) to defer, or ack({ id: "${eventId}" }) before delivering a final answer.`,
-  'Next action:',
-].join('\n') + '\n'
+  `Required action: You must use read with path "${relPath}" and offset 0 to inspect the full content, snooze to defer, or ack to dismiss before delivering a final answer.`,
+  'Next action:\n<|tool_call>',
+].join('\n')
 
 module.exports = {
   formatTurn1,

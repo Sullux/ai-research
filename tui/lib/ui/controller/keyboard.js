@@ -29,7 +29,6 @@ const scrollList = (store, delta) => {
 
 const normalModeRouter = KeyHandler({
   'ctrl+q': () => process.exit(0),
-  'ctrl+c': () => process.exit(0),
   a: (ctx, e) => { e.stopPropagation(); refs.store?.setMode('chat'); refs.store?.setOverlay(null); ctx.redraw() },
   s: (ctx, e) => { e.stopPropagation(); toggleOverlay(refs.store, 'stream', getLayoutTier(ctx.width), 3); ctx.redraw() },
   d: (ctx, e) => { e.stopPropagation(); toggleOverlay(refs.store, 'plan', getLayoutTier(ctx.width), 2); ctx.redraw() },
@@ -77,7 +76,7 @@ const normalModeRouter = KeyHandler({
 })
 
 const onGlobalKey = (ctx, event) => {
-  if ((event.ctrl && (event.key === 'q' || event.key === 'c')) || event.stroke === 'ctrl+q') {
+  if ((event.ctrl && event.key === 'q') || event.stroke === 'ctrl+q') {
     process.exit(0)
   }
 
@@ -89,7 +88,13 @@ const onGlobalKey = (ctx, event) => {
       ctx.redraw()
       return
     }
+    // When editing in the input box, do not intercept ctrl+c so the input control
+    // can handle it natively (clearing the input box / resetting cursor).
     return
+  }
+
+  if ((event.ctrl && event.key === 'c') || event.stroke === 'ctrl+c') {
+    process.exit(0)
   }
 
   normalModeRouter(ctx, event)

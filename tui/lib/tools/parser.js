@@ -24,7 +24,11 @@ const parseToolCall = (str) => {
     return { name, args: JSON.parse(argsStr) }
   } catch (_) {
     try {
-      const sanitized = argsStr.replace(/\r?\n/g, '\\n')
+      const sanitized = argsStr
+        .replace(/\r?\n/g, '\\n')
+        .replaceAll('\u2581', ' ')
+        .replaceAll('<|"|>', '"')
+        .replace(/([{\s,])([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
       return { name, args: JSON.parse(sanitized) }
     } catch (_) {
       return { name, args: {} }
@@ -70,7 +74,12 @@ const toolParserFactory = () => (registry, client, store) => {
       args = JSON.parse(argsJson)
     } catch (_) {
       try {
-        args = JSON.parse(argsJson.replace(/\r?\n/g, '\\n'))
+        const cleaned = argsJson
+          .replace(/\r?\n/g, '\\n')
+          .replaceAll('\u2581', ' ')
+          .replaceAll('<|"|>', '"')
+          .replace(/([{\s,])([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+        args = JSON.parse(cleaned)
       } catch (_) {}
     }
     await executeCall(toolName, args)

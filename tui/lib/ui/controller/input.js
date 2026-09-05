@@ -38,7 +38,7 @@ const onSubmitInput = (ctx, payload) => {
     eventId = notItem?.id || savedMsg.id
     if (savedMsg.isTruncated) {
       turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath} | ${savedMsg.tokenCount} tok | read: ${savedMsg.relPath}]\n`
-      turnBody = `${savedMsg.preview}... [Truncated. Use read({ path: "${savedMsg.relPath}" }) to inspect full content]`
+      turnBody = `${savedMsg.preview}... [Truncated. Use read with path "${savedMsg.relPath}" to inspect full content]`
     } else {
       turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
       turnBody = savedMsg.payload

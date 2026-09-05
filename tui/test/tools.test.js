@@ -14,6 +14,15 @@ test('parseToolCall extracts tool name and json arguments', () => {
   assert.strictEqual(parsed.args.watch, 'completion')
 })
 
+test('parseToolCall handles Gemma 4 native quote tokens and unquoted keys', () => {
+  const gemmaNative = '<|tool_call>call:read{offset:0,path:<|"|>msg/user/msg_1002.txt<|"|>}<tool_call|>'
+  const parsed = parseToolCall(gemmaNative)
+  assert.notStrictEqual(parsed, null)
+  assert.strictEqual(parsed.name, 'read')
+  assert.strictEqual(parsed.args.offset, 0)
+  assert.strictEqual(parsed.args.path, 'msg/user/msg_1002.txt')
+})
+
 test('ToolRegistry executes cmd and key tools', async () => {
   const mockCmdRunner = {
     run: async (cmd, remind) => ({ exit_code: 0, output: 'ok\n' }),
