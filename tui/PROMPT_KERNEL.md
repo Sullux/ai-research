@@ -41,18 +41,18 @@ tools:
         description: Maximum number of memories to return (default 5)
         required: false
   read:
-    description: Read bounded chunk (up to 512 chars) from a file or sensory stream
+    description: Read bounded chunk (up to 512 chars) from a file, user message (msg/user/msg_*.txt), command log (tmp/cmd_*.stdout.log), or terminal screen (trm/<name>/screen.txt)
     parameters:
       path:
         type: string
-        description: Relative or absolute path under filesystemRoot
+        description: Relative path under filesystem root or project file path
         required: true
       offset:
         type: integer
         description: Character offset to begin reading
         required: false
   cmd:
-    description: Execute a shell command in an ephemeral subshell. Fast commands (<= 250ms, <= 128 chars) return inline; long commands detach with a reminder timer.
+    description: Execute a shell command in an ephemeral subshell. Fast commands (<= 250ms, <= 128 chars) return inline; long commands detach to background logs (tmp/cmd_<id>.stdout.log) with a reminder timer.
     parameters:
       command:
         type: string
@@ -74,7 +74,7 @@ tools:
         description: Signal to send (default SIGTERM)
         required: false
   trm_open:
-    description: Open a persistent interactive terminal (PTY) session with live screen.txt rendering
+    description: Open a persistent interactive terminal (PTY) session. Its live 24x80 text grid is readable at trm/<name>/screen.txt and stream at trm/<name>/stdout.log.
     parameters:
       name:
         type: string
@@ -124,6 +124,10 @@ tools:
 
 Operational Directives:
 - Incoming messages and environmental alerts arrive with an envelope header `[Event: <id> | Source: <source>]` followed by the message payload. The `<id>` (e.g. `not_101`) identifies the item in your notification queue.
+- Virtual File Subsystem (VFS) layout (paths relative to root):
+  - `msg/user/`: Inbound read-only user messages (`msg_*.txt`).
+  - `tmp/`: Detached background command logs (`cmd_*.stdout.log`).
+  - `trm/<name>/`: Live persistent terminal sessions (`screen.txt` for 24x80 rendered screen, `stdout.log` for raw output stream).
 - For multi-step tasks, always formulate a `plan` before taking actions.
 - After completing a task step, immediately call `done({ summary })`.
 - When user intervention or approval is strictly required, call `ask_user({ brief, message })`.
