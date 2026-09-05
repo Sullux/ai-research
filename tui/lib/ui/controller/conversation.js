@@ -15,7 +15,7 @@ const getConversationScroll = () => {
 
 const getConversationNodes = () => {
   if (!refs.store) return []
-  const { conversation, mode, isEditMode, selectedIdx, activeResponse } = refs.store.state
+  const { conversation, mode, isEditMode, selectedIdx, activeResponse, pendingInterjection } = refs.store.state
   const isChatFocused = mode === 'chat' && !isEditMode
 
   const nodes = conversation.map((msg, idx) => {
@@ -68,6 +68,26 @@ const getConversationNodes = () => {
           { type: 'text', text: '🤖 Assistant: ', bold: true, fg: '#7dcfff' },
           { type: 'text', text: activeResponse, fg: '#c0caf5' },
           { type: 'text', text: ' ▍', fg: '#7aa2f7', bold: true },
+        ],
+      }],
+    })
+  }
+
+  if (pendingInterjection) {
+    const timeStr = formatTimestamp(pendingInterjection.time || Date.now())
+    nodes.push({
+      type: 'layout',
+      direction: 'vertical',
+      bg: '#1a2333',
+      margin: { top: 0, bottom: 1 },
+      padding: { top: 0, bottom: 0, left: 2, right: 1 },
+      inner: [{
+        type: 'rich',
+        inner: [
+          { type: 'text', text: '  ', bold: true },
+          { type: 'text', text: `[${timeStr}] `, fg: '#475569' },
+          { type: 'text', text: '👤 User (in-flight): ', bold: true, fg: '#64748b' },
+          { type: 'text', text: pendingInterjection.text, fg: '#94a3b8' },
         ],
       }],
     })

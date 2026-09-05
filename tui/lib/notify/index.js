@@ -32,19 +32,30 @@ const notificationManagerFactory = (now) => (timers) => {
     return item
   }
 
-  const ack = (id) => {
-    if (pending.has(id)) {
-      const item = pending.get(id)
-      pending.delete(id)
-      return { status: 'acknowledged', id, item }
+  const ack = (idOrIds) => {
+    const ids = Array.isArray(idOrIds)
+      ? idOrIds
+      : (typeof idOrIds === 'string' && idOrIds.includes(',')
+        ? idOrIds.split(',').map((s) => s.trim())
+        : [idOrIds])
+
+    const results = []
+    for (const id of ids) {
+      if (!id) continue
+      if (pending.has(id)) {
+        const item = pending.get(id)
+        pending.delete(id)
+        results.push({ status: 'acknowledged', id, item })
+      } else if (snoozed.has(id)) {
+        const item = snoozed.get(id)
+        if (item.timerId) timers?.cancelTimer?.(item.timerId)
+        snoozed.delete(id)
+        results.push({ status: 'acknowledged', id, item })
+      } else {
+        results.push({ status: 'not_found', id })
+      }
     }
-    if (snoozed.has(id)) {
-      const item = snoozed.get(id)
-      if (item.timerId) timers?.cancelTimer?.(item.timerId)
-      snoozed.delete(id)
-      return { status: 'acknowledged', id, item }
-    }
-    return { status: 'not_found', id }
+    return results.length === 1 ? results[0] : { status: 'acknowledged_batch', results }
   }
 
   const snooze = (id, duration = null) => {

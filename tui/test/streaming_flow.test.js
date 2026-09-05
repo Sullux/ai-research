@@ -59,16 +59,20 @@ describe('Streaming Transduction Flow & In-Flight Barge-In', () => {
     assert.strictEqual(thoughts.length, 1)
     assert.strictEqual(thoughts[0].content, 'Analyzing performance data...')
 
-    // Verify in-flight response was flushed to conversation before user turn
-    const conv = store.state.conversation
-    assert.strictEqual(conv.length >= 3, true) // init + partial assistant + user
-    const partialAssistant = conv.find(c => c.sender === 'Assistant' && c.text.includes('Based on the initial'))
-    assert.ok(partialAssistant)
-
-    // Verify user message appended after partial assistant message
-    const userMsg = conv[conv.length - 1]
+    // Verify user message staged as pendingInterjection (or appended) and present in conversation
+    const userMsg = store.state.pendingInterjection || conv[conv.length - 1]
     assert.strictEqual(userMsg.sender === 'User', true)
     assert.strictEqual(userMsg.text, 'Wait, focus on memory bandwidth instead.')
+
+    // When the in-flight response finishes/flushes, pendingInterjection moves to conversation
+    store.flushActiveResponse()
+    const convAfter = store.state.conversation
+    assert.strictEqual(convAfter.length >= 3, true) // init + assistant + user
+    const partialAssistant = convAfter.find(c => c.sender === 'Assistant' && c.text.includes('Based on the initial'))
+    assert.ok(partialAssistant)
+    const finalUserMsg = convAfter[convAfter.length - 1]
+    assert.strictEqual(finalUserMsg.sender === 'User', true)
+    assert.strictEqual(finalUserMsg.text, 'Wait, focus on memory bandwidth instead.')
 
     // Verify payload sent to backend
     assert.strictEqual(sentPayloads.length, 1)

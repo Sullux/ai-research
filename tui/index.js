@@ -208,11 +208,19 @@ const main = () => {
 
   // Send early session system prompt pre-caching the moment backend starts
   let systemPrecached = false
-  client.on('status', ({ status }) => {
+  client.on('status', ({ status, activeSlots }) => {
     if (status === 0 && !systemPrecached) {
       systemPrecached = true
       controller.refs.hasSentFirstTurn = true
       client.sendSystem(systemConfig)
+    } else if (systemPrecached && status === 0 && !controller.refs.systemPrecacheLogged && activeSlots > 0) {
+      controller.refs.systemPrecacheLogged = true
+      store.addStreamEntry({
+        type: 'system',
+        title: '⚙ SYSTEM',
+        content: `System instructions and abstract tools pre-cached into Tier 1 anchors (${activeSlots} slots). Cognitive engine ready.`,
+      })
+      requestRedraw()
     }
   })
 
@@ -238,7 +246,8 @@ const main = () => {
     })
   }
 
-  let isThinking = false
+  let pendingInterjection = null
+
   client.on('thought', ({ text }) => {
     isThinking = true
     const clean = text.replaceAll('\u2581', ' ')
@@ -286,6 +295,10 @@ const main = () => {
       store.flushActiveThought()
       store.flushActiveResponse()
       isThinking = false
+    } else if (!isThinking && store.state.pendingInterjection) {
+      // An interjection is waiting and we reached an elastic rest point: flush active response
+      // so pendingInterjection immediately moves into conversation order.
+      store.flushActiveResponse()
     }
 
     store.setGenerating(false)
@@ -313,10 +326,15 @@ const main = () => {
 
     // 2. Explicit Turn Completion (<turn|>)
     if (reason === STOP_END_OF_TURN) {
-      // Auto-ACK the active turn notification if it completed cleanly
+      // Auto-ACK the active turn notification and any earlier user messages in the same conversation channel
       if (activeTurnId) {
         notManager.ack(activeTurnId)
         if (controller.refs) controller.refs.activeTurnNotificationId = null
+      }
+      // Also ack any remaining pending turn-context notifications from the conversational channel
+      const convAlerts = notManager.getPending().filter((item) => item.extra?.isTurnContext)
+      for (const ca of convAlerts) {
+        notManager.ack(ca.id)
       }
 
       // Check for remaining unserviced interrupts in LIFO order

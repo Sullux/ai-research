@@ -51,24 +51,41 @@ const formatResumeAfterInterrupt = (stepId, brief) => [
   'Next action:',
 ].join('\n') + '\n'
 
-const formatNotificationInterrupt = (notItem) => [
-  '<|turn>model',
-  '<|channel>thought',
-  `[Interrupt Event: ${notItem.id} | Source: ${notItem.source}]`,
-  `Payload: ${notItem.preview}`,
-  'Evaluate interrupt: execute immediate action, snooze() to defer, or ack() when addressed.',
-  'Next action:',
-].join('\n') + '\n'
+const formatNotificationInterrupt = (notItem) => {
+  const isTruncated = Boolean(notItem.extra?.isTruncated || notItem.preview?.endsWith('...'))
+  const lines = [
+    '<|turn>model',
+    '<|channel>thought',
+    `[Interrupt Event: ${notItem.id} | Source: ${notItem.source}]`,
+    `Payload: ${notItem.preview}`,
+  ]
+  if (isTruncated) {
+    lines.push(`Input event ${notItem.id} is truncated.`)
+    lines.push(`Required action: You must call read({ path: "${notItem.source}", offset: 0 }) to inspect the full content, snooze({ id: "${notItem.id}" }) to defer, or ack({ id: "${notItem.id}" }) before proceeding.`)
+  } else {
+    lines.push('Evaluate interrupt: execute immediate action, snooze() to defer, or ack() when addressed.')
+  }
+  lines.push('Next action:')
+  return lines.join('\n') + '\n'
+}
 
 const formatContinuationNudge = () => [
   '<|turn>model',
   '',
 ].join('\n')
 
+const formatTruncatedTurn = (userText, eventId, relPath) => [
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`,
+  `Input event ${eventId} is truncated.`,
+  `Required action: You must call read({ path: "${relPath}", offset: 0 }) to inspect the full content, snooze({ id: "${eventId}" }) to defer, or ack({ id: "${eventId}" }) before delivering a final answer.`,
+  'Next action:',
+].join('\n') + '\n'
+
 module.exports = {
   formatTurn1,
   formatUserTurn,
   formatUserDecisionTurn,
+  formatTruncatedTurn,
   formatToolResponse,
   formatStepTick,
   formatTimerWake,

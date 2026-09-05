@@ -27,6 +27,7 @@ const stateStoreFactory = () => (onStreamItem) => {
     activeResponse: '',
     activeResponseTime: 0,
     activeResponseExpanded: false,
+    pendingInterjection: null,
     status: 'Idle | tok/s: 0.0 | Memory: 0 episodes',
     isGenerating: false,
     isPaused: false,
@@ -142,24 +143,38 @@ const stateStoreFactory = () => (onStreamItem) => {
     }
   }
 
+  const setPendingInterjection = (msg) => {
+    state.pendingInterjection = msg
+  }
+
+  const flushPendingInterjection = () => {
+    if (!state.pendingInterjection) return
+    const msg = state.pendingInterjection
+    state.pendingInterjection = null
+    addConversationMessage(msg)
+  }
+
   const flushActiveResponse = () => {
-    if (!state.activeResponse) return
-    const text = state.activeResponse
-    const time = state.activeResponseTime || Date.now()
-    state.activeResponse = ''
-    state.activeResponseTime = 0
-    state.activeResponseExpanded = false
-    addConversationMessage({
-      sender: 'Assistant',
-      text: text.trim(),
-      time,
-    })
-    addStreamEntry({
-      type: 'response',
-      title: '🤖 ASSISTANT',
-      content: text.trim(),
-      time,
-    })
+    if (state.activeResponse) {
+      const text = state.activeResponse
+      const time = state.activeResponseTime || Date.now()
+      state.activeResponse = ''
+      state.activeResponseTime = 0
+      state.activeResponseExpanded = false
+      addConversationMessage({
+        sender: 'Assistant',
+        text: text.trim(),
+        time,
+      })
+      addStreamEntry({
+        type: 'response',
+        title: '🤖 ASSISTANT',
+        content: text.trim(),
+        time,
+      })
+    }
+    // If an in-flight user interjection was staged, insert it into conversation now
+    flushPendingInterjection()
   }
 
   const setStatus = (s) => { state.status = s }
@@ -207,6 +222,8 @@ const stateStoreFactory = () => (onStreamItem) => {
     setStatus,
     setGenerating,
     setPaused,
+    setPendingInterjection,
+    flushPendingInterjection,
     setMode,
     setEditMode,
     setOverlay,

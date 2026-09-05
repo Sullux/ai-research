@@ -103,11 +103,11 @@ tools:
         description: Key name (e.g. ctrl+c, enter, esc, up)
         required: true
   ack:
-    description: Permanently dismiss and resolve a pending notification or alert
+    description: Permanently dismiss and resolve one or more pending notifications (accepts id string e.g. "not_47" or list/comma-separated e.g. "not_47, not_48")
     parameters:
       id:
         type: string
-        description: Notification identifier (e.g. not_47)
+        description: Notification identifier or comma-separated list of identifiers (e.g. not_47 or not_47, not_48)
         required: true
   snooze:
     description: Suppress or defer a notification or interrupt. Without a duration, defers the item to the bottom of the queue until active tasks finish; with a duration (e.g. 30s, 1m, 5m), suppresses until the timer elapses.
