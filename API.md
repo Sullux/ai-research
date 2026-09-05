@@ -65,6 +65,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | `0x0004` | **`OP_SET_CONFIG`** | Configure runtime parameters (thinking budget, temperature, quiescence threshold, stop tokens). |
 | `0x0005` | **`OP_TOOL_RETURN`** | Return tool execution result back into the model stream. |
 | `0x0006` | **`OP_MEM_COMMIT`** | Force immediate consolidation of staging buffer to NVMe storage. |
+| `0x0007` | **`OP_SET_SYSTEM`** | Initialize and prefill session system prompt with instructions and abstract tool definitions (JSON). |
 | `0x000E` | **`OP_PING`** | Keepalive / round-trip latency probe. |
 | `0x000F` | **`OP_SHUTDOWN`** | Gracefully flush stores, release GPU memory, and exit. |
 
@@ -173,6 +174,7 @@ Emitted when generation halts at a turn boundary (`<turn|>`), max tokens, or aft
   * `0x01`: Max tokens limit reached.
   * `0x02`: Administrative abort (`OP_ABORT`).
   * `0x03`: Tool call requested.
+  * `0x04`: Elastic resting boundary yield (`STOP_ELASTIC_YIELD`).
 
 ---
 
@@ -285,7 +287,41 @@ Host provides the result of a tool execution back to the model.
 
 ---
 
-### 4.9. `OP_STATUS` (`0x0106`) — Outbound Telemetry
+### 4.9. `OP_SET_SYSTEM` (`0x0007`) — Inbound
+Initializes and prefills session system instructions and abstract tool definitions into the KV cache ring buffer at startup. Enables zero Time-to-First-Token latency on subsequent user interactions.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     System Configuration JSON...              |
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+* **Payload:** UTF-8 encoded JSON object specifying abstract system instructions and available tools:
+  ```json
+  {
+    "instructions": "Operational Directives:\n...",
+    "tools": [
+      {
+        "name": "read",
+        "description": "Read bounded chunk from a file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "File path" }
+          },
+          "required": ["path"]
+        }
+      }
+    ]
+  }
+  ```
+The engine formats the system prompt per the active model family's canonical chat template (e.g. Gemma 4 `<|turn>system\n<|think|>\n...<|tool>...<turn|>\n`), encodes tokens into Tier-1 KV cache anchors, and transitions to `STATUS_IDLE`.
+
+---
+
+### 4.10. `OP_STATUS` (`0x0106`) — Outbound Telemetry
 Periodic telemetry frame reporting engine performance and resource states.
 
 ```
@@ -340,7 +376,11 @@ function onFrame(header: Header, payload: Buffer) {
       break;
 
     case OP_TOOL_CALL:
-      handleToolCall(header.msgId, payload);
+      const callId = payload.readUInt16LE(0);
+      const nameLen = payload.readUInt16LE(2);
+      const name = payload.subarray(4, 4 + nameLen).toString('utf-8');
+      const args = JSON.parse(payload.subarray(4 + nameLen).toString('utf-8'));
+      handleToolCall(callId, name, args);
       break;
 
     case OP_STATUS:

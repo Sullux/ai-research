@@ -411,6 +411,23 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 ### 4. Independent Thinking Budget & Response Enforcement (`src/server.zig`)
 * **Thinking Channel Governance:** Added `thinking_budget` parsing from `OP_SET_CONFIG` (`[0..4]`). When reasoning tokens reach `thinking_budget`, the engine injects `<channel|>` (token 101) to cleanly transition the model into generating visible response dialogue, bounded separately by `max_tokens`.
 
+---
+
+## 13. Abstract Tool Architecture, Model Decoupling & Pre-Cached System Sessions
+
+### 1. Zero Model Leakage & Abstract Tool Definitions (`tui/PROMPT_KERNEL.md`)
+* **Frontmatter Schema:** Tools are declared using generic YAML frontmatter definitions (parameters, types, descriptions, required flags) rather than raw model-specific syntax tags.
+* **Separation of Concerns:** The client TUI remains completely model-agnostic. All conversion from abstract tool representations to canonical Gemma 4 chat template syntax (`<|tool>declaration:...<tool|>`) is performed strictly inside the server.
+
+### 2. Early System Pre-Caching (`OP_SET_SYSTEM` / `0x0007`)
+* **Background KV Ring Anchor Pre-Filling:** The TUI client emits `OP_SET_SYSTEM` immediately upon connecting to the inference server.
+* **Zero TTFT Latency:** System instructions and tool declarations are encoded into Tier-1 KV cache anchors before the user submits their first query, dropping interactive Time-to-First-Token from ~10.5 seconds down to ~150 ms.
+
+### 3. Native Server Tool Call Detection (`OP_TOOL_CALL` / `0x0104`)
+* **Kernel-Level Tool Gating:** When Gemma 4 emits `<|tool_call>`, `src/server.zig` intercepts the sequence directly, extracts the tool name and JSON arguments, and delivers structured `OP_TOOL_CALL` frames to the client without leaking raw control tokens into text streams.
+* **Absorbed Channel Framing:** Corrected thinking channel preamble handling in `src/server.zig` so `<|channel>thought\n` is absorbed internally rather than streamed as visible text (`THOUGHT: thought`).
+
+
 
 
 

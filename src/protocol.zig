@@ -9,6 +9,7 @@ pub const OP_MEM_QUERY: u16 = 0x0003;
 pub const OP_SET_CONFIG: u16 = 0x0004;
 pub const OP_TOOL_RETURN: u16 = 0x0005;
 pub const OP_MEM_COMMIT: u16 = 0x0006;
+pub const OP_SET_SYSTEM: u16 = 0x0007;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
 
@@ -92,6 +93,16 @@ pub fn writeTurnComplete(writer: anytype, msg_id: u16, tokens: u32, elapsed_ms: 
     try writer.writeInt(u32, @bitCast(tok_sec), .little);
     try writer.writeByte(reason);
     try writer.writeAll(&[_]u8{ 0, 0, 0 });
+}
+
+pub fn writeToolCall(writer: anytype, msg_id: u16, call_id: u16, name: []const u8, args_json: []const u8) !void {
+    const name_len: u16 = @intCast(@min(name.len, std.math.maxInt(u16)));
+    const payload_len = 2 + 2 + @as(u32, name_len) + @as(u32, @intCast(args_json.len));
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_TOOL_CALL, .payload_len = payload_len });
+    try writer.writeInt(u16, call_id, .little);
+    try writer.writeInt(u16, name_len, .little);
+    if (name_len > 0) try writer.writeAll(name[0..name_len]);
+    if (args_json.len > 0) try writer.writeAll(args_json);
 }
 
 pub fn writeMemResponse(writer: anytype, msg_id: u16, count: u8, status: u8, cursor: u16, total_tokens: u32, timestamps: []const u64) !void {

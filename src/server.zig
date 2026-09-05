@@ -164,6 +164,7 @@ pub const Server = struct {
             const hdr, const p = .{ frame.hdr, frame.payload }; defer if (p.len > 0) self.allocator.free(p);
             switch (hdr.opcode) {
                 protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
+                protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_CONFIG => self.handleSetConfig(p),
                 protocol.OP_MEM_QUERY => try self.handleMemQuery(hdr.msg_id, p, &async_writer),
                 protocol.OP_MEM_COMMIT => self.handleMemCommit(),
@@ -215,16 +216,7 @@ pub const Server = struct {
         writer.flush();
     }
 
-    fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
-        if (payload.len < 8) return;
-        self.is_aborted.store(false, .seq_cst);
-        self.ring.markTurnBoundary(self.clock);
-        const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
-        if (self.clock == 0 and tokens.len > 0) {
-            var sys_len: usize = 0;
-            for (tokens, 0..) |t, i| { if (t == 106) { sys_len = i + 1; break; } }
-            self.ring.setNumAnchors(if (sys_len > 0) sys_len else @min(tokens.len, 512));
-        }
+    fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: anytype, is_system_only: bool) !u32 {
         const total_prefill: u32 = @intCast(tokens.len);
         const prefill_start = std.time.milliTimestamp();
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
@@ -254,10 +246,10 @@ pub const Server = struct {
                     const c = self.clock + i; c_slots[prev_count + i] = @intCast(self.ring.getSlotIndex(c));
                     for (0..self.config.num_hidden_layers) |l| _ = self.ring.activateSlot(l, c);
                 }
-                const l_dst = if (is_last) self.scratch.logits else self.scratch.logits[0..0];
+                const l_dst = if (is_last and !is_system_only) self.scratch.logits else self.scratch.logits[0..0];
                 var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .base_tok = @intCast(off), .chunk_tok = @intCast(chunk.len), .total_tok = total_prefill, .is_gpu = is_gpu, .flags = self.statusFlags(), .start_time = prefill_start };
                 try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, chunk, self.m.embed_tokens, c_slots, self.clock, prev_count, l_dst, PrefillProgress.cb, &p_prog);
-                if (is_last) {
+                if (is_last and !is_system_only) {
                     const ids = gmc.buf_topk_ids.asSlice(u32)[0..64];
                     const vals = gmc.buf_topk_vals.asSlice(f32)[0..64];
                     for (&self.scratch.topk_candidates, ids, vals) |*dst, id, v| {
@@ -269,7 +261,7 @@ pub const Server = struct {
         } else {
             for (tokens, 0..) |t, i| {
                 if (self.is_aborted.load(.monotonic)) break;
-                cur = self.m.forwardToken(self.ring, self.scratch, t, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, i == tokens.len - 1);
+                cur = self.m.forwardToken(self.ring, self.scratch, t, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, !is_system_only and (i == tokens.len - 1));
                 self.clock += 1;
                 if ((i + 1) % 16 == 0 or i == tokens.len - 1) {
                     const el = @max(1, std.time.milliTimestamp() - prefill_start);
@@ -278,15 +270,163 @@ pub const Server = struct {
                 }
             }
         }
+
         if (self.is_aborted.load(.monotonic)) {
             try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_ABORTED);
             try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
-            writer.flush(); return;
+            writer.flush();
+            return 0;
         }
-        if (tokens.len > 0) {
+
+        if (!is_system_only and tokens.len > 0) {
             cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
             self.in_thinking_channel = false;
         }
+        return cur;
+    }
+
+    fn handleSetSystem(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
+        if (payload.len == 0) return;
+        self.is_aborted.store(false, .seq_cst);
+        self.ring.markTurnBoundary(self.clock);
+
+        // Parse JSON payload or raw text
+        var formatted_system: []const u8 = payload;
+        var parsed_json: ?std.json.Parsed(std.json.Value) = null;
+        defer if (parsed_json) |*p| p.deinit();
+
+        parsed_json = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch null;
+        var dyn_buf = std.ArrayList(u8).init(self.allocator);
+        defer dyn_buf.deinit();
+
+        if (parsed_json) |p| {
+            if (p.value == .object) {
+                const root = p.value.object;
+                try dyn_buf.appendSlice("<|turn>system\n<|think|>\n");
+                if (root.get("instructions")) |inst| {
+                    if (inst == .string) {
+                        try dyn_buf.appendSlice(inst.string);
+                        try dyn_buf.appendSlice("\n");
+                    }
+                }
+                if (root.get("tools")) |tools_val| {
+                    if (tools_val == .array) {
+                        for (tools_val.array.items) |tool_item| {
+                            if (tool_item != .object) continue;
+                            const t_obj = tool_item.object;
+                            const t_name = if (t_obj.get("name")) |n| (if (n == .string) n.string else "") else "";
+                            const t_desc = if (t_obj.get("description")) |d| (if (d == .string) d.string else "") else "";
+                            try dyn_buf.appendSlice("<|tool>declaration:");
+                            try dyn_buf.appendSlice(t_name);
+                            try dyn_buf.appendSlice("{description:<|\"|>");
+                            try dyn_buf.appendSlice(t_desc);
+                            try dyn_buf.appendSlice("<|\"|>");
+                            if (t_obj.get("parameters")) |param_val| {
+                                if (param_val == .object) {
+                                    const p_obj = param_val.object;
+                                    try dyn_buf.appendSlice(",parameters:{");
+                                    if (p_obj.get("properties")) |props_val| {
+                                        if (props_val == .object) {
+                                            try dyn_buf.appendSlice("properties:{");
+                                            var f_first = false;
+                                            // Collect keys and sort them to match Jinja dictsort
+                                            var key_list = std.ArrayList([]const u8).init(self.allocator);
+                                            defer key_list.deinit();
+                                            var it = props_val.object.iterator();
+                                            while (it.next()) |entry| try key_list.append(entry.key_ptr.*);
+                                            std.mem.sort([]const u8, key_list.items, {}, struct {
+                                                fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                                                    return std.mem.order(u8, a, b) == .lt;
+                                                }
+                                            }.lessThan);
+
+                                            for (key_list.items) |k| {
+                                                const v = props_val.object.get(k).?;
+                                                if (f_first) try dyn_buf.appendSlice(",");
+                                                f_first = true;
+                                                try dyn_buf.appendSlice(k);
+                                                try dyn_buf.appendSlice(":{");
+                                                if (v == .object) {
+                                                    const sub = v.object;
+                                                    if (sub.get("description")) |sd| {
+                                                        if (sd == .string) {
+                                                            try dyn_buf.appendSlice("description:<|\"|>");
+                                                            try dyn_buf.appendSlice(sd.string);
+                                                            try dyn_buf.appendSlice("<|\"|>,");
+                                                        }
+                                                    }
+                                                    const st = if (sub.get("type")) |st_val| (if (st_val == .string) st_val.string else "STRING") else "STRING";
+                                                    if (std.ascii.eqlIgnoreCase(st, "array")) {
+                                                        try dyn_buf.appendSlice("items:{type:<|\"|>STRING<|\"|>},");
+                                                    }
+                                                    try dyn_buf.appendSlice("type:<|\"|>");
+                                                    var st_up: [32]u8 = undefined;
+                                                    const up_len = @min(st.len, st_up.len);
+                                                    for (0..up_len) |ui| st_up[ui] = std.ascii.toUpper(st[ui]);
+                                                    try dyn_buf.appendSlice(st_up[0..up_len]);
+                                                    try dyn_buf.appendSlice("<|\"|>}");
+                                                } else {
+                                                    try dyn_buf.appendSlice("type:<|\"|>STRING<|\"|>}");
+                                                }
+                                            }
+                                            try dyn_buf.appendSlice("},");
+                                        }
+                                    }
+                                    if (p_obj.get("required")) |req_val| {
+                                        if (req_val == .array and req_val.array.items.len > 0) {
+                                            try dyn_buf.appendSlice("required:[");
+                                            for (req_val.array.items, 0..) |ri, r_idx| {
+                                                if (r_idx > 0) try dyn_buf.appendSlice(",");
+                                                try dyn_buf.appendSlice("<|\"|>");
+                                                if (ri == .string) try dyn_buf.appendSlice(ri.string);
+                                                try dyn_buf.appendSlice("<|\"|>");
+                                            }
+                                            try dyn_buf.appendSlice("],");
+                                        }
+                                    }
+                                    try dyn_buf.appendSlice("type:<|\"|>OBJECT<|\"|>}");
+                                }
+                            }
+                            try dyn_buf.appendSlice("}<tool|>");
+                        }
+                    }
+                }
+                try dyn_buf.appendSlice("<turn|>\n");
+                formatted_system = dyn_buf.items;
+            }
+        }
+
+        const tokens = try self.tok.encode(self.allocator, formatted_system, self.clock == 0);
+        defer self.allocator.free(tokens);
+
+        if (self.clock == 0 and tokens.len > 0) {
+            self.ring.setNumAnchors(tokens.len);
+        }
+
+        _ = try self.prefillTokens(msg_id, tokens, writer, true);
+
+        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
+        writer.flush();
+    }
+
+    fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
+        if (payload.len < 8) return;
+        self.is_aborted.store(false, .seq_cst);
+        self.ring.markTurnBoundary(self.clock);
+        const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
+        if (self.clock == 0 and tokens.len > 0) {
+            var sys_len: usize = 0;
+            for (tokens, 0..) |t, i| { if (t == 106) { sys_len = i + 1; break; } }
+            self.ring.setNumAnchors(if (sys_len > 0) sys_len else @min(tokens.len, 512));
+        }
+
+        const cur = try self.prefillTokens(msg_id, tokens, writer, false);
+        if (self.is_aborted.load(.monotonic)) return;
+
+        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
 
@@ -344,10 +484,58 @@ pub const Server = struct {
                 }
                 self.in_thinking_channel = true;
                 thinking_count = 0;
-                cur = self.advanceToken(cur, window_tokens);
+                // Absorb channel identifier (e.g. "thought\n")
+                var chan_tok = self.advanceToken(cur, window_tokens);
+                while (chan_tok != 101 and chan_tok != self.tok.eos_token_id) {
+                    if (chan_tok == 107 or chan_tok == 108) {
+                        // Reached end of channel header line; advance to first reasoning token
+                        cur = self.advanceToken(chan_tok, window_tokens);
+                        break;
+                    }
+                    chan_tok = self.advanceToken(chan_tok, window_tokens);
+                }
+                if (chan_tok == 101 or chan_tok == self.tok.eos_token_id) {
+                    cur = chan_tok;
+                }
                 continue;
             }
             if (cur == 101) { self.in_thinking_channel = false; self.sampler.suppress_critique = false; cur = self.advanceToken(cur, window_tokens); continue; }
+            if (cur == 48) {
+                // Token 48: <|tool_call>
+                // Collect tool invocation until token 49 (<tool_call|>) or turn end
+                var call_buf: [4096]u8 = undefined;
+                var call_len: usize = 0;
+                var next_tok = self.advanceToken(cur, window_tokens);
+                while (next_tok != 49 and next_tok != 106 and next_tok != self.tok.eos_token_id) {
+                    const dec_str = self.tok.decode(next_tok);
+                    if (call_len + dec_str.len < call_buf.len) {
+                        @memcpy(call_buf[call_len .. call_len + dec_str.len], dec_str);
+                        call_len += dec_str.len;
+                    }
+                    next_tok = self.advanceToken(next_tok, window_tokens);
+                }
+                const raw_call = call_buf[0..call_len];
+                // Parse "call:tool_name{args...}"
+                var tool_name: []const u8 = "";
+                var args_json: []const u8 = "{}";
+                if (std.mem.indexOf(u8, raw_call, ":")) |c_idx| {
+                    const rest = raw_call[c_idx + 1 ..];
+                    if (std.mem.indexOf(u8, rest, "{")) |b_idx| {
+                        tool_name = std.mem.trim(u8, rest[0..b_idx], " \t\r\n");
+                        args_json = std.mem.trim(u8, rest[b_idx..], " \t\r\n");
+                    } else {
+                        tool_name = std.mem.trim(u8, rest, " \t\r\n");
+                    }
+                }
+                try protocol.writeToolCall(writer, msg_id, 1, tool_name, args_json);
+                writer.flush();
+                reason = protocol.STOP_TOOL_CALL;
+                if (next_tok == 49) {
+                    _ = self.m.forwardToken(self.ring, self.scratch, 49, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
+                    self.clock += 1;
+                }
+                break;
+            }
             if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, window_tokens); continue; }
 
             if (self.in_thinking_channel) {

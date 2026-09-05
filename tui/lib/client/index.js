@@ -2,10 +2,11 @@ const { spawn } = require('child_process')
 const { EventEmitter } = require('events')
 const {
   OP_STREAM_CONTENT, OP_STREAM_THOUGHT, OP_TURN_COMPLETE,
+  OP_TOOL_CALL,
   OP_MEM_RESPONSE, OP_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
 } = require('../protocol/constants')
 const {
-  streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, parsedFrame,
+  streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame, parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -19,6 +20,13 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     const text = () => p.subarray(24).toString('utf-8').replace(/\u2581/g, ' ')
     if (h.opcode === OP_STREAM_CONTENT) emitter.emit('content', { text: text(), msgId: h.msgId })
     else if (h.opcode === OP_STREAM_THOUGHT) emitter.emit('thought', { text: text(), msgId: h.msgId })
+    else if (h.opcode === OP_TOOL_CALL) {
+      const callId = p.readUInt16LE(0)
+      const nameLen = p.readUInt16LE(2)
+      const toolName = p.subarray(4, 4 + nameLen).toString('utf-8')
+      const argsJson = p.subarray(4 + nameLen).toString('utf-8')
+      emitter.emit('toolCall', { callId, toolName, argsJson, msgId: h.msgId })
+    }
     else if (h.opcode === OP_TURN_COMPLETE) emitter.emit('turnComplete', {
       totalTok: p.readUInt32LE(0), elapsedMs: p.readUInt32LE(4), tokSec: p.readFloatLE(8), reason: p.readUInt8(12), msgId: h.msgId,
     })
@@ -53,6 +61,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   const sendInput = (text) => {
     const id = nextMsgId++
     if (proc?.stdin?.writable) proc.stdin.write(streamInputFrame(text, id))
+    return id
+  }
+
+  const sendSystem = (systemJson) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(setSystemFrame(systemJson, id))
     return id
   }
 
@@ -111,7 +125,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     setTimeout(kill, 500).unref?.()
   }
 
-  return { start, sendInput, sendAbort, sendMemQuery, sendMemCommit, setConfig, shutdown, kill, on: emitter.on.bind(emitter) }
+  return { start, sendInput, sendSystem, sendAbort, sendMemQuery, sendMemCommit, setConfig, shutdown, kill, on: emitter.on.bind(emitter) }
 }
 
 module.exports = {

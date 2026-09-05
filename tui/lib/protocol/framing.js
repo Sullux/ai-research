@@ -6,6 +6,7 @@ const {
   OP_MEM_QUERY,
   OP_SET_CONFIG,
   OP_MEM_COMMIT,
+  OP_SET_SYSTEM,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -38,6 +39,12 @@ const memCommitFrame = (msgId = 1) => headerBuffer(OP_MEM_COMMIT, msgId, 0)
 const pingFrame = (msgId = 1) => headerBuffer(OP_PING, msgId, 0)
 
 const shutdownFrame = () => headerBuffer(OP_SHUTDOWN, 0, 0)
+
+const setSystemFrame = (systemJson, msgId = 1) => {
+  const jsonBytes = Buffer.from(typeof systemJson === 'string' ? systemJson : JSON.stringify(systemJson), 'utf-8')
+  const hdr = headerBuffer(OP_SET_SYSTEM, msgId, jsonBytes.length)
+  return Buffer.concat([hdr, jsonBytes])
+}
 
 const memQueryFrame = (query, msgId = 1, topK = 5) => {
   const queryBytes = Buffer.from(query, 'utf-8')
@@ -99,6 +106,7 @@ module.exports = {
   streamInputFrame,
   abortFrame,
   memCommitFrame,
+  setSystemFrame,
   pingFrame,
   shutdownFrame,
   memQueryFrame,

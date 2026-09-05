@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const yaml = require('js-yaml')
 const { Tui } = require('@sullux/tui')
 const { Client } = require('./lib/client')
 const { TerminalSession } = require('./lib/terminal/session')
@@ -94,18 +95,52 @@ const loadConfig = (explicitPath) => {
   }
 }
 
-const loadSystemPrompt = (promptPath) => {
+const loadSystemConfig = (promptPath) => {
   const kernelPath = path.resolve(__dirname, './PROMPT_KERNEL.md')
   const userPromptPath = promptPath || path.resolve(__dirname, './PROMPT.md')
 
-  const kernel = fs.existsSync(kernelPath)
-    ? fs.readFileSync(kernelPath, 'utf-8').trim()
-    : ''
   const userPrompt = fs.existsSync(userPromptPath)
     ? fs.readFileSync(userPromptPath, 'utf-8').trim()
     : ''
 
-  return [userPrompt, kernel].filter(Boolean).join('\n\n')
+  let directives = ''
+  const tools = []
+
+  if (fs.existsSync(kernelPath)) {
+    const kernelRaw = fs.readFileSync(kernelPath, 'utf-8').trim()
+    const match = kernelRaw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/)
+    if (match) {
+      const parsed = yaml.load(match[1]) || {}
+      directives = match[2].trim()
+      if (parsed.tools) {
+        for (const [name, def] of Object.entries(parsed.tools)) {
+          const props = {}
+          const req = []
+          for (const [pName, pDef] of Object.entries(def.parameters || {})) {
+            props[pName] = {
+              type: pDef.type || 'string',
+              description: pDef.description || '',
+            }
+            if (pDef.required) req.push(pName)
+          }
+          tools.push({
+            name,
+            description: def.description || '',
+            parameters: {
+              type: 'object',
+              properties: props,
+              required: req,
+            },
+          })
+        }
+      }
+    } else {
+      directives = kernelRaw
+    }
+  }
+
+  const instructions = [userPrompt, directives].filter(Boolean).join('\n\n')
+  return { instructions, tools }
 }
 
 const main = () => {
@@ -114,7 +149,8 @@ const main = () => {
   const isDebug = cliDebug || Boolean(config.debug || process.env.DEBUG_TUI)
   const extraArgs = [...(cliExtraArgs.length > 0 ? cliExtraArgs : config.extraArgs || [])]
   const modelPath = config.modelPath
-  const systemPrompt = loadSystemPrompt(config.promptPath)
+  const systemConfig = loadSystemConfig(config.promptPath)
+  const systemPrompt = systemConfig.instructions
 
   const debugLogPath = path.resolve(process.cwd(), 'debug.log')
   const logDebug = (msg) => {
@@ -169,6 +205,16 @@ const main = () => {
   const parser = ToolParser(registry, client, store)
 
   controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager)
+
+  // Send early session system prompt pre-caching the moment backend starts
+  let systemPrecached = false
+  client.on('status', ({ status }) => {
+    if (status === 0 && !systemPrecached) {
+      systemPrecached = true
+      controller.refs.hasSentFirstTurn = true
+      client.sendSystem(systemConfig)
+    }
+  })
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
@@ -382,7 +428,8 @@ if (require.main === module) {
 
 module.exports = {
   loadConfig,
-  loadSystemPrompt,
+  loadSystemConfig,
+  loadSystemPrompt: (promptPath) => loadSystemConfig(promptPath).instructions,
   parseCliArgs,
   main,
 }

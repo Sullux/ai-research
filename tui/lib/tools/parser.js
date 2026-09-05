@@ -36,25 +36,17 @@ const toolParserFactory = () => (registry, client, store) => {
   let streamAccumulator = ''
   const syntaxTracker = SyntaxTracker()
 
-  const ingestChunk = async (chunk) => {
-    syntaxTracker.ingestChunk(chunk)
-    streamAccumulator += chunk
-    const parsed = parseToolCall(streamAccumulator)
-    if (!parsed) return
-
-    const endIdx = streamAccumulator.indexOf(TOOL_CALL_END)
-    streamAccumulator = streamAccumulator.slice(endIdx + TOOL_CALL_END.length)
-
+  const executeCall = async (name, args) => {
     store?.addStreamEntry?.({
       type: 'tool_call',
-      title: `🛠️ TOOL: ${parsed.name}`,
-      content: JSON.stringify(parsed.args, null, 2),
+      title: `🛠️ TOOL: ${name}`,
+      content: JSON.stringify(args, null, 2),
     })
 
-    const result = await registry.execute(parsed.name, parsed.args)
+    const result = await registry.execute(name, args)
 
-    if (parsed.name === 'ask_user') {
-      const msg = parsed.args.message || parsed.args.prompt || parsed.args.brief || 'User action required'
+    if (name === 'ask_user') {
+      const msg = args.message || args.prompt || args.brief || 'User action required'
       store?.addConversationMessage?.({
         sender: 'Assistant',
         text: msg,
@@ -64,12 +56,36 @@ const toolParserFactory = () => (registry, client, store) => {
 
     store?.addStreamEntry?.({
       type: 'tool_result',
-      title: `📦 RESULT: ${parsed.name}`,
+      title: `📦 RESULT: ${name}`,
       content: JSON.stringify(result, null, 2),
     })
 
-    const responsePayload = formatToolResponse(parsed.name, result)
+    const responsePayload = formatToolResponse(name, result)
     client.sendInput(responsePayload)
+  }
+
+  client?.on?.('toolCall', async ({ toolName, argsJson }) => {
+    let args = {}
+    try {
+      args = JSON.parse(argsJson)
+    } catch (_) {
+      try {
+        args = JSON.parse(argsJson.replace(/\r?\n/g, '\\n'))
+      } catch (_) {}
+    }
+    await executeCall(toolName, args)
+  })
+
+  const ingestChunk = async (chunk) => {
+    syntaxTracker.ingestChunk(chunk)
+    streamAccumulator += chunk
+    const parsed = parseToolCall(streamAccumulator)
+    if (!parsed) return
+
+    const endIdx = streamAccumulator.indexOf(TOOL_CALL_END)
+    streamAccumulator = streamAccumulator.slice(endIdx + TOOL_CALL_END.length)
+
+    await executeCall(parsed.name, parsed.args)
   }
 
   const reset = () => {

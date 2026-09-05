@@ -10,6 +10,7 @@
   "author": "Charles Sullivan",
   "license": "MIT",
   "dependencies": {
-    "@sullux/tui": "file:../../tui"
+    "@sullux/tui": "file:../../tui",
+    "js-yaml": "^5.4.1"
   }
 }
