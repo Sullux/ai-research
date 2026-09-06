@@ -83,6 +83,13 @@ const stateStoreFactory = () => (onStreamItem) => {
 
     for (const item of items) {
       addStreamEntry(item, false)
+    }
+
+    // Populate conversation sorted by timestamp to preserve causal in-flight order
+    const convItems = items.filter(it => ['user', 'response', 'ask_user'].includes(it.type))
+    convItems.sort((a, b) => (a.time || 0) - (b.time || 0))
+
+    for (const item of convItems) {
       if (item.type === 'user') {
         addConversationMessage({ sender: 'User', text: item.content, time: item.time, id: item.id })
       } else if (item.type === 'response') {

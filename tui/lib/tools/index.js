@@ -120,12 +120,18 @@ const toolRegistryFactory = () => (vfs, cmdRunner, trmManager, notManager, clien
   }
 
   const execute = async (name, args) => {
-    const fn = tools[name]
-    if (!fn) return { error: `Unknown tool: ${name}` }
+    const cleanName = (name || '').trim().replace(/^_+|_+$/g, '')
+    const fn = tools[cleanName] || tools[name]
+    if (!fn) {
+      const knownTools = Object.keys(tools).join(', ')
+      return {
+        error: `Unknown tool \`${name}\`. Available tools: ${knownTools}.`,
+      }
+    }
     try {
-      return await fn(args)
+      return await fn(args || {})
     } catch (err) {
-      return { error: err.message }
+      return { error: `Tool \`${cleanName}\` execution failed: ${err.message}` }
     }
   }
 

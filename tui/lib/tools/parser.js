@@ -70,9 +70,10 @@ const toolParserFactory = () => (registry, client, store) => {
 
   client?.on?.('toolCall', async ({ toolName, argsJson }) => {
     let args = {}
+    let parseError = null
     try {
       args = JSON.parse(argsJson)
-    } catch (_) {
+    } catch (e1) {
       try {
         const cleaned = argsJson
           .replace(/\r?\n/g, '\\n')
@@ -80,9 +81,15 @@ const toolParserFactory = () => (registry, client, store) => {
           .replaceAll('<|"|>', '"')
           .replace(/([{\s,])([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
         args = JSON.parse(cleaned)
-      } catch (_) {}
+      } catch (e2) {
+        parseError = `Malformed JSON arguments for tool \`${toolName}\`: ${argsJson}`
+      }
     }
-    await executeCall(toolName, args)
+    if (parseError) {
+      await executeCall(toolName, { error: parseError })
+    } else {
+      await executeCall(toolName, args)
+    }
   })
 
   const ingestChunk = async (chunk) => {

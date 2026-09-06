@@ -83,7 +83,12 @@ const onSubmitInput = (ctx, payload) => {
   }
 
   refs.store?.setGenerating(true)
-  refs.client.sendInput(payloadText)
+  if (!refs.isEngineReady) {
+    // Engine still loading weights or restoring snapshot: stage turn to dispatch immediately upon ready
+    refs.pendingInputTurn = payloadText
+  } else {
+    refs.client.sendInput(payloadText)
+  }
   ctx.redraw()
 }
 

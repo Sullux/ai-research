@@ -207,6 +207,7 @@ const main = () => {
   const parser = ToolParser(registry, client, store)
 
   controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager)
+  controller.refs.isEngineReady = false
 
   // Automatic Snapshot Checkpointing State
   let snapshotDebounceTimer = null
@@ -236,11 +237,19 @@ const main = () => {
       // Snapshot restored successfully
       controller.refs.hasSentFirstTurn = true
       controller.refs.systemPrecacheLogged = true
+      controller.refs.isEngineReady = true
       store.addStreamEntry({
         type: 'checkpoint',
         title: '⚡ RESTORE',
         content: `Cognitive state restored from snapshot (clock: ${clock}, active slots: ${activeSlots}, anchor: ${streamId || 'initial'}). 0 ms warm boot.`,
       })
+
+      // If user typed an input during boot/restore, dispatch it now
+      if (controller.refs.pendingInputTurn) {
+        const turn = controller.refs.pendingInputTurn
+        controller.refs.pendingInputTurn = null
+        client.sendInput(turn)
+      }
 
       // Catch-up replay: check if the stream log contains turns beyond the checkpoint
       if (streamLog.enabled && streamId) {
@@ -297,6 +306,7 @@ const main = () => {
       requestRedraw()
     } else if (systemPrecached && status === 0 && !controller.refs.systemPrecacheLogged && activeSlots > 0) {
       controller.refs.systemPrecacheLogged = true
+      controller.refs.isEngineReady = true
       store.addStreamEntry({
         type: 'system',
         title: '⚙ SYSTEM',
@@ -304,6 +314,13 @@ const main = () => {
       })
       // Save initial system prompt snapshot for future instant boots
       scheduleSnapshot()
+
+      // If user typed an input during boot/pre-cache, dispatch it now
+      if (controller.refs.pendingInputTurn) {
+        const turn = controller.refs.pendingInputTurn
+        controller.refs.pendingInputTurn = null
+        client.sendInput(turn)
+      }
       requestRedraw()
     }
   })

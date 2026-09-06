@@ -75,10 +75,7 @@ const formatContinuationNudge = () => [
 ].join('\n')
 
 const formatTruncatedTurn = (userText, eventId, relPath) => [
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`,
-  `Input event ${eventId} is truncated.`,
-  `Required action: You must use read with path "${relPath}" and offset 0 to inspect the full content, snooze to defer, or ack to dismiss before delivering a final answer.`,
-  'Next action:\n<|tool_call>',
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`,
 ].join('\n')
 
 module.exports = {
