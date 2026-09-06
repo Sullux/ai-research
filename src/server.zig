@@ -165,6 +165,7 @@ pub const Server = struct {
             const hdr, const p = .{ frame.hdr, frame.payload }; defer if (p.len > 0) self.allocator.free(p);
             switch (hdr.opcode) {
                 protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
+                protocol.OP_TOOL_RETURN => try self.handleToolReturn(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_LOAD => try self.handleSnapshotLoad(hdr.msg_id, p, &async_writer),
@@ -488,6 +489,110 @@ pub const Server = struct {
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
+    }
+
+    fn handleToolReturn(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
+        // Wire format:
+        // [call_id: u16 LE] [status: u16 LE] [name_len: u16 LE] [name: bytes] [result_json: bytes]
+        if (payload.len < 6) return;
+        self.is_aborted.store(false, .seq_cst);
+        const name_len = std.mem.readInt(u16, payload[4..6], .little);
+        if (payload.len < 6 + name_len) return;
+        const tool_name = payload[6 .. 6 + name_len];
+        const result_json = payload[6 + name_len ..];
+
+        const formatted = try self.formatGemmaToolResponse(tool_name, result_json);
+        defer self.allocator.free(formatted);
+
+        const tokens = try self.tok.encode(self.allocator, formatted, false);
+        defer self.allocator.free(tokens);
+
+        const cur = try self.prefillTokens(msg_id, tokens, writer, false);
+        if (self.is_aborted.load(.monotonic)) return;
+
+        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
+    }
+
+    fn formatGemmaToolResponse(self: *Server, tool_name: []const u8, result_json: []const u8) ![]u8 {
+        var out = std.ArrayList(u8).init(self.allocator);
+        errdefer out.deinit();
+        const w = out.writer();
+
+        try w.writeAll("<|tool_response>response:");
+        try w.writeAll(tool_name);
+
+        var parsed_json: ?std.json.Parsed(std.json.Value) = null;
+        defer if (parsed_json) |*p| p.deinit();
+        parsed_json = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{}) catch null;
+
+        if (parsed_json) |p| {
+            if (p.value == .object) {
+                try w.writeByte('{');
+                const obj = p.value.object;
+                var key_list = std.ArrayList([]const u8).init(self.allocator);
+                defer key_list.deinit();
+                var it = obj.iterator();
+                while (it.next()) |entry| try key_list.append(entry.key_ptr.*);
+                std.mem.sort([]const u8, key_list.items, {}, struct {
+                    fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                        return std.mem.order(u8, a, b) == .lt;
+                    }
+                }.lessThan);
+                for (key_list.items, 0..) |k, i| {
+                    if (i > 0) try w.writeByte(',');
+                    try w.print("{s}:", .{k});
+                    if (obj.get(k)) |sub_val| try self.formatGemmaToolArg(w, sub_val);
+                }
+                try w.writeByte('}');
+            } else {
+                try w.writeAll("{value:");
+                try self.formatGemmaToolArg(w, p.value);
+                try w.writeByte('}');
+            }
+        } else {
+            try w.print("{{value:<|\"|>{s}<|\"|>}}", .{result_json});
+        }
+        try w.writeAll("<tool_response|><|channel>thought\n");
+        return out.toOwnedSlice();
+    }
+
+    fn formatGemmaToolArg(self: *Server, writer: anytype, val: std.json.Value) !void {
+        switch (val) {
+            .null => try writer.writeAll("null"),
+            .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+            .integer => |i| try writer.print("{d}", .{i}),
+            .float => |f| try writer.print("{d}", .{f}),
+            .number_string => |s| try writer.writeAll(s),
+            .string => |s| try writer.print("<|\"|>{s}<|\"|>", .{s}),
+            .array => |arr| {
+                try writer.writeByte('[');
+                for (arr.items, 0..) |item, i| {
+                    if (i > 0) try writer.writeByte(',');
+                    try self.formatGemmaToolArg(writer, item);
+                }
+                try writer.writeByte(']');
+            },
+            .object => |obj| {
+                try writer.writeByte('{');
+                var key_list = std.ArrayList([]const u8).init(self.allocator);
+                defer key_list.deinit();
+                var it = obj.iterator();
+                while (it.next()) |entry| try key_list.append(entry.key_ptr.*);
+                std.mem.sort([]const u8, key_list.items, {}, struct {
+                    fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                        return std.mem.order(u8, a, b) == .lt;
+                    }
+                }.lessThan);
+                for (key_list.items, 0..) |k, i| {
+                    if (i > 0) try writer.writeByte(',');
+                    try writer.print("{s}:", .{k});
+                    if (obj.get(k)) |sub_val| try self.formatGemmaToolArg(writer, sub_val);
+                }
+                try writer.writeByte('}');
+            },
+        }
     }
 
     fn parseTokens(self: *Server, p: []const u8) ![]u32 {

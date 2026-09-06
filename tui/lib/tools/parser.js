@@ -1,4 +1,3 @@
-const { formatToolResponse } = require('../template')
 const { SyntaxTracker } = require('../stream/syntax')
 
 const TOOL_CALL_START = '<|tool_call>'
@@ -64,8 +63,11 @@ const toolParserFactory = () => (registry, client, store) => {
       content: JSON.stringify(result, null, 2),
     })
 
-    const responsePayload = formatToolResponse(name, result)
-    client.sendInput(responsePayload)
+    if (client?.sendToolReturn) {
+      client.sendToolReturn(name, result)
+    } else {
+      client.sendInput(JSON.stringify(result))
+    }
   }
 
   client?.on?.('toolCall', async ({ toolName, argsJson }) => {

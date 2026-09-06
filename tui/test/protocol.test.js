@@ -9,6 +9,7 @@ const {
   configFrame,
   snapshotSaveFrame,
   snapshotLoadFrame,
+  toolReturnFrame,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -19,6 +20,7 @@ const {
   OP_MEM_QUERY,
   OP_MEM_COMMIT,
   OP_SET_CONFIG,
+  OP_TOOL_RETURN,
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
   OP_PING,
@@ -86,6 +88,18 @@ test('snapshotSaveFrame and snapshotLoadFrame serialize properly', () => {
   assert.strictEqual(parsedLoad.header.opcode, OP_SNAPSHOT_LOAD)
   assert.strictEqual(parsedLoad.header.msgId, 6)
   assert.strictEqual(parsedLoad.payload.toString('utf-8'), '/tmp/snap.bin')
+})
+
+test('toolReturnFrame serializes properly', () => {
+  const frame = toolReturnFrame('ack', { status: 'ok' }, 7, 0, 12)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_TOOL_RETURN)
+  assert.strictEqual(parsed.header.msgId, 12)
+  assert.strictEqual(parsed.payload.readUInt16LE(0), 7) // callId
+  assert.strictEqual(parsed.payload.readUInt16LE(2), 0) // status
+  assert.strictEqual(parsed.payload.readUInt16LE(4), 3) // name_len ('ack')
+  assert.strictEqual(parsed.payload.subarray(6, 9).toString('utf-8'), 'ack')
+  assert.strictEqual(parsed.payload.subarray(9).toString('utf-8'), JSON.stringify({ status: 'ok' }))
 })
 
 test('parsedFrame handles incomplete buffers gracefully', () => {

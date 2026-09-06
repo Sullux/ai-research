@@ -7,7 +7,7 @@ const {
 } = require('../protocol/constants')
 const {
   streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
-  snapshotSaveFrame, snapshotLoadFrame, parsedFrame,
+  snapshotSaveFrame, snapshotLoadFrame, toolReturnFrame, parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -76,6 +76,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   const sendSystem = (systemJson) => {
     const id = nextMsgId++
     if (proc?.stdin?.writable) proc.stdin.write(setSystemFrame(systemJson, id))
+    return id
+  }
+
+  const sendToolReturn = (toolName, result, callId = 1, status = 0) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(toolReturnFrame(toolName, result, callId, status, id))
     return id
   }
 
@@ -150,6 +156,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     start,
     sendInput,
     sendSystem,
+    sendToolReturn,
     sendSnapshotSave,
     sendSnapshotLoad,
     sendAbort,

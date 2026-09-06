@@ -95,19 +95,23 @@ test('ToolRegistry executes plan, done, snooze, and ask_user with orchestrator',
   assert.strictEqual(snoozeRes.id, 'step_1001.2')
 })
 
-test('ToolParser intercepts streaming tool call and pushes response', async () => {
-  let sentResponse = ''
+test('ToolParser intercepts streaming tool call and dispatches tool return', async () => {
+  let returnedName = ''
+  let returnedResult = null
   const mockRegistry = {
     execute: async (name, args) => ({ output: `executed ${name}` }),
   }
   const mockClient = {
-    sendInput: (payload) => { sentResponse = payload },
+    sendToolReturn: (name, result) => {
+      returnedName = name
+      returnedResult = result
+    },
   }
 
   const parser = ToolParser(mockRegistry, mockClient)
   await parser.ingestChunk('I will run this: <|tool_call>call:terminal_reset{}<tool_call|>')
 
-  assert.strictEqual(sentResponse.includes('<|tool_response>'), true)
-  assert.strictEqual(sentResponse.includes('executed terminal_reset'), true)
+  assert.strictEqual(returnedName, 'terminal_reset')
+  assert.deepStrictEqual(returnedResult, { output: 'executed terminal_reset' })
   assert.strictEqual(parser.syntaxTracker.isAtRest(), true)
 })

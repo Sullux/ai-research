@@ -5,6 +5,7 @@ const {
   OP_ABORT,
   OP_MEM_QUERY,
   OP_SET_CONFIG,
+  OP_TOOL_RETURN,
   OP_MEM_COMMIT,
   OP_SET_SYSTEM,
   OP_SNAPSHOT_SAVE,
@@ -106,6 +107,20 @@ const snapshotLoadFrame = (snapPath, msgId = 1) => {
   return Buffer.concat([hdr, pathBytes])
 }
 
+const toolReturnFrame = (toolName, result, callId = 1, status = 0, msgId = 1) => {
+  const nameBytes = Buffer.from(toolName, 'utf-8')
+  const jsonStr = typeof result === 'string' ? result : JSON.stringify(result)
+  const jsonBytes = Buffer.from(jsonStr, 'utf-8')
+  const payload = Buffer.alloc(6 + nameBytes.length + jsonBytes.length)
+  payload.writeUInt16LE(callId, 0)
+  payload.writeUInt16LE(status, 2)
+  payload.writeUInt16LE(nameBytes.length, 4)
+  nameBytes.copy(payload, 6)
+  jsonBytes.copy(payload, 6 + nameBytes.length)
+  const hdr = headerBuffer(OP_TOOL_RETURN, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
 const parsedFrame = (buf) => {
   if (buf.length < 16) return null
   const magic = buf.readUInt32LE(0)
@@ -130,6 +145,7 @@ module.exports = {
   pingFrame,
   shutdownFrame,
   memQueryFrame,
+  toolReturnFrame,
   snapshotSaveFrame,
   snapshotLoadFrame,
   configFrame,

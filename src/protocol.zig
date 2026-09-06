@@ -108,6 +108,17 @@ pub fn writeToolCall(writer: anytype, msg_id: u16, call_id: u16, name: []const u
     if (args_json.len > 0) try writer.writeAll(args_json);
 }
 
+pub fn writeToolReturn(writer: anytype, msg_id: u16, call_id: u16, status: u16, tool_name: []const u8, result_json: []const u8) !void {
+    const name_len: u16 = @intCast(@min(tool_name.len, std.math.maxInt(u16)));
+    const payload_len = 2 + 2 + 2 + @as(u32, name_len) + @as(u32, @intCast(result_json.len));
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_TOOL_RETURN, .payload_len = payload_len });
+    try writer.writeInt(u16, call_id, .little);
+    try writer.writeInt(u16, status, .little);
+    try writer.writeInt(u16, name_len, .little);
+    if (name_len > 0) try writer.writeAll(tool_name[0..name_len]);
+    if (result_json.len > 0) try writer.writeAll(result_json);
+}
+
 pub fn writeMemResponse(writer: anytype, msg_id: u16, count: u8, status: u8, cursor: u16, total_tokens: u32, timestamps: []const u64) !void {
     const ts_len: u32 = @intCast(timestamps.len * 8);
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_MEM_RESPONSE, .payload_len = 8 + ts_len });

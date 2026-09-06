@@ -24,9 +24,6 @@ const formatUserDecisionTurn = (userText, waitingTasks = []) => {
   ].join('\n') + '\n'
 }
 
-const formatToolResponse = (toolName, result) =>
-  `<|tool_response>response:${toolName}${JSON.stringify(result)}<tool_response|>\n<|turn>model\n<|channel>thought\n`
-
 const formatStepTick = (planId, planBrief, stepId, stepBrief) => [
   '<|turn>model',
   '<|channel>thought',
@@ -55,8 +52,8 @@ const formatBacklogResumeNudge = (notItem) => [
   '<|turn>model',
   '<|channel>thought',
   `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
-  `- If already satisfied or incorporated into previous answers: call \`ack({ id: "${notItem.id}" })\`.`,
-  `- If pending work remains: address or continue it now, then call \`ack({ id: "${notItem.id}" })\`.`,
+  `- If already satisfied or incorporated into previous answers: invoke tool \`ack\` with id "${notItem.id}".`,
+  `- If pending work remains: address or continue it now, then invoke tool \`ack\`.`,
   'Next action:',
 ].join('\n') + '\n'
 
@@ -92,7 +89,6 @@ module.exports = {
   formatUserTurn,
   formatUserDecisionTurn,
   formatTruncatedTurn,
-  formatToolResponse,
   formatStepTick,
   formatTimerWake,
   formatResumeAfterInterrupt,
