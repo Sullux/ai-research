@@ -75,7 +75,7 @@ const formatContinuationNudge = () => [
 ].join('\n')
 
 const formatTruncatedTurn = (userText, eventId, relPath) => [
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`,
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Call tool \`read\` with path: "${relPath}" and offset: 0 to inspect before answering.\nNext action:\n`,
 ].join('\n')
 
 module.exports = {

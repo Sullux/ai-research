@@ -27,11 +27,17 @@ const getConversationNodes = () => {
     let headerFg = isUser ? '#7aa2f7' : '#7dcfff'
     let headerPrefix = isUser ? '👤 ' : '🤖 '
 
-    if (msg.waitingUser) {
+    if (msg.waitingEngine) {
+      bg = '#1a2333'
+      headerFg = '#e0af68'
+      headerPrefix = '⏳ '
+    } else if (msg.waitingUser) {
       bg = '#2b2314'
       headerFg = '#e0af68'
       headerPrefix = '⏳ '
     }
+
+    const senderText = msg.waitingEngine ? 'User (staging for engine ready)' : msg.sender
 
     return {
       type: 'layout',
@@ -44,8 +50,8 @@ const getConversationNodes = () => {
         inner: [
           { type: 'text', text: isSelected ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
           { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
-          { type: 'text', text: `${headerPrefix}${msg.sender}: `, bold: true, fg: headerFg },
-          { type: 'text', text: msg.text, fg: isUser ? '#e2e8f0' : '#c0caf5' },
+          { type: 'text', text: `${headerPrefix}${senderText}: `, bold: true, fg: headerFg },
+          { type: 'text', text: msg.text, fg: msg.waitingEngine ? '#94a3b8' : (isUser ? '#e2e8f0' : '#c0caf5') },
         ],
       }],
     }

@@ -120,7 +120,11 @@ const toolRegistryFactory = () => (vfs, cmdRunner, trmManager, notManager, clien
   }
 
   const execute = async (name, args) => {
-    const cleanName = (name || '').trim().replace(/^_+|_+$/g, '')
+    let cleanName = (name || '').trim().replace(/^_+|_+$/g, '')
+    if (cleanName.includes(':')) {
+      cleanName = cleanName.split(':').pop()
+    }
+    if (cleanName === 'read_file') cleanName = 'read'
     const fn = tools[cleanName] || tools[name]
     if (!fn) {
       const knownTools = Object.keys(tools).join(', ')

@@ -54,6 +54,8 @@ const onSubmitInput = (ctx, payload) => {
 
   if (isGeneratingResponse) {
     refs.store?.setPendingInterjection({ sender: 'User', text: val, time: Date.now() })
+  } else if (!refs.isEngineReady) {
+    refs.store?.addConversationMessage({ sender: 'User', text: val, waitingEngine: true })
   } else {
     refs.store?.addConversationMessage({ sender: 'User', text: val })
   }
@@ -66,15 +68,18 @@ const onSubmitInput = (ctx, payload) => {
   const alertsRollup = refs.notManager?.formatTurnAlerts?.() || ''
 
   let payloadText = ''
-  if (!refs.hasSentFirstTurn && refs.systemPrompt) {
-    refs.hasSentFirstTurn = true
-    payloadText = formatTurn1(refs.systemPrompt, `${alertsRollup}${turnContent}`)
-  } else if (savedMsg?.isTruncated) {
+  if (savedMsg?.isTruncated) {
+    if (!refs.hasSentFirstTurn && refs.systemPrompt) {
+      refs.hasSentFirstTurn = true
+    }
     payloadText = formatTruncatedTurn(
       `${alertsRollup}${turnContent}`,
       eventId,
       savedMsg.relPath,
     )
+  } else if (!refs.hasSentFirstTurn && refs.systemPrompt) {
+    refs.hasSentFirstTurn = true
+    payloadText = formatTurn1(refs.systemPrompt, `${alertsRollup}${turnContent}`)
   } else {
     const waitingTasks = refs.orchestrator?.getWaitingForUserTasks?.() || []
     payloadText = waitingTasks.length > 0

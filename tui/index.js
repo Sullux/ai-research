@@ -211,6 +211,9 @@ const main = () => {
 
   // Automatic Snapshot Checkpointing State
   let snapshotDebounceTimer = null
+  let lastSnapshotAnchor = null
+  let lastSnapshotClock = null
+
   const scheduleSnapshot = () => {
     if (!snapshotPath) return
     if (snapshotDebounceTimer) {
@@ -219,6 +222,10 @@ const main = () => {
     snapshotDebounceTimer = setTimeout(() => {
       snapshotDebounceTimer = null
       const latestStreamId = store.state.stream?.[store.state.stream.length - 1]?.id || ''
+      // Suppress redundant zero-delta snapshots if anchor hasn't changed
+      if (latestStreamId && latestStreamId === lastSnapshotAnchor) {
+        return
+      }
       client.sendSnapshotSave(snapshotPath, latestStreamId)
     }, 5000)
   }
@@ -227,6 +234,8 @@ const main = () => {
   client.on('snapshotStatus', ({ status, activeSlots, clock, streamId }) => {
     if (status === 0) {
       // Snapshot saved successfully
+      lastSnapshotAnchor = streamId
+      lastSnapshotClock = clock
       store.addStreamEntry({
         type: 'checkpoint',
         title: '💾 SNAPSHOT',
@@ -235,6 +244,8 @@ const main = () => {
       requestRedraw()
     } else if (status === 1) {
       // Snapshot restored successfully
+      lastSnapshotAnchor = streamId
+      lastSnapshotClock = clock
       controller.refs.hasSentFirstTurn = true
       controller.refs.systemPrecacheLogged = true
       controller.refs.isEngineReady = true
@@ -248,6 +259,9 @@ const main = () => {
       if (controller.refs.pendingInputTurn) {
         const turn = controller.refs.pendingInputTurn
         controller.refs.pendingInputTurn = null
+        for (const m of store.state.conversation) {
+          if (m.waitingEngine) delete m.waitingEngine
+        }
         client.sendInput(turn)
       }
 
@@ -319,6 +333,9 @@ const main = () => {
       if (controller.refs.pendingInputTurn) {
         const turn = controller.refs.pendingInputTurn
         controller.refs.pendingInputTurn = null
+        for (const m of store.state.conversation) {
+          if (m.waitingEngine) delete m.waitingEngine
+        }
         client.sendInput(turn)
       }
       requestRedraw()

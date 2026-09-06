@@ -28,7 +28,7 @@ const stateStoreFactory = () => (onStreamItem) => {
     activeResponseTime: 0,
     activeResponseExpanded: false,
     pendingInterjection: null,
-    status: 'Idle | tok/s: 0.0 | Memory: 0 episodes',
+    status: '[Engine] Initializing GPU compute & pre-caching working state...',
     isGenerating: false,
     isPaused: false,
     mode: 'chat', // 'chat' | 'stream' | 'plan'
