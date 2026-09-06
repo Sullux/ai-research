@@ -15,7 +15,7 @@ const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
 const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD } = require('./lib/protocol/constants')
-const { formatNotificationInterrupt, formatContinuationNudge } = require('./lib/template')
+const { formatNotificationInterrupt, formatContinuationNudge, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
 const STATUS_NAMES = [
@@ -213,6 +213,7 @@ const main = () => {
   let snapshotDebounceTimer = null
   let lastSnapshotAnchor = null
   let lastSnapshotClock = null
+  let lastSavedSlots = 0
   let currentServerSlots = 0
 
   const scheduleSnapshot = () => {
@@ -227,9 +228,10 @@ const main = () => {
       if (latestStreamId && latestStreamId === lastSnapshotAnchor) {
         return
       }
-      if (lastSnapshotClock !== null && currentServerSlots > 0 && currentServerSlots === lastSnapshotClock) {
+      if (currentServerSlots > 0 && currentServerSlots <= lastSavedSlots) {
         return
       }
+      lastSavedSlots = currentServerSlots
       client.sendSnapshotSave(snapshotPath, latestStreamId)
     }, 5000)
   }
@@ -240,6 +242,7 @@ const main = () => {
       // Snapshot saved successfully
       lastSnapshotAnchor = streamId
       lastSnapshotClock = clock
+      lastSavedSlots = activeSlots
       store.addStreamEntry({
         type: 'checkpoint',
         title: '💾 SNAPSHOT',
@@ -250,6 +253,7 @@ const main = () => {
       // Snapshot restored successfully
       lastSnapshotAnchor = streamId
       lastSnapshotClock = clock
+      lastSavedSlots = activeSlots
       controller.refs.hasSentFirstTurn = true
       controller.refs.systemPrecacheLogged = true
       controller.refs.isEngineReady = true
@@ -449,15 +453,10 @@ const main = () => {
 
     // 2. Explicit Turn Completion (<turn|>)
     if (reason === STOP_END_OF_TURN) {
-      // Auto-ACK the active turn notification and any earlier user messages in the same conversation channel
+      // Auto-ACK the active turn notification
       if (activeTurnId) {
         notManager.ack(activeTurnId)
         if (controller.refs) controller.refs.activeTurnNotificationId = null
-      }
-      // Also ack any remaining pending turn-context notifications from the conversational channel
-      const convAlerts = notManager.getPending().filter((item) => item.extra?.isTurnContext)
-      for (const ca of convAlerts) {
-        notManager.ack(ca.id)
       }
 
       // Check for remaining unserviced interrupts in LIFO order
@@ -472,7 +471,19 @@ const main = () => {
         return
       }
 
-      // If no immediate unserviced alerts, check for deferred alerts that were snoozed without duration
+      // Check for suspended earlier tasks that were interrupted by a barge-in
+      const suspended = notManager.getSuspended()
+      if (suspended.length > 0) {
+        const nextSuspended = suspended[0]
+        notManager.markServicing(nextSuspended.id)
+        const resumeNudge = formatBacklogResumeNudge(nextSuspended)
+        store.setGenerating(true)
+        client.sendInput(resumeNudge)
+        requestRedraw()
+        return
+      }
+
+      // If no immediate unserviced or suspended alerts, check for deferred alerts that were snoozed without duration
       const deferred = notManager.getPending().filter(a => a.isDeferred)
       if (deferred.length > 0) {
         const nextDeferred = deferred[0]

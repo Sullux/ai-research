@@ -51,6 +51,15 @@ const formatResumeAfterInterrupt = (stepId, brief) => [
   'Next action:',
 ].join('\n') + '\n'
 
+const formatBacklogResumeNudge = (notItem) => [
+  '<|turn>model',
+  '<|channel>thought',
+  `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
+  `- If already satisfied or incorporated into previous answers: call \`ack({ id: "${notItem.id}" })\`.`,
+  `- If pending work remains: address or continue it now, then call \`ack({ id: "${notItem.id}" })\`.`,
+  'Next action:',
+].join('\n') + '\n'
+
 const formatNotificationInterrupt = (notItem) => {
   const isTruncated = Boolean(notItem.extra?.isTruncated || notItem.preview?.endsWith('...'))
   const lines = [
@@ -87,6 +96,7 @@ module.exports = {
   formatStepTick,
   formatTimerWake,
   formatResumeAfterInterrupt,
+  formatBacklogResumeNudge,
   formatNotificationInterrupt,
   formatContinuationNudge,
 }

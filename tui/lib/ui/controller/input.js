@@ -28,6 +28,13 @@ const onSubmitInput = (ctx, payload) => {
   let eventId = null
   if (refs.vfs) {
     savedMsg = refs.vfs.saveUserMessage(val)
+
+    // If an existing turn is currently active, mark it as SUSPENDED (interrupted in-flight)
+    // so it is not treated as an unserviced emergency on micro-bursts, but can be cleanly resumed later.
+    if (refs.activeTurnNotificationId) {
+      refs.notManager?.suspend(refs.activeTurnNotificationId)
+    }
+
     const notItem = refs.notManager?.notify(
       savedMsg.relPath,
       savedMsg.preview,
