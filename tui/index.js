@@ -213,6 +213,7 @@ const main = () => {
   let snapshotDebounceTimer = null
   let lastSnapshotAnchor = null
   let lastSnapshotClock = null
+  let currentServerSlots = 0
 
   const scheduleSnapshot = () => {
     if (!snapshotPath) return
@@ -222,8 +223,11 @@ const main = () => {
     snapshotDebounceTimer = setTimeout(() => {
       snapshotDebounceTimer = null
       const latestStreamId = store.state.stream?.[store.state.stream.length - 1]?.id || ''
-      // Suppress redundant zero-delta snapshots if anchor hasn't changed
+      // Suppress redundant zero-delta snapshots if neither stream anchor nor slot count changed
       if (latestStreamId && latestStreamId === lastSnapshotAnchor) {
+        return
+      }
+      if (lastSnapshotClock !== null && currentServerSlots > 0 && currentServerSlots === lastSnapshotClock) {
         return
       }
       client.sendSnapshotSave(snapshotPath, latestStreamId)
@@ -388,6 +392,7 @@ const main = () => {
   })
 
   client.on('status', ({ status, isGpu, activeSlots, archivedDiffs, isSaturated, tokSec, currentTok, totalTok }) => {
+    currentServerSlots = activeSlots
     orchestrator.setSaturated(isSaturated)
     const sName = STATUS_NAMES[status] || 'Active'
     const isMixed = extraArgs.includes('--mixed')

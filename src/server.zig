@@ -544,7 +544,7 @@ pub const Server = struct {
                 }
                 self.in_thinking_channel = true;
                 thinking_count = 0;
-                // Absorb channel identifier (e.g. "thought\n")
+                // Absorb channel identifier (e.g. "thought\n" or "_thought\n")
                 var chan_tok = self.advanceToken(cur, window_tokens);
                 while (chan_tok != 101 and chan_tok != self.tok.eos_token_id) {
                     if (chan_tok == 107 or chan_tok == 108) {
@@ -560,6 +560,22 @@ pub const Server = struct {
                 continue;
             }
             if (cur == 101) { self.in_thinking_channel = false; self.sampler.suppress_critique = false; cur = self.advanceToken(cur, window_tokens); continue; }
+            if (cur == 236779) { // '_' token
+                // Check if this is an un-bracketed "_thought" leakage right before or after channel boundary
+                const peek_tok = self.advanceToken(cur, window_tokens);
+                if (peek_tok == 45518) { // "thought"
+                    self.in_thinking_channel = true;
+                    thinking_count = 0;
+                    var next_c = self.advanceToken(peek_tok, window_tokens);
+                    while (next_c == 107 or next_c == 108) {
+                        next_c = self.advanceToken(next_c, window_tokens);
+                    }
+                    cur = next_c;
+                    continue;
+                } else {
+                    cur = peek_tok;
+                }
+            }
             if (cur == 48) {
                 // Token 48: <|tool_call>
                 // Collect tool invocation until token 49 (<tool_call|>) or turn end
