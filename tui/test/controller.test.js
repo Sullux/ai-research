@@ -40,16 +40,70 @@ describe('UI Controller & Layout Tiering', () => {
     let redrawn = false
     const mockCtx = {
       redraw: () => { redrawn = true },
-      width: 150,
     }
 
     controller.onGlobalKey(mockCtx, { key: 's', stopPropagation: () => {} })
     assert.strictEqual(store.state.mode, 'stream')
-    assert.strictEqual(store.state.overlay, 'stream')
+
+    controller.onGlobalKey(mockCtx, { key: 'd', stopPropagation: () => {} })
+    assert.strictEqual(store.state.mode, 'plan')
 
     controller.onGlobalKey(mockCtx, { key: 'a', stopPropagation: () => {} })
     assert.strictEqual(store.state.mode, 'chat')
-    assert.strictEqual(store.state.overlay, null)
+  })
+
+  it('calculates responsive panel visibility and widths across tiers', () => {
+    const store = StateStore()
+    controller.init(store, null, null, null, null)
+
+    // Tier 1 (>= 200 cols): All 3 panels visible
+    store.setDimensions(220, 35)
+    store.setMode('chat')
+    assert.strictEqual(controller.isConversationVisible(), true)
+    assert.strictEqual(controller.getConversationWidth(), '40%')
+    assert.strictEqual(controller.isStreamVisible(), true)
+    assert.strictEqual(controller.getStreamWidth(), '40%')
+    assert.strictEqual(controller.isPlanVisible(), true)
+    assert.strictEqual(controller.getPlanWidth(), '20%')
+
+    // Tier 2 (160-199 cols) in chat mode: Chat + Stream visible, Plan hidden
+    store.setDimensions(180, 35)
+    store.setMode('chat')
+    assert.strictEqual(controller.isConversationVisible(), true)
+    assert.strictEqual(controller.getConversationWidth(), '50%')
+    assert.strictEqual(controller.isStreamVisible(), true)
+    assert.strictEqual(controller.getStreamWidth(), '50%')
+    assert.strictEqual(controller.isPlanVisible(), false)
+
+    // Tier 2 in plan mode (surfaced on d): Chat + Plan visible, Stream hidden
+    store.setMode('plan')
+    assert.strictEqual(controller.isConversationVisible(), true)
+    assert.strictEqual(controller.getConversationWidth(), '60%')
+    assert.strictEqual(controller.isStreamVisible(), false)
+    assert.strictEqual(controller.isPlanVisible(), true)
+    assert.strictEqual(controller.getPlanWidth(), '40%')
+
+    // Tier 3 (< 160 cols) in chat mode: Chat 100%, others hidden
+    store.setDimensions(120, 35)
+    store.setMode('chat')
+    assert.strictEqual(controller.isConversationVisible(), true)
+    assert.strictEqual(controller.getConversationWidth(), '100%')
+    assert.strictEqual(controller.isStreamVisible(), false)
+    assert.strictEqual(controller.isPlanVisible(), false)
+
+    // Tier 3 in stream mode: Stream 100%, others hidden
+    store.setMode('stream')
+    assert.strictEqual(controller.isConversationVisible(), false)
+    assert.strictEqual(controller.isStreamVisible(), true)
+    assert.strictEqual(controller.getStreamWidth(), '100%')
+    assert.strictEqual(controller.isPlanVisible(), false)
+
+    // Tier 3 in plan mode: Plan 100%, others hidden
+    store.setMode('plan')
+    assert.strictEqual(controller.isConversationVisible(), false)
+    assert.strictEqual(controller.isStreamVisible(), false)
+    assert.strictEqual(controller.isPlanVisible(), true)
+    assert.strictEqual(controller.getPlanWidth(), '100%')
   })
 
   it('injects system prompt on first turn input submit', () => {

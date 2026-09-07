@@ -175,6 +175,17 @@ const main = () => {
 
   const StateStore = stateStoreFactory()
   const store = StateStore(streamLog.append)
+  const updateDimensions = () => {
+    const cols = process.stdout.columns || 100
+    const rows = process.stdout.rows || 30
+    store.setDimensions(cols, rows)
+  }
+  updateDimensions()
+  process.stdout.on('resize', () => {
+    updateDimensions()
+    requestRedraw()
+  })
+
   const tail = streamLog.loadTail()
   if (tail.items?.length > 0) {
     store.hydrateFromStream(tail.items)

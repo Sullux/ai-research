@@ -3,11 +3,6 @@ const { refs } = require('./state')
 const { getLayoutTier } = require('./layout')
 const { copyToClipboard, getSelectedText } = require('./clipboard')
 
-const toggleOverlay = (store, key, tier, minTier) => {
-  store?.setMode(key)
-  if (tier >= minTier) store?.setOverlay(store.state.overlay === key ? null : key)
-}
-
 const scrollList = (store, delta) => {
   const mode = store?.state.mode
   const selKey = mode === 'chat' ? 'chat' : 'stream'
@@ -29,9 +24,33 @@ const scrollList = (store, delta) => {
 
 const normalModeRouter = KeyHandler({
   'ctrl+q': () => process.exit(0),
-  a: (ctx, e) => { e.stopPropagation(); refs.store?.setMode('chat'); refs.store?.setOverlay(null); ctx.redraw() },
-  s: (ctx, e) => { e.stopPropagation(); toggleOverlay(refs.store, 'stream', getLayoutTier(ctx.width), 3); ctx.redraw() },
-  d: (ctx, e) => { e.stopPropagation(); toggleOverlay(refs.store, 'plan', getLayoutTier(ctx.width), 2); ctx.redraw() },
+  a: (ctx, e) => {
+    e.stopPropagation()
+    refs.store?.setMode('chat')
+    ctx.redraw()
+  },
+  s: (ctx, e) => {
+    e.stopPropagation()
+    const curMode = refs.store?.state.mode
+    const tier = getLayoutTier()
+    if (tier === 3 && curMode === 'stream') {
+      refs.store?.setMode('chat')
+    } else {
+      refs.store?.setMode('stream')
+    }
+    ctx.redraw()
+  },
+  d: (ctx, e) => {
+    e.stopPropagation()
+    const curMode = refs.store?.state.mode
+    const tier = getLayoutTier()
+    if (tier >= 2 && curMode === 'plan') {
+      refs.store?.setMode('chat')
+    } else {
+      refs.store?.setMode('plan')
+    }
+    ctx.redraw()
+  },
   enter: (ctx, e) => {
     e.stopPropagation()
     refs.store?.setEditMode(true)
@@ -41,8 +60,10 @@ const normalModeRouter = KeyHandler({
   },
   escape: (ctx, e) => {
     e.stopPropagation()
-    if (refs.store?.state.overlay) {
-      refs.store.setOverlay(null)
+    const curMode = refs.store?.state.mode
+    const tier = getLayoutTier()
+    if (tier >= 2 && curMode !== 'chat') {
+      refs.store?.setMode('chat')
     } else {
       const p = !refs.store?.state.isPaused
       refs.store?.setPaused(p)

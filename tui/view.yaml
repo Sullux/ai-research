@@ -41,8 +41,9 @@ inner:
       # Left Column: Conversation + Pinned Input Box
       - type: layout
         direction: vertical
-        width: 40%
+        width: '@controller:getConversationWidth'
         height: fill
+        isVisible: '@controller:isConversationVisible'
         inner:
           # Scrollable Conversation Messages
           - type: border
@@ -83,9 +84,10 @@ inner:
       # Middle Column: Live Stream (Telemetry, Thoughts & Tools)
       - type: layout
         direction: vertical
-        width: 40%
+        width: '@controller:getStreamWidth'
         height: fill
-        margin: { left: 1 }
+        margin: '@controller:getStreamMargin'
+        isVisible: '@controller:isStreamVisible'
         inner:
           - type: border
             borderStyle: rounded
@@ -104,9 +106,10 @@ inner:
       # Right Column: Plan Stack & Task Tree
       - type: layout
         direction: vertical
-        width: 20%
+        width: '@controller:getPlanWidth'
         height: fill
-        margin: { left: 1 }
+        margin: '@controller:getPlanMargin'
+        isVisible: '@controller:isPlanVisible'
         inner:
           - type: border
             borderStyle: rounded
