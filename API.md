@@ -68,6 +68,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | `0x0007` | **`OP_SET_SYSTEM`** | Initialize and prefill session system prompt with instructions and abstract tool definitions (JSON). |
 | `0x0008` | **`OP_SNAPSHOT_SAVE`** | Request atomic working state checkpoint save (`path`, `stream_id`). |
 | `0x0009` | **`OP_SNAPSHOT_LOAD`** | Request working state restore from snapshot (`path`). |
+| `0x000A` | **`OP_RESUME`** | Continue decoding from an elastic yield (`STOP_ELASTIC_YIELD`) without new turn prefill. |
 | `0x000E` | **`OP_PING`** | Keepalive / round-trip latency probe. |
 | `0x000F` | **`OP_SHUTDOWN`** | Gracefully flush stores, release GPU memory, and exit. |
 
@@ -382,7 +383,22 @@ The engine formats the system prompt per the active model family's canonical cha
 
 ---
 
-### 4.13. `OP_STATUS` (`0x0106`) — Outbound Telemetry
+### 4.13. `OP_RESUME` (`0x000A`) — Inbound
+Resumes generation from a continuous streaming elastic yield (`STOP_ELASTIC_YIELD` / `0x04`) without injecting new turn boundaries or prefilling prompt tokens into the KV cache ring buffer.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       (Payload Length: 0)                     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+* **Payload Length:** `0` (header only).
+* **Behavior:** The engine picks up generation directly from the sampled token that triggered the yield (`last_yield_token`), continuing the in-flight model response without turn boundary mutation or KV cache duplication. If no yield state is pending, the engine immediately returns `OP_TURN_COMPLETE` with `STOP_END_OF_TURN`.
+
+---
+
+### 4.14. `OP_STATUS` (`0x0106`) — Outbound Telemetry
 Periodic telemetry frame reporting engine performance and resource states.
 
 ```

@@ -91,7 +91,7 @@ const SyntaxTracker = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null,
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -104,7 +104,7 @@ pub const Server = struct {
             const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
             hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null };
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null, .last_yield_token = null };
     }
     pub fn deinit(self: *Server) void {
         if (self.hippo) |*h| h.deinit();
@@ -165,6 +165,7 @@ pub const Server = struct {
             const hdr, const p = .{ frame.hdr, frame.payload }; defer if (p.len > 0) self.allocator.free(p);
             switch (hdr.opcode) {
                 protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
+                protocol.OP_RESUME => try self.handleResume(hdr.msg_id, &async_writer),
                 protocol.OP_TOOL_RETURN => try self.handleToolReturn(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
@@ -484,6 +485,7 @@ pub const Server = struct {
     fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
         if (payload.len < 8) return;
         self.is_aborted.store(false, .seq_cst);
+        self.last_yield_token = null;
         self.ring.markTurnBoundary(self.clock);
         const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
         if (self.clock == 0 and tokens.len > 0) {
@@ -500,11 +502,29 @@ pub const Server = struct {
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
 
+    fn handleResume(self: *Server, msg_id: u16, writer: anytype) !void {
+        self.is_aborted.store(false, .seq_cst);
+        const cur = self.last_yield_token orelse {
+            try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_END_OF_TURN);
+            const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+            const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+            try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
+            writer.flush();
+            return;
+        };
+        self.last_yield_token = null;
+
+        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
+    }
+
     fn handleToolReturn(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
         // Wire format:
         // [call_id: u16 LE] [status: u16 LE] [name_len: u16 LE] [name: bytes] [result_json: bytes]
         if (payload.len < 6) return;
         self.is_aborted.store(false, .seq_cst);
+        self.last_yield_token = null;
         const name_len = std.mem.readInt(u16, payload[4..6], .little);
         if (payload.len < 6 + name_len) return;
         const tool_name = payload[6 .. 6 + name_len];
@@ -765,8 +785,7 @@ pub const Server = struct {
 
                     if (should_yield_thinking) {
                         reason = protocol.STOP_ELASTIC_YIELD;
-                        _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-                        self.clock += 1;
+                        self.last_yield_token = self.advanceToken(cur, window_tokens);
                         break;
                     }
                 } else if (response_count >= 10) {
@@ -787,8 +806,7 @@ pub const Server = struct {
 
                     if (should_yield) {
                         reason = protocol.STOP_ELASTIC_YIELD;
-                        _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-                        self.clock += 1;
+                        self.last_yield_token = self.advanceToken(cur, window_tokens);
                         break;
                     }
                 }

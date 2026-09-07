@@ -9,6 +9,7 @@ const {
   configFrame,
   snapshotSaveFrame,
   snapshotLoadFrame,
+  resumeFrame,
   toolReturnFrame,
   pingFrame,
   parsedFrame,
@@ -23,6 +24,7 @@ const {
   OP_TOOL_RETURN,
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
+  OP_RESUME,
   OP_PING,
 } = require('../lib/protocol/constants')
 
@@ -88,6 +90,15 @@ test('snapshotSaveFrame and snapshotLoadFrame serialize properly', () => {
   assert.strictEqual(parsedLoad.header.opcode, OP_SNAPSHOT_LOAD)
   assert.strictEqual(parsedLoad.header.msgId, 6)
   assert.strictEqual(parsedLoad.payload.toString('utf-8'), '/tmp/snap.bin')
+})
+
+test('resumeFrame serializes properly with zero-length payload', () => {
+  const frame = resumeFrame(8)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_RESUME)
+  assert.strictEqual(parsed.header.msgId, 8)
+  assert.strictEqual(parsed.header.payloadLen, 0)
+  assert.strictEqual(parsed.payload.length, 0)
 })
 
 test('toolReturnFrame serializes properly', () => {

@@ -12,6 +12,7 @@ pub const OP_MEM_COMMIT: u16 = 0x0006;
 pub const OP_SET_SYSTEM: u16 = 0x0007;
 pub const OP_SNAPSHOT_SAVE: u16 = 0x0008;
 pub const OP_SNAPSHOT_LOAD: u16 = 0x0009;
+pub const OP_RESUME: u16 = 0x000A;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
 

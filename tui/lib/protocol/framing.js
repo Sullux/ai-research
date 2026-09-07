@@ -10,6 +10,7 @@ const {
   OP_SET_SYSTEM,
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
+  OP_RESUME,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -107,6 +108,8 @@ const snapshotLoadFrame = (snapPath, msgId = 1) => {
   return Buffer.concat([hdr, pathBytes])
 }
 
+const resumeFrame = (msgId = 1) => headerBuffer(OP_RESUME, msgId, 0)
+
 const toolReturnFrame = (toolName, result, callId = 1, status = 0, msgId = 1) => {
   const nameBytes = Buffer.from(toolName, 'utf-8')
   const jsonStr = typeof result === 'string' ? result : JSON.stringify(result)
@@ -144,6 +147,7 @@ module.exports = {
   setSystemFrame,
   pingFrame,
   shutdownFrame,
+  resumeFrame,
   memQueryFrame,
   toolReturnFrame,
   snapshotSaveFrame,

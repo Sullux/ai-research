@@ -6,7 +6,7 @@ const {
   OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
 } = require('../protocol/constants')
 const {
-  streamInputFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
+  streamInputFrame, resumeFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
   snapshotSaveFrame, snapshotLoadFrame, toolReturnFrame, parsedFrame,
 } = require('../protocol/framing')
 
@@ -85,6 +85,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     return id
   }
 
+  const sendResume = () => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(resumeFrame(id))
+    return id
+  }
+
   const sendAbort = () => {
     if (proc?.stdin?.writable) proc.stdin.write(abortFrame(nextMsgId++))
   }
@@ -155,6 +161,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   return {
     start,
     sendInput,
+    sendResume,
     sendSystem,
     sendToolReturn,
     sendSnapshotSave,

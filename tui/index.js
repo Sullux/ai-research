@@ -15,7 +15,7 @@ const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
 const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD } = require('./lib/protocol/constants')
-const { formatNotificationInterrupt, formatContinuationNudge, formatBacklogResumeNudge } = require('./lib/template')
+const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
 const STATUS_NAMES = [
@@ -446,11 +446,9 @@ const main = () => {
         store.setGenerating(true)
         client.sendInput(interruptNudge)
       } else {
-        // No new unserviced interruption: seamless autonomous continuation
-        // If yielded in thought, continue generating seamlessly inside or outside channel
-        const continuation = isThinking ? '<|turn>model\n<|channel>thought\n' : formatContinuationNudge()
+        // No new unserviced interruption: seamless autonomous continuation via binary protocol
         store.setGenerating(true)
-        client.sendInput(continuation)
+        client.sendResume()
       }
       requestRedraw()
       return
