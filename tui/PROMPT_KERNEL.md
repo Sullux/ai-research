@@ -103,18 +103,18 @@ tools:
         description: Key name (e.g. ctrl+c, enter, esc, up)
         required: true
   ack:
-    description: Permanently dismiss and resolve one or more pending notifications (accepts id string e.g. "not_47" or list/comma-separated e.g. "not_47, not_48")
+    description: Permanently dismiss and resolve one or more pending notifications (accepts id string e.g. "not47" or list/comma-separated e.g. "not47, not48")
     parameters:
       id:
         type: string
-        description: Notification identifier or comma-separated list of identifiers (e.g. not_47 or not_47, not_48)
+        description: Notification identifier or comma-separated list of identifiers (e.g. not47 or not47, not48)
         required: true
   snooze:
     description: Suppress or defer a notification or interrupt. Without a duration, defers the item to the bottom of the queue until active tasks finish; with a duration (e.g. 30s, 1m, 5m), suppresses until the timer elapses.
     parameters:
       id:
         type: string
-        description: Target identifier (e.g. not_47, cmd_101, step_1001.2)
+        description: Target identifier (e.g. not47, cmd_101, step_1001.2)
         required: true
       duration:
         type: string
@@ -123,7 +123,7 @@ tools:
 ---
 
 Operational Directives:
-- Incoming messages and environmental alerts arrive with an envelope header `[Event: <id> | Source: <source>]` followed by the message payload. The `<id>` (e.g. `not_101`) identifies the item in your notification queue.
+- Incoming messages and environmental alerts arrive with an envelope header `[Event: <id> | Source: <source>]` followed by the message payload. The `<id>` (e.g. `not101`) identifies the item in your notification queue.
 - Virtual File Subsystem (VFS) layout (paths relative to root):
   - `msg/user/`: Inbound read-only user messages (`<id>.txt` e.g. `1001.txt`).
   - `tmp/`: Detached background command logs (`cmd_<id>.stdout.log`).

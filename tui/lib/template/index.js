@@ -79,14 +79,6 @@ const formatTruncatedTurn = (userText, eventId, relPath) => [
   `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Inspect full content using the read tool with path "${relPath}" and offset 0 before answering.\nNext action:\n`,
 ].join('\n')
 
-const formatServicingCompletionNudge = (notItem) => [
-  '<|turn>model',
-  '<|channel>thought',
-  `Notice: Notification "${notItem.id}" remains active.`,
-  `- Dismiss notification "${notItem.id}" using the ack tool, or defer it using the snooze tool.`,
-  'Next action:',
-].join('\n') + '\n'
-
 module.exports = {
   formatTurn1,
   formatUserTurn,
@@ -97,5 +89,4 @@ module.exports = {
   formatResumeAfterInterrupt,
   formatBacklogResumeNudge,
   formatNotificationInterrupt,
-  formatServicingCompletionNudge,
 }

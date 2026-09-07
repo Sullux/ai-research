@@ -18,7 +18,7 @@ const notificationManagerFactory = (now) => (timers) => {
 
   const notify = (source, preview, refId = null, extra = {}) => {
     notCounter += 1
-    const id = `not_${notCounter}`
+    const id = `not${notCounter}`
     const item = {
       id,
       source, // e.g. '/msg/user/1042.txt' or '/sys/cmd/cmd_101'
@@ -150,7 +150,7 @@ const notificationManagerFactory = (now) => (timers) => {
   const getSnoozed = () => Array.from(snoozed.values())
 
   const formatTurnAlerts = () => {
-    const list = getPending()
+    const list = getUnserviced()
     if (list.length === 0) return ''
     const lines = list.map((item) => `  - [Event: ${item.id} | Source: ${item.source}]: ${item.preview}`)
     return `[Pending Alerts:\n${lines.join('\n')}\n]\n\n`

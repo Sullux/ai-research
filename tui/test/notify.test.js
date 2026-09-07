@@ -16,9 +16,9 @@ describe('NotificationManager (Interrupt Queue)', () => {
     timers.clearAll()
   })
 
-  it('enqueues pending notification with not_ prefix', () => {
+  it('enqueues pending notification with not prefix without underscore', () => {
     const item = notManager.notify('/msg/user/1042.txt', 'DB down', '1042')
-    assert.strictEqual(item.id, 'not_101')
+    assert.strictEqual(item.id, 'not101')
     assert.strictEqual(item.status, 'PENDING')
     assert.strictEqual(notManager.getPending().length, 1)
   })
@@ -29,8 +29,8 @@ describe('NotificationManager (Interrupt Queue)', () => {
 
     const rollup = notManager.formatTurnAlerts()
     assert.ok(rollup.includes('[Pending Alerts:'))
-    assert.ok(rollup.includes('[Event: not_101 | Source: /msg/user/1042.txt]: DB down'))
-    assert.ok(rollup.includes('[Event: not_102 | Source: /sys/cmd/cmd_101]: Build ok'))
+    assert.ok(rollup.includes('[Event: not101 | Source: /msg/user/1042.txt]: DB down'))
+    assert.ok(rollup.includes('[Event: not102 | Source: /sys/cmd/cmd_101]: Build ok'))
   })
 
   it('ack() permanently removes notification from pending queue', () => {

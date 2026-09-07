@@ -15,7 +15,7 @@ This document specifies the **Streaming Tooling & Virtual File Subsystem (VFS)**
 - Fixed-window notification previews (~32 tokens) that eliminate the latency tax on small inputs while shielding the KV cache from large document blowouts.
 - An opinionated, capped `read` tool ($\le 512$ characters / ~128 tokens) enforcing bite-sized ingestion.
 - A dual-mode command execution engine separating fast subshells ($\le 250\text{ ms}$) from persistent interactive PTY sessions.
-- An asynchronous interrupt controller featuring `ack()` and `snooze()` with uniform, typed semantic string IDs (`not_`, `cmd_`, `step_`, `trm_`, `msg_`).
+- An asynchronous interrupt controller featuring `ack()` and `snooze()` with uniform, typed semantic string IDs (`not`, `cmd_`, `step_`, `trm_`, `msg_`).
 
 ---
 
@@ -69,9 +69,9 @@ graph TD
 │   └── cmd_102.stdout.log
 └── notify/
     ├── pending/
-    │   └── not_47               <-- Active interrupt descriptor
+    │   └── not47               <-- Active interrupt descriptor
     └── snoozed/
-        └── not_48               <-- Suppressed until timer wake
+        └── not48               <-- Suppressed until timer wake
 ```
 
 ### OS Security & Access Guarantees
@@ -112,7 +112,7 @@ sequenceDiagram
 When the message fits entirely within the 32-token preview budget:
 ```
 <|turn>user
-[Event: not_101 | Source: msg/user/msg_1041.txt]
+[Event: not101 | Source: msg/user/msg_1041.txt]
 Please check if the test suite passes on the latest commit.
 <turn|>
 ```
@@ -124,7 +124,7 @@ Please check if the test suite passes on the latest commit.
 When a user pastes a large document, stack trace, or database schema:
 ```
 <|turn>user
-[Event: not_102 | Source: msg/user/msg_1042.txt | 1,840 tok | read: msg/user/msg_1042.txt]
+[Event: not102 | Source: msg/user/msg_1042.txt | 1,840 tok | read: msg/user/msg_1042.txt]
 CREATE TABLE users (id UUID PRIMARY KEY, email TEXT UNIQUE... [Truncated. Use read({ path: "msg/user/msg_1042.txt" }) to inspect full content]
 <turn|>
 ```
@@ -139,7 +139,7 @@ To prevent cross-namespace collisions and eliminate hallucination in small model
 
 | Prefix | Resource Type | Example | Consumer Tools |
 | :--- | :--- | :--- | :--- |
-| **`not_`** | Notification / Interrupt | `not_47` | `ack("not_47")`, `snooze("not_47", "2m")` |
+| **`not`** | Notification / Interrupt | `not47` | `ack("not47")`, `snooze("not47", "2m")` |
 | **`cmd_`** | Ephemeral Subshell Command | `cmd_101` | `cmd_kill("cmd_101")`, `snooze("cmd_101", "1m")` |
 | **`plan_`** | Hierarchical Macro Plan | `plan_1001` | `plan(...)` |
 | **`step_`** | Discrete Plan Step | `step_1001.2` | `done("step_1001.2")`, `snooze("step_1001.2", "5m")` |
@@ -164,8 +164,8 @@ flowchart TD
     Timer -- No --> Detach["Async Detach: Return { id: 'cmd_101', status: 'running' }"]
     Detach --> Running{"Process State"}
     
-    Running -- Exits before reminder --> CompleteAlert["🔔 Completion Alert: not_48 (code 0)"]
-    Running -- Exceeds remind timer --> ProgressAlert["🔔 Progress Heartbeat: not_49 (running 1m)"]
+    Running -- Exits before reminder --> CompleteAlert["🔔 Completion Alert: not48 (code 0)"]
+    Running -- Exceeds remind timer --> ProgressAlert["🔔 Progress Heartbeat: not49 (running 1m)"]
 ```
 
 ### 1. Ephemeral Commands: `cmd(command, [remind="1m"])`
@@ -241,15 +241,15 @@ stateDiagram-v2
 2. **`snooze(id, [duration="1m"])` (Temporary Suppression)**:
    - Suppresses the alert from the turn header for the specified duration.
    - Automatically re-queues the alert when the timer elapses.
-   - Unified target: Can snooze notification IDs (`not_47`), command IDs (`cmd_101`), or plan step IDs (`step_1001.2`).
+   - Unified target: Can snooze notification IDs (`not47`), command IDs (`cmd_101`), or plan step IDs (`step_1001.2`).
    - Use case: *"I see the build is still running / the user sent a secondary note, but I am in the middle of writing a function. Remind me in 1 minute."*
 
 3. **Turn Header Injection**:
    Every turn begins with an alert rollup until all pending notifications are cleared:
    ```
    [🔔 PENDING ALERTS:
-     - not_47 (msg_1042): "Secondary DB offline"
-     - not_48 (cmd_101): "zig build test" exited with code 0]
+     - not47 (msg_1042): "Secondary DB offline"
+     - not48 (cmd_101): "zig build test" exited with code 0]
    ```
 
 ---
@@ -302,12 +302,12 @@ Sends symbolic control keys or escape sequences to a persistent PTY.
 ### `ack(id)`
 Permanently dismisses a pending alert.
 - **Parameters**:
-  - `id` (string, required): Alert identifier (`"not_47"`).
+  - `id` (string, required): Alert identifier (`"not47"`).
 
 ### `snooze(id, [duration="1m"])`
 Suppresses an alert, command reminder, or plan step until a timer elapses.
 - **Parameters**:
-  - `id` (string, required): Identifier (`"not_47"`, `"cmd_101"`, `"step_1001.2"`).
+  - `id` (string, required): Identifier (`"not47"`, `"cmd_101"`, `"step_1001.2"`).
   - `duration` (string, optional, default: `"1m"`): Delay window (`"30s"`, `"2m"`, `"1h"`).
 
 ### `plan(brief, steps)`

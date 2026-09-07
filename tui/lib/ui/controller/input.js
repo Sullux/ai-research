@@ -21,6 +21,10 @@ const onSubmitInput = (ctx, payload) => {
     refs.store.flushActiveThought()
   }
 
+  // If currently generating an assistant response, stage this message as pendingInterjection
+  // so the conversation view preserves causal sequence (Response 1 -> Interjection -> Response 2).
+  const isGeneratingResponse = Boolean(refs.store?.state?.activeResponse)
+
   // VFS message persistence & notification generation
   let turnHeader = ''
   let turnBody = val
@@ -29,9 +33,9 @@ const onSubmitInput = (ctx, payload) => {
   if (refs.vfs) {
     savedMsg = refs.vfs.saveUserMessage(val)
 
-    // If an existing turn is currently active, mark it as SUSPENDED (interrupted in-flight)
+    // If an existing turn is currently active and user barges in, mark it as SUSPENDED
     // so it is not treated as an unserviced emergency on micro-bursts, but can be cleanly resumed later.
-    if (refs.activeTurnNotificationId) {
+    if (refs.activeTurnNotificationId && isGeneratingResponse) {
       refs.notManager?.suspend(refs.activeTurnNotificationId)
     }
 
@@ -41,7 +45,13 @@ const onSubmitInput = (ctx, payload) => {
       savedMsg.id,
       { isTurnContext: true, isTruncated: savedMsg.isTruncated },
     )
-    refs.activeTurnNotificationId = notItem?.id || null
+    if (!isGeneratingResponse && notItem) {
+      refs.notManager?.markServicing(notItem.id)
+      refs.activeTurnNotificationId = notItem.id
+    } else if (notItem) {
+      // Barge-in during active response: remains PENDING until picked up at elastic yield
+      refs.activeTurnNotificationId = notItem.id
+    }
     eventId = notItem?.id || savedMsg.id
     if (savedMsg.isTruncated) {
       turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath} | ${savedMsg.tokenCount} tok | read: ${savedMsg.relPath}]\n`
@@ -51,10 +61,6 @@ const onSubmitInput = (ctx, payload) => {
       turnBody = savedMsg.payload
     }
   }
-
-  // If currently generating an assistant response, stage this message as pendingInterjection
-  // so the conversation view preserves causal sequence (Response 1 -> Interjection -> Response 2).
-  const isGeneratingResponse = Boolean(refs.store?.state?.activeResponse)
 
   const turnContent = `${turnHeader}${turnBody}`
   refs.store?.pushHistory(val)

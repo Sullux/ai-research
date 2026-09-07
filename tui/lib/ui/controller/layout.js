@@ -20,7 +20,7 @@ const getStatusText = () => {
   if (!refs.store) return 'Status: Ready'
   const state = refs.store.state
   const pausedTag = state.isPaused ? ' [⏸️ PAUSED]' : ''
-  const pendingCount = refs.notManager?.getPending?.()?.length || 0
+  const pendingCount = refs.notManager?.getUnserviced?.()?.length || 0
   const alertsTag = pendingCount > 0 ? ` | [🔔 ${pendingCount} ALERTS]` : ''
   return ` ${state.status}${pausedTag}${alertsTag}`
 }

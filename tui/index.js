@@ -15,7 +15,7 @@ const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
 const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD, STOP_TOOL_CALL } = require('./lib/protocol/constants')
-const { formatNotificationInterrupt, formatBacklogResumeNudge, formatServicingCompletionNudge } = require('./lib/template')
+const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
 const STATUS_NAMES = [
@@ -439,7 +439,7 @@ const main = () => {
       store.flushActiveResponse()
     }
 
-    if (reason !== STOP_TOOL_CALL) {
+    if (reason !== STOP_TOOL_CALL && reason !== STOP_ELASTIC_YIELD) {
       store.setGenerating(false)
       store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
     }
@@ -450,6 +450,7 @@ const main = () => {
         // High-priority external interrupt arrived mid-stream!
         const topInterrupt = unserviced[0]
         notManager.markServicing(topInterrupt.id)
+        if (controller.refs) controller.refs.activeTurnNotificationId = topInterrupt.id
         const interruptNudge = formatNotificationInterrupt(topInterrupt)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
@@ -489,6 +490,7 @@ const main = () => {
       if (remainingUnserviced.length > 0) {
         const nextAlert = remainingUnserviced[0]
         notManager.markServicing(nextAlert.id)
+        if (controller.refs) controller.refs.activeTurnNotificationId = nextAlert.id
         const interruptNudge = formatNotificationInterrupt(nextAlert)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
@@ -501,6 +503,7 @@ const main = () => {
       if (suspended.length > 0) {
         const nextSuspended = suspended[0]
         notManager.markServicing(nextSuspended.id)
+        if (controller.refs) controller.refs.activeTurnNotificationId = nextSuspended.id
         const resumeNudge = formatBacklogResumeNudge(nextSuspended)
         store.setGenerating(true)
         client.sendInput(resumeNudge)
@@ -514,20 +517,10 @@ const main = () => {
         const nextDeferred = deferred[0]
         nextDeferred.isDeferred = false
         notManager.markServicing(nextDeferred.id)
+        if (controller.refs) controller.refs.activeTurnNotificationId = nextDeferred.id
         const interruptNudge = formatNotificationInterrupt(nextDeferred)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
-        requestRedraw()
-        return
-      }
-
-      // Check for notifications that remain in SERVICING state without being acknowledged or snoozed
-      const servicing = notManager.getServicing()
-      if (servicing.length > 0) {
-        const nextServicing = servicing[0]
-        const completionNudge = formatServicingCompletionNudge(nextServicing)
-        store.setGenerating(true)
-        client.sendInput(completionNudge)
         requestRedraw()
         return
       }
