@@ -161,6 +161,12 @@ const stateStoreFactory = () => (onStreamItem) => {
     addConversationMessage(msg)
   }
 
+  const clearActiveResponse = () => {
+    state.activeResponse = ''
+    state.activeResponseTime = 0
+    state.activeResponseExpanded = false
+  }
+
   const flushActiveResponse = () => {
     if (state.activeResponse) {
       const text = state.activeResponse
@@ -225,6 +231,7 @@ const stateStoreFactory = () => (onStreamItem) => {
     appendActiveThought,
     flushActiveThought,
     appendActiveResponse,
+    clearActiveResponse,
     flushActiveResponse,
     setStatus,
     setGenerating,

@@ -425,7 +425,13 @@ const main = () => {
 
     if (reason !== STOP_ELASTIC_YIELD || unserviced.length > 0) {
       store.flushActiveThought()
-      store.flushActiveResponse()
+      const activePending = activeTurnId ? notManager.getPending().find(a => a.id === activeTurnId) : null
+      if (reason === STOP_END_OF_TURN && activePending?.extra?.isTruncated) {
+        // Drop uninspected truncated response before flushing to conversation
+        store.clearActiveResponse()
+      } else {
+        store.flushActiveResponse()
+      }
       isThinking = false
     } else if (!isThinking && store.state.pendingInterjection) {
       // An interjection is waiting and we reached an elastic rest point: flush active response
@@ -458,7 +464,21 @@ const main = () => {
 
     // 2. Explicit Turn Completion (<turn|>)
     if (reason === STOP_END_OF_TURN) {
-      // Auto-ACK the active turn notification
+      // Check if the active turn was a truncated notification that hasn't been inspected or resolved
+      const activePending = activeTurnId ? notManager.getPending().find(a => a.id === activeTurnId) : null
+      if (activePending?.extra?.isTruncated) {
+        // Enforce invariant: do NOT deliver conversational answers for uninspected truncated turns.
+        // Drop any active speculative response from the conversation panel.
+        store.clearActiveResponse()
+
+        const nudge = formatNotificationInterrupt(activePending)
+        store.setGenerating(true)
+        client.sendInput(nudge)
+        requestRedraw()
+        return
+      }
+
+      // Auto-ACK the active turn notification if it completed cleanly
       if (activeTurnId) {
         notManager.ack(activeTurnId)
         if (controller.refs) controller.refs.activeTurnNotificationId = null

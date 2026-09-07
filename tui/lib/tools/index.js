@@ -50,7 +50,15 @@ const toolRegistryFactory = () => (vfs, cmdRunner, trmManager, notManager, clien
       if (!vfs) return { error: 'No VFS available' }
       const path = args.path || args.file || ''
       const offset = args.offset || 0
-      return vfs.read(path, offset)
+      const res = vfs.read(path, offset)
+      // If reading a user message file from msg/user/<seq>.txt, acknowledge the corresponding turn notification
+      if (notManager && path.startsWith('msg/user/')) {
+        const alerts = notManager.getPending().filter(a => a.source === path || a.source === `/${path}`)
+        for (const a of alerts) {
+          notManager.ack(a.id)
+        }
+      }
+      return res
     },
 
     // Ephemeral Subshell Command
