@@ -17,19 +17,19 @@ describe('NotificationManager (Interrupt Queue)', () => {
   })
 
   it('enqueues pending notification with not_ prefix', () => {
-    const item = notManager.notify('/msg/user/msg_1042.txt', 'DB down', 'msg_1042')
+    const item = notManager.notify('/msg/user/1042.txt', 'DB down', '1042')
     assert.strictEqual(item.id, 'not_101')
     assert.strictEqual(item.status, 'PENDING')
     assert.strictEqual(notManager.getPending().length, 1)
   })
 
   it('formats turn alerts rollup correctly', () => {
-    notManager.notify('/msg/user/msg_1042.txt', 'DB down', 'msg_1042')
+    notManager.notify('/msg/user/1042.txt', 'DB down', '1042')
     notManager.notify('/sys/cmd/cmd_101', 'Build ok', 'cmd_101')
 
     const rollup = notManager.formatTurnAlerts()
     assert.ok(rollup.includes('[Pending Alerts:'))
-    assert.ok(rollup.includes('[Event: not_101 | Source: /msg/user/msg_1042.txt]: DB down'))
+    assert.ok(rollup.includes('[Event: not_101 | Source: /msg/user/1042.txt]: DB down'))
     assert.ok(rollup.includes('[Event: not_102 | Source: /sys/cmd/cmd_101]: Build ok'))
   })
 

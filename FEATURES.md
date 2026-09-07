@@ -157,7 +157,7 @@ graph LR
   - Non-blocking notification queue governing user messages, command exits, and timers.
   - `ack(id)`: Permanently dismisses alerts and cleans ephemeral logs.
   - `snooze(id, duration)`: Temporarily suppresses alerts or plan steps (`step_1001.2`), waking them up after a timer expires.
-* **Uniform Prefixed String IDs**: Typed semantic identifiers (`not_`, `cmd_`, `step_`, `trm_`, `msg_`) prevent namespace collisions and eliminate tokenization hallucinations.
+* **Uniform Prefixed String IDs**: Typed semantic identifiers (`not_`, `cmd_`, `step_`, `trm_`) prevent namespace collisions, while inbound user messages use clean numerical IDs (`msg/user/<id>.txt`) to eliminate separator confusion and tokenization stutter.
 
 ---
 

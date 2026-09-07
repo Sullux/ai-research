@@ -77,7 +77,7 @@ describe('ToolRegistry (Streaming & VFS Tools)', () => {
   })
 
   it('executes ack and snooze tools on notifications', () => {
-    const item = notManager.notify('/msg/user/msg_1042.txt', 'DB down', 'msg_1042')
+    const item = notManager.notify('/msg/user/1042.txt', 'DB down', '1042')
     assert.strictEqual(notManager.getPending().length, 1)
 
     const ackRes = notManager.ack(item.id)

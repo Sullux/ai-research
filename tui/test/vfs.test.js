@@ -28,7 +28,7 @@ describe('Vfs (Virtual File Subsystem)', () => {
 
   it('saves user messages and enforces read-only (chmod 0444)', () => {
     const res = vfs.saveUserMessage('Hello world, please check status.')
-    assert.strictEqual(res.id, 'msg_1001')
+    assert.strictEqual(res.id, '1001')
     assert.strictEqual(res.isTruncated, false)
     assert.strictEqual(res.preview, 'Hello world, please check status.')
     assert.strictEqual(fs.existsSync(res.path), true)

@@ -14,7 +14,7 @@ const vfsFactory = () => (rootDir) => {
       if (fs.existsSync(userDir)) {
         const files = fs.readdirSync(userDir)
         for (const file of files) {
-          const m = file.match(/^msg_(\d+)\.txt$/)
+          const m = file.match(/^(\d+)\.txt$/)
           if (m) {
             const seq = parseInt(m[1], 10)
             if (seq > msgCounter) {
@@ -60,7 +60,7 @@ const vfsFactory = () => (rootDir) => {
   const saveUserMessage = (text) => {
     init()
     msgCounter += 1
-    const id = `msg_${msgCounter}`
+    const id = `${msgCounter}`
     const fileName = `${id}.txt`
     const filePath = path.join(root, 'msg', 'user', fileName)
 

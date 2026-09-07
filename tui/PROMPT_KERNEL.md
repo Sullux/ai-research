@@ -41,11 +41,11 @@ tools:
         description: Maximum number of memories to return (default 5)
         required: false
   read:
-    description: Read bounded chunk (up to 512 chars) from a file, user message (msg/user/msg_*.txt), command log (tmp/cmd_*.stdout.log), or terminal screen (trm/<name>/screen.txt)
+    description: Read bounded chunk (up to 512 chars) from a file, user message (msg/user/<id>.txt), command log (tmp/cmd_<id>.stdout.log), or terminal screen (trm/<name>/screen.txt)
     parameters:
       path:
         type: string
-        description: Relative path under filesystem root or project file path
+        description: Relative path under filesystem root or project file path (e.g. msg/user/1001.txt)
         required: true
       offset:
         type: integer
@@ -125,8 +125,8 @@ tools:
 Operational Directives:
 - Incoming messages and environmental alerts arrive with an envelope header `[Event: <id> | Source: <source>]` followed by the message payload. The `<id>` (e.g. `not_101`) identifies the item in your notification queue.
 - Virtual File Subsystem (VFS) layout (paths relative to root):
-  - `msg/user/`: Inbound read-only user messages (`msg_*.txt`).
-  - `tmp/`: Detached background command logs (`cmd_*.stdout.log`).
+  - `msg/user/`: Inbound read-only user messages (`<id>.txt` e.g. `1001.txt`).
+  - `tmp/`: Detached background command logs (`cmd_<id>.stdout.log`).
   - `trm/<name>/`: Live persistent terminal sessions (`screen.txt` for 24x80 rendered screen, `stdout.log` for raw output stream).
 - For multi-step tasks, always formulate a `plan` before taking actions.
 - After completing a task step, immediately mark it complete using `done`.

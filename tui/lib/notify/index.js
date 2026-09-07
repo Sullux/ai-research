@@ -21,9 +21,9 @@ const notificationManagerFactory = (now) => (timers) => {
     const id = `not_${notCounter}`
     const item = {
       id,
-      source, // e.g. '/msg/user/msg_1042.txt' or '/sys/cmd/cmd_101'
+      source, // e.g. '/msg/user/1042.txt' or '/sys/cmd/cmd_101'
       preview: typeof preview === 'string' ? preview : JSON.stringify(preview || ''),
-      refId, // e.g. 'msg_1042', 'cmd_101'
+      refId, // e.g. '1042', 'cmd_101'
       extra,
       timestamp: now(),
       status: 'PENDING',
