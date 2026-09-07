@@ -17,7 +17,7 @@ const formatUserDecisionTurn = (userText, waitingTasks = []) => {
     waitingLines,
     '',
     'Decision:',
-    "1. If user's message fulfills an awaiting task, resume that task or call tool `done`.",
+    "1. If user's message fulfills an awaiting task, resume that task or complete it using the done tool.",
     '2. If user provided a new unrelated instruction, prioritize answering/planning it.',
     '3. If user cancelled a task, mark it complete/aborted.',
     'Next action:',
@@ -52,8 +52,8 @@ const formatBacklogResumeNudge = (notItem) => [
   '<|turn>model',
   '<|channel>thought',
   `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
-  `- If already satisfied or incorporated into previous answers: dismiss by calling tool \`ack\` with id "${notItem.id}".`,
-  `- If pending work remains: address or continue it now, then call tool \`ack\` with id "${notItem.id}".`,
+  `- If already satisfied or incorporated into previous answers: dismiss notification "${notItem.id}" using the ack tool.`,
+  `- If pending work remains: address or continue it now, then dismiss notification "${notItem.id}" using the ack tool.`,
   'Next action:',
 ].join('\n') + '\n'
 
@@ -67,23 +67,23 @@ const formatNotificationInterrupt = (notItem) => {
   ]
   if (isTruncated) {
     lines.push(`Input event ${notItem.id} is truncated.`)
-    lines.push(`Required action: You must call tool \`read\` with path "${notItem.source}" and offset 0 to inspect the full content, tool \`snooze\` to defer, or tool \`ack\` to dismiss before proceeding.`)
+    lines.push(`Required action: Inspect full content using the read tool with path "${notItem.source}" and offset 0, defer using the snooze tool, or dismiss using the ack tool.`)
   } else {
-    lines.push(`Evaluate interrupt: execute immediate action, call tool \`snooze\` with id "${notItem.id}" to defer, or call tool \`ack\` with id "${notItem.id}" when addressed.`)
+    lines.push(`Evaluate interrupt: execute immediate action, defer using the snooze tool, or dismiss notification "${notItem.id}" using the ack tool.`)
   }
   lines.push('Next action:')
   return lines.join('\n') + '\n'
 }
 
 const formatTruncatedTurn = (userText, eventId, relPath) => [
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Call tool \`read\` with path "${relPath}" and offset 0 to inspect before answering.\nNext action:\n`,
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Inspect full content using the read tool with path "${relPath}" and offset 0 before answering.\nNext action:\n`,
 ].join('\n')
 
 const formatServicingCompletionNudge = (notItem) => [
   '<|turn>model',
   '<|channel>thought',
   `Notice: Notification "${notItem.id}" remains active.`,
-  `- Call tool \`ack\` with id "${notItem.id}" to dismiss, or tool \`snooze\` with id "${notItem.id}" to defer.`,
+  `- Dismiss notification "${notItem.id}" using the ack tool, or defer it using the snooze tool.`,
   'Next action:',
 ].join('\n') + '\n'
 

@@ -153,7 +153,7 @@ const orchestratorFactory = (now) => (timers) => {
   const buildThoughtPrefix = (type, meta = {}) => {
     const waiting = getWaitingForUserTasks()
     const satNotice = saturated
-      ? '\n[Working memory capacity threshold reached. Consolidate current progress, state, and remaining milestones using tool `plan` now.]\n'
+      ? '\n[Working memory capacity threshold reached. Consolidate current progress, state, and remaining milestones using the plan tool now.]\n'
       : ''
 
     if (type === 'USER_PROMPT') {
