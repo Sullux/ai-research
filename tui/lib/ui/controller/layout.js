@@ -2,19 +2,19 @@ const { refs } = require('./state')
 
 const getLayoutTier = (cols) => {
   const width = cols || refs.store?.state?.dimensions?.cols || (typeof process !== 'undefined' && process.stdout?.columns) || 100
-  if (width >= 200) return 1
-  if (width >= 160) return 2
+  if (width >= 160) return 1
+  if (width >= 120) return 2
   return 3
 }
 
 const isClipped = (cols, rows) => {
   const c = cols || refs.store?.state?.dimensions?.cols || (typeof process !== 'undefined' && process.stdout?.columns) || 100
   const r = rows || refs.store?.state?.dimensions?.rows || (typeof process !== 'undefined' && process.stdout?.rows) || 30
-  return c < 80 || r < 30
+  return c < 60 || r < 30
 }
 
 const getClippedBanner = () =>
-  ' ⚠️  TERMINAL TOO SMALL (Minimum 80x30 required) — CONTENT CLIPPED '
+  ' ⚠️  TERMINAL TOO SMALL (Minimum 60x30 required) — CONTENT CLIPPED '
 
 const isConversationVisible = () => {
   const tier = getLayoutTier()

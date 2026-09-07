@@ -213,7 +213,7 @@ The frontend client leverages `@sullux/tui` to provide a real-time, responsive m
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ TIER 1 (≥ 200 cols): Full Tri-Pane View (40% Conversation / 40% Stream / 20% Plan)     │
+│ TIER 1 (≥ 160 cols): Full Tri-Pane View (40% Conversation / 40% Stream / 20% Plan)     │
 ├──────────────────────────────┬──────────────────────────────┬──────────────────────────┤
 │ 💬 CONVERSATION (40%)        │ ⚡ LIVE STREAM (40%)         │ 📋 PLAN STACK (20%)      │
 │                              │                              │                          │
@@ -248,17 +248,17 @@ To eliminate clutter in the conversational view while retaining 100% observabili
 
 ### C. Responsive Real Estate & Overlay Modes
 
-The TUI dynamically recalculates its column layout on terminal resize events (`SIGWINCH`):
+The TUI dynamically recalculates its column layout on terminal resize events (`SIGWINCH`) based on minimum widths of **60 cols** Conversation, **60 cols** Live Stream, and **40 cols** Plan Stack:
 
-1. **Tier 1 (≥ 200 cols):** Full Tri-Pane View (`40%` Conversation / `40%` Live Stream / `20%` Plan Stack).
-2. **Tier 2 (160–199 cols):** Dual-Pane View (`50%` Conversation / `50%` Live Stream).
-   - The Plan Stack is hidden. Pressing **`d`** pops up the Plan Stack as a floating centered overlay modal.
-3. **Tier 3 (< 160 cols):** Single-Pane Focused View (`100%` Conversation).
-   - Both Live Stream and Plan Stack are hidden. Pressing **`s`** opens the Live Stream overlay; pressing **`d`** opens the Plan Stack overlay.
+1. **Tier 1 (≥ 160 cols):** Full Tri-Pane View (`40%` Conversation / `40%` Live Stream / `20%` Plan Stack).
+2. **Tier 2 (120–159 cols):** Dual-Pane View (`50%` Conversation / `50%` Live Stream).
+   - The Plan Stack is hidden by default. Pressing **`d`** surfaces the Plan Stack (`40%`) alongside Conversation (`60%`) while hiding Stream. Pressing **`a`** or **`s`** returns to Conversation + Stream.
+3. **Tier 3 (< 120 cols):** Single-Pane Focused View (`100%` width).
+   - Focused panel takes full width (`100%`). Default is Conversation; pressing **`s`** surfaces Stream; pressing **`d`** surfaces Plan; pressing **`a`** or **`Enter`** returns to Conversation.
 4. **Hard Minima & Clipping HUD:**
-   - Minimum supported terminal dimensions: **80 columns $\times$ 30 rows**.
-   - If terminal width $< 80$ or height $< 30$, a high-contrast inverted status banner is rendered at the bottom:
-     `⚠️ TERMINAL TOO SMALL (Min 80x30) — CONTENT CLIPPED`.
+   - Minimum supported terminal dimensions: **60 columns $\times$ 30 rows**.
+   - If terminal width $< 60$ or height $< 30$, a high-contrast status banner is rendered at the bottom:
+     `⚠️ TERMINAL TOO SMALL (Minimum 60x30 required) — CONTENT CLIPPED`.
 
 ---
 

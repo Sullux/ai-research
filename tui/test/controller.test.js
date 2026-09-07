@@ -6,15 +6,15 @@ const { Orchestrator } = require('../lib/orchestrator')
 
 describe('UI Controller & Layout Tiering', () => {
   it('computes layout tier based on terminal width', () => {
-    assert.strictEqual(controller.getLayoutTier(220), 1)
-    assert.strictEqual(controller.getLayoutTier(180), 2)
-    assert.strictEqual(controller.getLayoutTier(120), 3)
+    assert.strictEqual(controller.getLayoutTier(180), 1)
+    assert.strictEqual(controller.getLayoutTier(140), 2)
+    assert.strictEqual(controller.getLayoutTier(100), 3)
   })
 
-  it('detects clipped dimensions below minimum 80x30', () => {
-    assert.strictEqual(controller.isClipped(70, 40), true)
+  it('detects clipped dimensions below minimum 60x30', () => {
+    assert.strictEqual(controller.isClipped(50, 40), true)
     assert.strictEqual(controller.isClipped(100, 20), true)
-    assert.strictEqual(controller.isClipped(100, 35), false)
+    assert.strictEqual(controller.isClipped(80, 35), false)
   })
 
   it('generates conversation, stream, and plan nodes', () => {
@@ -56,8 +56,8 @@ describe('UI Controller & Layout Tiering', () => {
     const store = StateStore()
     controller.init(store, null, null, null, null)
 
-    // Tier 1 (>= 200 cols): All 3 panels visible
-    store.setDimensions(220, 35)
+    // Tier 1 (>= 160 cols): All 3 panels visible
+    store.setDimensions(180, 35)
     store.setMode('chat')
     assert.strictEqual(controller.isConversationVisible(), true)
     assert.strictEqual(controller.getConversationWidth(), '40%')
@@ -66,8 +66,8 @@ describe('UI Controller & Layout Tiering', () => {
     assert.strictEqual(controller.isPlanVisible(), true)
     assert.strictEqual(controller.getPlanWidth(), '20%')
 
-    // Tier 2 (160-199 cols) in chat mode: Chat + Stream visible, Plan hidden
-    store.setDimensions(180, 35)
+    // Tier 2 (120-159 cols) in chat mode: Chat + Stream visible, Plan hidden
+    store.setDimensions(140, 35)
     store.setMode('chat')
     assert.strictEqual(controller.isConversationVisible(), true)
     assert.strictEqual(controller.getConversationWidth(), '50%')
@@ -83,8 +83,8 @@ describe('UI Controller & Layout Tiering', () => {
     assert.strictEqual(controller.isPlanVisible(), true)
     assert.strictEqual(controller.getPlanWidth(), '40%')
 
-    // Tier 3 (< 160 cols) in chat mode: Chat 100%, others hidden
-    store.setDimensions(120, 35)
+    // Tier 3 (< 120 cols) in chat mode: Chat 100%, others hidden
+    store.setDimensions(100, 35)
     store.setMode('chat')
     assert.strictEqual(controller.isConversationVisible(), true)
     assert.strictEqual(controller.getConversationWidth(), '100%')
