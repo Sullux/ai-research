@@ -14,7 +14,7 @@ const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
-const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD } = require('./lib/protocol/constants')
+const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD, STOP_TOOL_CALL } = require('./lib/protocol/constants')
 const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
@@ -433,8 +433,10 @@ const main = () => {
       store.flushActiveResponse()
     }
 
-    store.setGenerating(false)
-    store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
+    if (reason !== STOP_TOOL_CALL) {
+      store.setGenerating(false)
+      store.setStatus(`Idle | ${tokSec.toFixed(1)} tok/s | ${totalTok} tok in ${elapsedMs}ms`)
+    }
 
     // 1. Elastic Yield Handling (Syntactic micro-burst boundary reached)
     if (reason === STOP_ELASTIC_YIELD) {
