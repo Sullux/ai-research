@@ -144,6 +144,9 @@ const notificationManagerFactory = (now) => (timers) => {
   // Returns suspended earlier tasks that were interrupted in-flight
   const getSuspended = () => getPending().filter((item) => item.status === 'SUSPENDED')
 
+  // Returns tasks currently being serviced but not yet acked or snoozed
+  const getServicing = () => getPending().filter((item) => item.status === 'SERVICING')
+
   const getSnoozed = () => Array.from(snoozed.values())
 
   const formatTurnAlerts = () => {
@@ -163,6 +166,7 @@ const notificationManagerFactory = (now) => (timers) => {
     getPending,
     getUnserviced,
     getSuspended,
+    getServicing,
     getSnoozed,
     formatTurnAlerts,
   }

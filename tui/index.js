@@ -15,7 +15,7 @@ const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
 const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD, STOP_TOOL_CALL } = require('./lib/protocol/constants')
-const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
+const { formatNotificationInterrupt, formatBacklogResumeNudge, formatServicingCompletionNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
 const STATUS_NAMES = [
@@ -497,6 +497,17 @@ const main = () => {
         const interruptNudge = formatNotificationInterrupt(nextDeferred)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
+        requestRedraw()
+        return
+      }
+
+      // Check for notifications that remain in SERVICING state without being acknowledged or snoozed
+      const servicing = notManager.getServicing()
+      if (servicing.length > 0) {
+        const nextServicing = servicing[0]
+        const completionNudge = formatServicingCompletionNudge(nextServicing)
+        store.setGenerating(true)
+        client.sendInput(completionNudge)
         requestRedraw()
         return
       }

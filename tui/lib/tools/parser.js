@@ -40,6 +40,9 @@ const toolParserFactory = () => (registry, client, store) => {
   const syntaxTracker = SyntaxTracker()
 
   const executeCall = async (name, args) => {
+    store?.flushActiveThought?.()
+    store?.flushActiveResponse?.()
+
     store?.addStreamEntry?.({
       type: 'tool_call',
       title: `🛠️ TOOL: ${name}`,
