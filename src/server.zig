@@ -504,7 +504,7 @@ pub const Server = struct {
 
     fn handleResume(self: *Server, msg_id: u16, writer: anytype) !void {
         self.is_aborted.store(false, .seq_cst);
-        const cur = self.last_yield_token orelse {
+        const last_token = self.last_yield_token orelse {
             try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_END_OF_TURN);
             const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
             const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
@@ -514,6 +514,7 @@ pub const Server = struct {
         };
         self.last_yield_token = null;
 
+        const cur = self.advanceToken(last_token, &.{});
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
@@ -785,7 +786,7 @@ pub const Server = struct {
 
                     if (should_yield_thinking) {
                         reason = protocol.STOP_ELASTIC_YIELD;
-                        self.last_yield_token = self.advanceToken(cur, window_tokens);
+                        self.last_yield_token = cur;
                         break;
                     }
                 } else if (response_count >= 10) {
@@ -806,7 +807,7 @@ pub const Server = struct {
 
                     if (should_yield) {
                         reason = protocol.STOP_ELASTIC_YIELD;
-                        self.last_yield_token = self.advanceToken(cur, window_tokens);
+                        self.last_yield_token = cur;
                         break;
                     }
                 }

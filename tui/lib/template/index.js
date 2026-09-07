@@ -17,7 +17,7 @@ const formatUserDecisionTurn = (userText, waitingTasks = []) => {
     waitingLines,
     '',
     'Decision:',
-    "1. If user's message fulfills an awaiting task, resume that task or call `done()`.",
+    "1. If user's message fulfills an awaiting task, resume that task or use done.",
     '2. If user provided a new unrelated instruction, prioritize answering/planning it.',
     '3. If user cancelled a task, mark it complete/aborted.',
     'Next action:',
@@ -52,8 +52,8 @@ const formatBacklogResumeNudge = (notItem) => [
   '<|turn>model',
   '<|channel>thought',
   `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
-  `- If already satisfied or incorporated into previous answers: invoke tool \`ack\` with id "${notItem.id}".`,
-  `- If pending work remains: address or continue it now, then invoke tool \`ack\`.`,
+  `- If already satisfied or incorporated into previous answers: acknowledge the notification using ack with id "${notItem.id}".`,
+  `- If pending work remains: address or continue it now, then acknowledge using ack.`,
   'Next action:',
 ].join('\n') + '\n'
 
@@ -76,7 +76,7 @@ const formatNotificationInterrupt = (notItem) => {
 }
 
 const formatTruncatedTurn = (userText, eventId, relPath) => [
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Call tool \`read\` with path: "${relPath}" and offset: 0 to inspect before answering.\nNext action:\n`,
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Use tool read with path "${relPath}" and offset 0 to inspect before answering.\nNext action:\n`,
 ].join('\n')
 
 module.exports = {
