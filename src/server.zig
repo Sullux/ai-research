@@ -91,7 +91,7 @@ const SyntaxTracker = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext,
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -104,7 +104,7 @@ pub const Server = struct {
             const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
             hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt };
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null };
     }
     pub fn deinit(self: *Server) void {
         if (self.hippo) |*h| h.deinit();
@@ -439,13 +439,21 @@ pub const Server = struct {
         const stream_id_len = std.mem.readInt(u16, payload[stream_id_off .. stream_id_off + 2][0..2], .little);
         const stream_id = if (payload.len >= stream_id_off + 2 + stream_id_len) payload[stream_id_off + 2 .. stream_id_off + 2 + stream_id_len] else "";
 
+        // Deduplicate: if logical clock hasn't mutated since last snapshot save/load, return SNAPSHOT_STATUS_EXISTS (2)
+        if (self.last_snapshot_clock != null and self.last_snapshot_clock.? == self.clock) {
+            try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_EXISTS, @intCast(self.clock), self.slots(), stream_id);
+            writer.flush();
+            return;
+        }
+
         snapshot.saveSnapshot(snap_path, stream_id, self.clock, self.ring, &self.config, self.gpu_opt) catch |err| {
             try protocol.writeError(writer, msg_id, "Failed to save snapshot");
             writer.flush();
             return err;
         };
 
-        try protocol.writeSnapshotStatus(writer, msg_id, 0, @intCast(self.clock), self.slots(), stream_id);
+        self.last_snapshot_clock = self.clock;
+        try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_SAVED, @intCast(self.clock), self.slots(), stream_id);
         writer.flush();
     }
 
@@ -463,8 +471,9 @@ pub const Server = struct {
         };
 
         self.clock = restored_clock;
+        self.last_snapshot_clock = restored_clock;
         const stream_id = restored_id[0..restored_id_len];
-        try protocol.writeSnapshotStatus(writer, msg_id, 1, @intCast(self.clock), self.slots(), stream_id);
+        try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_LOADED, @intCast(self.clock), self.slots(), stream_id);
 
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;

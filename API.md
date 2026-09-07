@@ -283,6 +283,8 @@ Host provides the result of a tool execution back to the model.
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |         Call ID               |         Status (0=OK)         |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Tool Name Length        |       Tool Name (UTF-8)...    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
 |                      Result Data (UTF-8 / JSON)               |
 |                              (...)                            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -290,7 +292,63 @@ Host provides the result of a tool execution back to the model.
 
 ---
 
-### 4.9. `OP_SET_SYSTEM` (`0x0007`) — Inbound
+### 4.9. `OP_SNAPSHOT_SAVE` (`0x0008`) — Inbound
+Requests atomic persistence of active Tier-1 KV cache and logical clock state to a compact snapshot binary file on NVMe.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|        File Path Length       |        File Path (UTF-8)...   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|       Stream Anchor ID Len    |       Stream Anchor ID...     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+---
+
+### 4.10. `OP_SNAPSHOT_LOAD` (`0x0009`) — Inbound
+Requests immediate restoration of KV cache anchors, active slots, and logical clock from an existing snapshot file, enabling instant warm-boot without system prompt pre-caching.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     File Path (UTF-8 bytes)                   |
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+---
+
+### 4.11. `OP_SNAPSHOT_STATUS` (`0x0107`) — Outbound
+Reports the result of a snapshot save or load operation.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    Status     |   Reserved    |         Active Slots          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++                       Logical Clock (u64)                     +
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|      Stream ID Length         |       Stream Anchor ID...     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+* **Status Codes:**
+  * `0` (`SNAPSHOT_STATUS_SAVED`): Snapshot successfully written to disk.
+  * `1` (`SNAPSHOT_STATUS_LOADED`): Snapshot successfully restored into GPU KV cache.
+  * `2` (`SNAPSHOT_STATUS_EXISTS`): Zero-delta no-op; the engine state at current logical clock has already been persisted to a snapshot. Disk write is skipped.
+
+---
+
+### 4.12. `OP_SET_SYSTEM` (`0x0007`) — Inbound
 Initializes and prefills session system instructions and abstract tool definitions into the KV cache ring buffer at startup. Enables zero Time-to-First-Token latency on subsequent user interactions.
 
 ```
@@ -324,7 +382,7 @@ The engine formats the system prompt per the active model family's canonical cha
 
 ---
 
-### 4.10. `OP_STATUS` (`0x0106`) — Outbound Telemetry
+### 4.13. `OP_STATUS` (`0x0106`) — Outbound Telemetry
 Periodic telemetry frame reporting engine performance and resource states.
 
 ```

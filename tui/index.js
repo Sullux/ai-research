@@ -249,6 +249,11 @@ const main = () => {
         content: `Working state checkpointed (clock: ${clock}, active slots: ${activeSlots}, anchor: ${streamId}).`,
       })
       requestRedraw()
+    } else if (status === 2) {
+      // Snapshot already exists at this clock (clean deduplicated no-op)
+      lastSnapshotAnchor = streamId
+      lastSnapshotClock = clock
+      lastSavedSlots = activeSlots
     } else if (status === 1) {
       // Snapshot restored successfully
       lastSnapshotAnchor = streamId

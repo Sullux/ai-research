@@ -49,6 +49,10 @@ pub const QUERY_FULLTEXT: u8 = 0x01;
 pub const QUERY_TEMPORAL: u8 = 0x02;
 pub const QUERY_PINNED: u8 = 0x03;
 
+pub const SNAPSHOT_STATUS_SAVED: u8 = 0;
+pub const SNAPSHOT_STATUS_LOADED: u8 = 1;
+pub const SNAPSHOT_STATUS_EXISTS: u8 = 2;
+
 pub const Header = extern struct {
     magic: u32 = MAGIC,
     version: u16 = VERSION,
