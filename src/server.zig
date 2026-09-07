@@ -557,8 +557,10 @@ pub const Server = struct {
         defer if (parsed_json) |*p| p.deinit();
         parsed_json = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{}) catch null;
 
+        var has_error = false;
         if (parsed_json) |p| {
             if (p.value == .object) {
+                if (p.value.object.get("error") != null) has_error = true;
                 try w.writeByte('{');
                 const obj = p.value.object;
                 var key_list = std.ArrayList([]const u8).init(self.allocator);
@@ -582,9 +584,13 @@ pub const Server = struct {
                 try w.writeByte('}');
             }
         } else {
+            if (std.mem.indexOf(u8, result_json, "error") != null) has_error = true;
             try w.print("{{value:<|\"|>{s}<|\"|>}}", .{result_json});
         }
         try w.writeAll("<tool_response|><|channel>thought\n");
+        if (has_error) {
+            try w.writeAll("Notice: Tool execution failed. Analyze error and correct tool call:\n");
+        }
         return out.toOwnedSlice();
     }
 

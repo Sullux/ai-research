@@ -465,7 +465,7 @@ const main = () => {
       }
 
       // Check for remaining unserviced interrupts in LIFO order
-      const remainingUnserviced = notManager.getUnserviced()
+      const remainingUnserviced = notManager.getUnserviced().filter(a => a.id !== activeTurnId)
       if (remainingUnserviced.length > 0) {
         const nextAlert = remainingUnserviced[0]
         notManager.markServicing(nextAlert.id)
