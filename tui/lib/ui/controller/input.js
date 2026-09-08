@@ -24,6 +24,11 @@ const onSubmitInput = (ctx, payload) => {
   // If currently generating an assistant response, stage this message as pendingInterjection
   // so the conversation view preserves causal sequence (Response 1 -> Interjection -> Response 2).
   const isGeneratingResponse = Boolean(refs.store?.state?.activeResponse)
+  const isGenerating = Boolean(
+    refs.store?.state?.isGenerating ||
+    refs.store?.state?.activeResponse ||
+    refs.store?.state?.activeThought
+  )
 
   // VFS message persistence & notification generation
   let turnHeader = ''
@@ -35,8 +40,9 @@ const onSubmitInput = (ctx, payload) => {
 
     // If an existing turn is currently active and user barges in, mark it as SUSPENDED
     // so it is not treated as an unserviced emergency on micro-bursts, but can be cleanly resumed later.
-    if (refs.activeTurnNotificationId && isGeneratingResponse) {
+    if (refs.activeTurnNotificationId && isGenerating) {
       refs.notManager?.suspend(refs.activeTurnNotificationId)
+      refs.activeTurnNotificationId = null
     }
 
     const notItem = refs.notManager?.notify(
@@ -45,11 +51,8 @@ const onSubmitInput = (ctx, payload) => {
       savedMsg.id,
       { isTurnContext: true, isTruncated: savedMsg.isTruncated },
     )
-    if (!isGeneratingResponse && notItem) {
+    if (!isGenerating && notItem) {
       refs.notManager?.markServicing(notItem.id)
-      refs.activeTurnNotificationId = notItem.id
-    } else if (notItem) {
-      // Barge-in during active response: remains PENDING until picked up at elastic yield
       refs.activeTurnNotificationId = notItem.id
     }
     eventId = notItem?.id || savedMsg.id
@@ -104,7 +107,7 @@ const onSubmitInput = (ctx, payload) => {
   if (!refs.isEngineReady) {
     // Engine still loading weights or restoring snapshot: stage turn to dispatch immediately upon ready
     refs.pendingInputTurn = payloadText
-  } else {
+  } else if (!isGenerating || !refs.notManager) {
     refs.client.sendInput(payloadText)
   }
   ctx.redraw()

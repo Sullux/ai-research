@@ -46,7 +46,7 @@ test "end-to-end multi-turn episodic lifecycle, provenance DAG, cold restart, an
 
         // Commit Turn 1 (Episode ID 1, Parent ID 0)
         hippo.setCurrentParent(0);
-        const flushed1 = hippo.commit(&arch, &ring, &store, 0);
+        const flushed1 = hippo.commit(&arch, &ring, &store, 0, null);
         try std.testing.expectEqual(@as(usize, 4), flushed1);
         try std.testing.expectEqual(@as(u64, 1), store.getHeader().total_episodes);
 
@@ -75,7 +75,7 @@ test "end-to-end multi-turn episodic lifecycle, provenance DAG, cold restart, an
 
         // Turn 2 is a child of Turn 1 (Parent ID 1)
         hippo.setCurrentParent(1);
-        const flushed2 = hippo.commit(&arch, &ring, &store, 4);
+        const flushed2 = hippo.commit(&arch, &ring, &store, 4, null);
         try std.testing.expectEqual(@as(usize, 4), flushed2);
         try std.testing.expectEqual(@as(u64, 2), store.getHeader().total_episodes);
 
@@ -105,7 +105,7 @@ test "end-to-end multi-turn episodic lifecycle, provenance DAG, cold restart, an
         }
         hippo.setCurrentParent(2);
         hippo.markInterrupted();
-        const flushed3 = hippo.commit(&arch, &ring, &store, 8);
+        const flushed3 = hippo.commit(&arch, &ring, &store, 8, null);
         try std.testing.expectEqual(@as(usize, 2), flushed3);
         try std.testing.expectEqual(@as(u64, 3), store.getHeader().total_episodes);
 

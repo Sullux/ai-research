@@ -214,7 +214,20 @@ pub const Server = struct {
         }
         var indices: [16]usize = undefined;
         const count = self.archive.?.scan(q_vec, @intCast(self.clock), &indices, @min(top_k, 16));
-        _ = model.memory_inject.primeSubconsciousMemory(self.archive.?, self.ring, self.scratch, q_vec, @intCast(self.clock), self.gpu_opt);
+        const rot_dim: usize = if (self.m.layers.len > 0) self.m.layers[0].rotary_dim else self.config.head_dim;
+        _ = model.memory_inject.primeSubconsciousMemory(
+            self.archive.?,
+            self.ring,
+            self.scratch,
+            q_vec,
+            @intCast(self.clock),
+            self.gpu_opt,
+            self.clock,
+            self.config.rope_theta,
+            self.config.head_dim,
+            rot_dim,
+            self.config.num_key_value_heads,
+        );
         var timestamps: [16]u64 = undefined;
         for (0..count) |i| timestamps[i] = self.archive.?.metas[indices[i]].timestamp;
         try protocol.writeMemResponse(writer, msg_id, @intCast(count), 0x00, 0, 0, timestamps[0..count]);
@@ -229,7 +242,20 @@ pub const Server = struct {
 
         if (self.archive) |a| {
             if (model.memory_inject.computeKeywordQueryVector(self.m, tokens, self.scratch.normed_x)) {
-                _ = model.memory_inject.primeSubconsciousMemory(a, self.ring, self.scratch, self.scratch.normed_x, @intCast(self.clock), self.gpu_opt);
+                const rot_dim: usize = if (self.m.layers.len > 0) self.m.layers[0].rotary_dim else self.config.head_dim;
+                _ = model.memory_inject.primeSubconsciousMemory(
+                    a,
+                    self.ring,
+                    self.scratch,
+                    self.scratch.normed_x,
+                    @intCast(self.clock),
+                    self.gpu_opt,
+                    self.clock,
+                    self.config.rope_theta,
+                    self.config.head_dim,
+                    rot_dim,
+                    self.config.num_key_value_heads,
+                );
             }
         }
 
@@ -300,6 +326,7 @@ pub const Server = struct {
                 }
             }
             self.in_thinking_channel = in_thought;
+            self.sampler.suppress_thinking = !in_thought;
         }
         return cur;
     }
@@ -307,7 +334,7 @@ pub const Server = struct {
     fn handleSetSystem(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
         if (payload.len == 0) return;
         self.is_aborted.store(false, .seq_cst);
-        self.ring.markTurnBoundary(self.clock);
+        self.ring.markBoundary(self.clock, .system, 1.0);
 
         // Parse JSON payload or raw text
         var formatted_system: []const u8 = payload;
@@ -486,7 +513,7 @@ pub const Server = struct {
         if (payload.len < 8) return;
         self.is_aborted.store(false, .seq_cst);
         self.last_yield_token = null;
-        self.ring.markTurnBoundary(self.clock);
+        self.ring.markBoundary(self.clock, .user, 1.0);
         const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
         if (self.clock == 0 and tokens.len > 0) {
             var sys_len: usize = 0;
@@ -513,6 +540,7 @@ pub const Server = struct {
             return;
         };
         self.last_yield_token = null;
+        self.sampler.suppress_thinking = !self.in_thinking_channel;
 
         const cur = self.advanceToken(last_token, &.{});
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
@@ -526,6 +554,7 @@ pub const Server = struct {
         if (payload.len < 6) return;
         self.is_aborted.store(false, .seq_cst);
         self.last_yield_token = null;
+        self.ring.markBoundary(self.clock, .tool_result, 1.0);
         const name_len = std.mem.readInt(u16, payload[4..6], .little);
         if (payload.len < 6 + name_len) return;
         const tool_name = payload[6 .. 6 + name_len];
@@ -651,7 +680,7 @@ pub const Server = struct {
         const recent_buf = try self.allocator.alloc(u32, max_recent);
         defer self.allocator.free(recent_buf);
         var recent_count: usize = 0;
-        self.sampler.suppress_thinking = false;
+        self.sampler.suppress_thinking = !self.in_thinking_channel;
         var syntax = SyntaxTracker{};
 
         while (true) {
@@ -684,7 +713,9 @@ pub const Server = struct {
                     continue;
                 }
                 self.in_thinking_channel = true;
+                self.sampler.suppress_thinking = false;
                 thinking_count = 0;
+                self.ring.markBoundary(self.clock, .thought, 0.8);
                 // Absorb channel identifier (e.g. "thought\n" or "_thought\n")
                 var chan_tok = self.advanceToken(cur, window_tokens);
                 while (chan_tok != 101 and chan_tok != self.tok.eos_token_id) {
@@ -700,12 +731,20 @@ pub const Server = struct {
                 }
                 continue;
             }
-            if (cur == 101) { self.in_thinking_channel = false; self.sampler.suppress_critique = false; cur = self.advanceToken(cur, window_tokens); continue; }
-            if (cur == 236779) { // '_' token
+            if (cur == 101) {
+                self.in_thinking_channel = false;
+                self.sampler.suppress_thinking = true;
+                self.sampler.suppress_critique = false;
+                self.ring.markBoundary(self.clock, .response_sentence, 1.0);
+                cur = self.advanceToken(cur, window_tokens);
+                continue;
+            }
+            if (cur == 236779 and !self.sampler.suppress_thinking) { // '_' token
                 // Check if this is an un-bracketed "_thought" leakage right before or after channel boundary
                 const peek_tok = self.advanceToken(cur, window_tokens);
                 if (peek_tok == 45518) { // "thought"
                     self.in_thinking_channel = true;
+                    self.sampler.suppress_thinking = false;
                     thinking_count = 0;
                     var next_c = self.advanceToken(peek_tok, window_tokens);
                     while (next_c == 107 or next_c == 108) {
@@ -747,6 +786,7 @@ pub const Server = struct {
                 try protocol.writeToolCall(writer, msg_id, 1, tool_name, args_json);
                 writer.flush();
                 reason = protocol.STOP_TOOL_CALL;
+                self.ring.markBoundary(self.clock, .tool_call, 0.9);
                 if (next_tok == 49) {
                     _ = self.m.forwardToken(self.ring, self.scratch, 49, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                     self.clock += 1;
@@ -814,6 +854,7 @@ pub const Server = struct {
                     if (should_yield) {
                         reason = protocol.STOP_ELASTIC_YIELD;
                         self.last_yield_token = cur;
+                        self.ring.markBoundary(self.clock, .response_sentence, 1.0);
                         break;
                     }
                 }
@@ -836,6 +877,7 @@ pub const Server = struct {
                     }
                     writer.flush();
                     self.in_thinking_channel = false;
+                    self.sampler.suppress_thinking = true;
                     self.sampler.suppress_critique = false;
                     thinking_count = 0;
                     cur = self.advanceToken(101, window_tokens);
@@ -855,6 +897,7 @@ pub const Server = struct {
             }
             cur = self.advanceToken(cur, window_tokens);
         }
+        self.ring.markBoundary(self.clock, .turn_end, 1.0);
         const total_gen = thinking_count + response_count;
         const now = std.time.milliTimestamp();
         const elapsed: u32 = @intCast(@max(1, now - (if (start > 0) start else now)));
@@ -865,14 +908,14 @@ pub const Server = struct {
         writer.flush();
         if (self.hippo) |*h| {
             const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
-            _ = h.commit(self.archive, self.ring, self.store, start_clock);
+            _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
         }
     }
 
     fn handleMemCommit(self: *Server) void {
         if (self.hippo) |*h| {
             const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
-            _ = h.commit(self.archive, self.ring, self.store, start_clock);
+            _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
         }
     }
 
@@ -888,7 +931,7 @@ pub const Server = struct {
             h.stage(x_vec, @intCast(@max(0, now_ms)), 1.0, @intCast(self.config.num_hidden_layers - 1), cur, slot_idx, now_ms);
             if (h.shouldFlush(now_ms, false)) {
                 const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
-                _ = h.commit(self.archive, self.ring, self.store, start_clock);
+                _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
             }
         }
         if (!needs_logits) return next_tok;

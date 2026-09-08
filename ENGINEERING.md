@@ -427,6 +427,33 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 * **Kernel-Level Tool Gating:** When Gemma 4 emits `<|tool_call>`, `src/server.zig` intercepts the sequence directly, extracts the tool name and JSON arguments, and delivers structured `OP_TOOL_CALL` frames to the client without leaking raw control tokens into text streams.
 * **Absorbed Channel Framing:** Corrected thinking channel preamble handling in `src/server.zig` so `<|channel>thought\n` is absorbed internally rather than streamed as visible text (`THOUGHT: thought`).
 
+---
+
+## 14. Uniform Physical Ring Geometry, Micro-Turn Segmentation, and UMA Episodic Recall
+
+### 1. Unified 4,096 Physical Ring Buffer Geometry
+* **Elimination of Split-Brain Layer Discrepancies:** Resolved the 3,968 slot collision bug where lower sliding layers (0..15) and upper full-attention layers (16..47) maintained divergent dynamic window sizes (`4096 - num_anchors` vs `3968 - num_anchors`).
+* **Uniform Partitioning:** Every layer uniformly reserves `0 .. num_anchors - 1` as immutable Tier 1 anchors (system prompt and tool declarations), `num_anchors .. 3967` as the dynamic sliding FIFO window, and `3968 .. 4095` as dedicated Tier 3 associative recall slots.
+* **Deterministic Prefill & Decode Mapping:** Prefill slot assignment and decode indexing share the exact same modulo calculation across all 48 layers, strictly bounding the physical and workgroup attention buffer (`s_scores`) to $\le 4,096$ slots.
+
+### 2. Micro-Turn Semantic Segmentation (`MemorySpan` & Micro-Boundaries)
+* **Breaking the Monolith:** Shifted turn boundary tracking from coarse, multi-hundred-token user message boundaries to fine-grained structural and syntactic milestones:
+  * `.system`: System prompt boundary
+  * `.user`: Inbound user prompt
+  * `.thought`: Thinking channel entry / reasoning phase
+  * `.tool_call`: Tool invocation emission
+  * `.tool_result`: Tool output reception (`OP_TOOL_RETURN`)
+  * `.response_sentence`: Soft elastic yields (`STOP_ELASTIC_YIELD`) at sentence/paragraph boundaries
+  * `.turn_end`: Final end-of-turn delimiter (`STOP_END_OF_TURN`)
+* **Soft Boundary Snapping:** When the sliding ring wraps, `snapToBoundary(raw_min_clock)` snaps to the closest micro-boundary rather than jumping over hundreds of tokens, eliminating abrupt conversational amnesia.
+
+### 3. UMA Host-Mapped Episodic KV Commit
+* **Zero-Copy Host VRAM Readback:** On AMD APU architectures, GPU buffers (`buf_k_cache` and `buf_v_cache`) are host-visible and host-coherent. Updated `Hippocampus.commit()` and `DiffArchive.copyKVFromRing()` to read directly from mapped GPU VRAM slices instead of the unused CPU ring fallback buffer, ensuring episodes record real model activations rather than zeros.
+
+### 4. RoPE Delta Re-Rotation on Associative Recall Injection
+* **Additive Group Rotary Shifting:** When episodes are recalled from episodic memory into Tier 3 recall slots, $K$ vectors are dynamically re-rotated head-by-head using the delta angle $\Delta\theta = \theta \times (\text{target\_clock} - \text{mem\_clock})$.
+* **Controlled Relative Distance:** Recalled memories are positioned into synthetic recent attention context ($\text{current\_clock} - (\text{rank} + 1)$), allowing the model to attend to recalled context with natural geometric proximity.
+
 
 
 

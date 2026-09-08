@@ -1,5 +1,6 @@
 const std = @import("std");
 pub const ring_buffer = @import("ring_buffer.zig");
+pub const gpu = @import("gpu.zig");
 const DynamicRingBuffer = ring_buffer.DynamicRingBuffer;
 
 pub const SalienceConfig = struct {
@@ -95,24 +96,80 @@ pub const DiffArchive = struct {
         if (self.kv_cache.len > 0) @memset(self.kv_cache, 0);
     }
 
-    pub fn copyKVFromRing(self: *DiffArchive, idx: usize, ring: *const DynamicRingBuffer, slot: usize) void {
+    pub fn copyKVFromRing(self: *DiffArchive, idx: usize, ring: *const DynamicRingBuffer, slot: usize, gpu_opt: ?*gpu.model_gpu.GpuModelContext) void {
         if (self.kv_cache.len == 0) return;
         const base = idx * self.kv_stride;
         for (0..self.num_layers) |l| {
+            const dst = base + l * self.max_kv_dim * 2;
+            if (gpu_opt) |g| {
+                if (l < g.layers.len) {
+                    const g_k = g.layers[l].buf_k_cache.asSlice(f32);
+                    const g_v = g.layers[l].buf_v_cache.asSlice(f32);
+                    const g_off = slot * ring.max_kv_dim;
+                    if (g_off + self.max_kv_dim <= g_k.len and g_off + self.max_kv_dim <= g_v.len) {
+                        @memcpy(self.kv_cache[dst .. dst + self.max_kv_dim], g_k[g_off .. g_off + self.max_kv_dim]);
+                        @memcpy(self.kv_cache[dst + self.max_kv_dim .. dst + self.max_kv_dim * 2], g_v[g_off .. g_off + self.max_kv_dim]);
+                        continue;
+                    }
+                }
+            }
             const r_slot = l * ring.total_slots + slot;
             const r_off = r_slot * ring.max_kv_dim;
-            const dst = base + l * self.max_kv_dim * 2;
             @memcpy(self.kv_cache[dst .. dst + self.max_kv_dim], ring.k[r_off .. r_off + self.max_kv_dim]);
             @memcpy(self.kv_cache[dst + self.max_kv_dim .. dst + self.max_kv_dim * 2], ring.v[r_off .. r_off + self.max_kv_dim]);
         }
     }
 
-    pub fn copyKVToRing(self: *const DiffArchive, idx: usize, ring: *DynamicRingBuffer, rank: usize, clock: usize) void {
+    pub fn copyKVToRing(
+        self: *const DiffArchive,
+        idx: usize,
+        ring: *DynamicRingBuffer,
+        rank: usize,
+        mem_clock: usize,
+        current_clock: usize,
+        theta: f32,
+        head_dim: usize,
+        rotary_dim: usize,
+        num_kv_heads: usize,
+    ) void {
         if (self.kv_cache.len == 0) return;
         const base = idx * self.kv_stride;
+        const target_clock = if (current_clock > rank + 1) current_clock - (rank + 1) else 0;
+        const delta_clock = @as(i64, @intCast(target_clock)) - @as(i64, @intCast(mem_clock));
+
+        var k_buf: [4096]f32 = undefined;
+        const kv_dim = @min(self.max_kv_dim, k_buf.len);
+
         for (0..self.num_layers) |l| {
             const src = base + l * self.max_kv_dim * 2;
-            ring.writeRecallKV(l, rank, self.kv_cache[src .. src + self.max_kv_dim], self.kv_cache[src + self.max_kv_dim .. src + self.max_kv_dim * 2], clock);
+            const k_src = self.kv_cache[src .. src + kv_dim];
+            const v_src = self.kv_cache[src + self.max_kv_dim .. src + self.max_kv_dim + kv_dim];
+
+            if (rotary_dim > 0 and head_dim > 0 and theta > 0.0 and delta_clock != 0 and num_kv_heads > 0) {
+                @memcpy(k_buf[0..kv_dim], k_src);
+                const half_rot = rotary_dim / 2;
+                for (0..num_kv_heads) |h| {
+                    const h_off = h * head_dim;
+                    if (h_off + rotary_dim > kv_dim) break;
+                    for (0..half_rot) |d| {
+                        const freq_exp = (2.0 * @as(f32, @floatFromInt(d))) / @as(f32, @floatFromInt(rotary_dim));
+                        const freq = 1.0 / std.math.pow(f32, theta, freq_exp);
+                        const angle = @as(f32, @floatFromInt(delta_clock)) * freq;
+                        const cos_a = @cos(angle);
+                        const sin_a = @sin(angle);
+
+                        const idx0 = h_off + d;
+                        const idx1 = h_off + d + half_rot;
+                        const k0 = k_src[idx0];
+                        const k1 = k_src[idx1];
+                        k_buf[idx0] = k0 * cos_a - k1 * sin_a;
+                        k_buf[idx1] = k0 * sin_a + k1 * cos_a;
+                    }
+                }
+                ring.writeRecallKV(l, rank, k_buf[0..kv_dim], v_src, target_clock);
+            } else {
+                ring.writeRecallKV(l, rank, k_src, v_src, target_clock);
+            }
         }
     }
 
@@ -176,7 +233,18 @@ pub const DiffArchive = struct {
         return k;
     }
 
-    pub fn primeTier3(self: *DiffArchive, query: []const f32, now: u64, ring: *DynamicRingBuffer, scratch_recall_indices: []usize) usize {
+    pub fn primeTier3(
+        self: *DiffArchive,
+        query: []const f32,
+        now: u64,
+        ring: *DynamicRingBuffer,
+        scratch_recall_indices: []usize,
+        current_clock: usize,
+        theta: f32,
+        head_dim: usize,
+        rotary_dim: usize,
+        num_kv_heads: usize,
+    ) usize {
         const max_recall = ring_buffer.UPPER_RECALL_SLOTS;
         const to_fetch = @min(max_recall, scratch_recall_indices.len);
         if (to_fetch == 0 or self.count == 0) {
@@ -190,7 +258,7 @@ pub const DiffArchive = struct {
         for (0..selected) |rank| {
             const mi = scratch_recall_indices[rank];
             const mem_clock = self.metas[mi].start_clock;
-            self.copyKVToRing(mi, ring, rank, @intCast(mem_clock));
+            self.copyKVToRing(mi, ring, rank, @intCast(mem_clock), current_clock, theta, head_dim, rotary_dim, num_kv_heads);
         }
         return selected;
     }

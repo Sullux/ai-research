@@ -6,6 +6,7 @@ const storage_mod = @import("storage.zig");
 const PersistentDiffStore = storage_mod.PersistentDiffStore;
 const EpisodeHeader = storage_mod.EpisodeHeader;
 const EpisodeFlags = storage_mod.EpisodeFlags;
+pub const gpu = @import("gpu.zig");
 
 pub const StagedItem = struct {
     timestamp: u64,
@@ -104,6 +105,7 @@ pub const Hippocampus = struct {
         ring: ?*const DynamicRingBuffer,
         storage: ?*PersistentDiffStore,
         start_clock: u64,
+        gpu_opt: ?*gpu.model_gpu.GpuModelContext,
     ) usize {
         if (self.count == 0) return 0;
         const n = self.count;
@@ -146,7 +148,7 @@ pub const Hippocampus = struct {
             }, self.centroid_buf);
             if (ring) |r| {
                 const rep_slot = self.items[n / 2].slot_idx;
-                a.copyKVFromRing(a_idx, r, rep_slot);
+                a.copyKVFromRing(a_idx, r, rep_slot, gpu_opt);
             }
         }
 
@@ -159,10 +161,22 @@ pub const Hippocampus = struct {
                     const l_base = l * 2 * n * kv_dim;
                     for (0..n) |t| {
                         const s_idx = self.items[t].slot_idx;
-                        const r_slot = l * r.total_slots + s_idx;
-                        const r_off = r_slot * r.max_kv_dim;
                         const k_dst = l_base + 0 * (n * kv_dim) + t * kv_dim;
                         const v_dst = l_base + 1 * (n * kv_dim) + t * kv_dim;
+                        if (gpu_opt) |g| {
+                            if (l < g.layers.len) {
+                                const g_k = g.layers[l].buf_k_cache.asSlice(f32);
+                                const g_v = g.layers[l].buf_v_cache.asSlice(f32);
+                                const g_off = s_idx * r.max_kv_dim;
+                                if (g_off + kv_dim <= g_k.len and g_off + kv_dim <= g_v.len) {
+                                    @memcpy(self.kv_staging_buf[k_dst .. k_dst + kv_dim], g_k[g_off .. g_off + kv_dim]);
+                                    @memcpy(self.kv_staging_buf[v_dst .. v_dst + kv_dim], g_v[g_off .. g_off + kv_dim]);
+                                    continue;
+                                }
+                            }
+                        }
+                        const r_slot = l * r.total_slots + s_idx;
+                        const r_off = r_slot * r.max_kv_dim;
                         @memcpy(self.kv_staging_buf[k_dst .. k_dst + kv_dim], r.k[r_off .. r_off + kv_dim]);
                         @memcpy(self.kv_staging_buf[v_dst .. v_dst + kv_dim], r.v[r_off .. r_off + kv_dim]);
                     }
@@ -207,7 +221,7 @@ test "hippocampus stages and flushes after debounce" {
     try std.testing.expect(!hippo.shouldFlush(3000, false));
     try std.testing.expect(hippo.shouldFlush(7500, false));
 
-    const flushed = hippo.commit(&arch, null, null, 0);
+    const flushed = hippo.commit(&arch, null, null, 0, null);
     try std.testing.expectEqual(@as(usize, 1), flushed);
     try std.testing.expectEqual(@as(usize, 0), hippo.count);
     try std.testing.expectEqual(@as(usize, 1), arch.count);
@@ -240,7 +254,7 @@ test "hippocampus consolidates KV slab and lineage to persistent storage" {
     hippo.stage(&[_]f32{ 1.0, 0.0, 0.0, 0.0 }, 1000, 0.8, 0, 10, s0, 1000);
     hippo.stage(&[_]f32{ 0.0, 1.0, 0.0, 0.0 }, 1050, 0.9, 0, 11, s1, 1050);
 
-    const committed = hippo.commit(&arch, &ring, &store, 0);
+    const committed = hippo.commit(&arch, &ring, &store, 0, null);
     try std.testing.expectEqual(@as(usize, 2), committed);
     try std.testing.expectEqual(@as(u64, 1), store.getHeader().total_episodes);
 

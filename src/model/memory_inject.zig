@@ -30,8 +30,20 @@ pub fn syncRecallToGpu(ring: *const DynamicRingBuffer, gpu_ctx: *gpu.model_gpu.G
     }
 }
 
-pub fn primeSubconsciousMemory(mem: *memory.DiffArchive, ring: *DynamicRingBuffer, scratch: *ForwardScratch, query_vec: []const f32, now_ts: u64, gpu_opt: ?*gpu.model_gpu.GpuModelContext) usize {
-    const selected = mem.primeTier3(query_vec, now_ts, ring, scratch.recall_indices);
+pub fn primeSubconsciousMemory(
+    mem: *memory.DiffArchive,
+    ring: *DynamicRingBuffer,
+    scratch: *ForwardScratch,
+    query_vec: []const f32,
+    now_ts: u64,
+    gpu_opt: ?*gpu.model_gpu.GpuModelContext,
+    current_clock: usize,
+    theta: f32,
+    head_dim: usize,
+    rotary_dim: usize,
+    num_kv_heads: usize,
+) usize {
+    const selected = mem.primeTier3(query_vec, now_ts, ring, scratch.recall_indices, current_clock, theta, head_dim, rotary_dim, num_kv_heads);
     if (selected > 0 and gpu_opt != null) {
         syncRecallToGpu(ring, gpu_opt.?);
     }
@@ -39,11 +51,14 @@ pub fn primeSubconsciousMemory(mem: *memory.DiffArchive, ring: *DynamicRingBuffe
 }
 
 pub fn integrateMemory(self: *const Model, mem: *memory.DiffArchive, ring: *DynamicRingBuffer, scratch: *ForwardScratch, clock: usize, H: usize, gpu_opt: ?*gpu.model_gpu.GpuModelContext) void {
-    _ = self;
     _ = H;
     const now_ts: u64 = @intCast(clock);
     const query_vec = if (gpu_opt) |g| g.buf_x.asSlice(f32)[0..scratch.normed_x.len] else scratch.normed_x;
-    _ = primeSubconsciousMemory(mem, ring, scratch, query_vec, now_ts, gpu_opt);
+    const theta: f32 = self.config.rope_theta;
+    const head_dim: usize = self.config.head_dim;
+    const rot_dim: usize = if (self.layers.len > 0) self.layers[0].rotary_dim else self.config.head_dim;
+    const num_kv_heads: usize = self.config.num_key_value_heads;
+    _ = primeSubconsciousMemory(mem, ring, scratch, query_vec, now_ts, gpu_opt, clock, theta, head_dim, rot_dim, num_kv_heads);
 }
 
 pub fn computeKeywordQueryVector(self: *const Model, token_ids: []const u32, out_vector: []f32) bool {
@@ -96,10 +111,10 @@ test "primeSubconsciousMemory populates recall slots with valid token clock" {
     @memset(&dummy_k, 3.14);
     @memset(&dummy_v, 2.71);
     ring.writeKV(16, 500, &dummy_k, &dummy_v);
-    arch.copyKVFromRing(idx, &ring, 500);
+    arch.copyKVFromRing(idx, &ring, 500, null);
 
     var recall_idx: [16]usize = undefined;
-    const selected = arch.primeTier3(&[_]f32{ 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 1740000001000, &ring, &recall_idx);
+    const selected = arch.primeTier3(&[_]f32{ 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 1740000001000, &ring, &recall_idx, 1000, 10000.0, 64, 64, 1);
     try std.testing.expectEqual(@as(usize, 1), selected);
 
     // Verify recall slot is active at clock 1000 (since start_clock = 500 <= 1000)

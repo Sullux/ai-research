@@ -4,11 +4,23 @@ pub const TOTAL_SLOTS: usize = 4096;
 pub const UPPER_RECALL_SLOTS: usize = 128;
 pub const SPLIT_LAYER: usize = 16;
 
-/// Fixed 4,096-slot per-layer buffer with asymmetric 3-tier partitioning:
+pub const SpanType = enum(u8) {
+    system = 0,
+    user = 1,
+    thought = 2,
+    tool_call = 3,
+    tool_result = 4,
+    response_sentence = 5,
+    turn_end = 6,
+};
+
+/// Fixed 4,096-slot per-layer buffer with uniform 3-tier partitioning across all layers:
 ///   Tier 1: [0 .. num_anchors)                           Immutable Dynamic Anchors
 ///   Tier 2: [num_anchors .. recallStart(l))             Sliding FIFO Ring Window
-///   Tier 3: [recallStart(l) .. TOTAL_SLOTS)              Associative Recall (Layers 16..47 only)
+///   Tier 3: [recallStart(l) .. TOTAL_SLOTS)              Associative Recall
 pub const DynamicRingBuffer = struct {
+    pub const MAX_BOUNDARIES: usize = 1024;
+
     allocator: std.mem.Allocator,
     num_layers: usize,
     max_kv_dim: usize,
@@ -21,7 +33,9 @@ pub const DynamicRingBuffer = struct {
     active: []bool,
     attention_mass: []f32,
     total_ingested: usize,
-    turn_boundaries: [128]usize = [_]usize{0} ** 128,
+    turn_boundaries: [MAX_BOUNDARIES]usize = [_]usize{0} ** MAX_BOUNDARIES,
+    boundary_types: [MAX_BOUNDARIES]SpanType = [_]SpanType{.turn_end} ** MAX_BOUNDARIES,
+    boundary_salience: [MAX_BOUNDARIES]f32 = [_]f32{1.0} ** MAX_BOUNDARIES,
     num_turn_boundaries: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, num_layers: usize, max_kv_dim: usize, num_anchors: usize, window_size: usize, num_recall: usize) !DynamicRingBuffer {
@@ -59,17 +73,27 @@ pub const DynamicRingBuffer = struct {
     }
 
     pub fn markTurnBoundary(self: *DynamicRingBuffer, clock: usize) void {
-        if (self.num_turn_boundaries > 0 and self.turn_boundaries[(self.num_turn_boundaries - 1) % 128] == clock) return;
-        const idx = self.num_turn_boundaries % 128;
+        self.markBoundary(clock, .turn_end, 1.0);
+    }
+
+    pub fn markBoundary(self: *DynamicRingBuffer, clock: usize, span_type: SpanType, salience: f32) void {
+        if (self.num_turn_boundaries > 0 and self.turn_boundaries[(self.num_turn_boundaries - 1) % MAX_BOUNDARIES] == clock) {
+            self.boundary_types[(self.num_turn_boundaries - 1) % MAX_BOUNDARIES] = span_type;
+            self.boundary_salience[(self.num_turn_boundaries - 1) % MAX_BOUNDARIES] = salience;
+            return;
+        }
+        const idx = self.num_turn_boundaries % MAX_BOUNDARIES;
         self.turn_boundaries[idx] = clock;
+        self.boundary_types[idx] = span_type;
+        self.boundary_salience[idx] = salience;
         self.num_turn_boundaries += 1;
     }
 
     pub fn snapToBoundary(self: *const DynamicRingBuffer, raw_min_clock: usize) usize {
         if (raw_min_clock <= self.num_anchors or self.num_turn_boundaries == 0) return raw_min_clock;
-        const start = if (self.num_turn_boundaries > 128) self.num_turn_boundaries - 128 else 0;
+        const start = if (self.num_turn_boundaries > MAX_BOUNDARIES) self.num_turn_boundaries - MAX_BOUNDARIES else 0;
         for (start..self.num_turn_boundaries) |i| {
-            const b = self.turn_boundaries[i % 128];
+            const b = self.turn_boundaries[i % MAX_BOUNDARIES];
             if (b >= raw_min_clock) return b;
         }
         return raw_min_clock;
@@ -78,7 +102,8 @@ pub const DynamicRingBuffer = struct {
         self.num_anchors = @min(n, self.total_slots - UPPER_RECALL_SLOTS - 64);
     }
     pub inline fn recallSlots(self: *const DynamicRingBuffer, layer: usize) usize {
-        return if (layer < SPLIT_LAYER or self.total_slots < UPPER_RECALL_SLOTS * 2) 0 else UPPER_RECALL_SLOTS;
+        _ = layer;
+        return if (self.total_slots < UPPER_RECALL_SLOTS * 2) 0 else UPPER_RECALL_SLOTS;
     }
     pub inline fn recallStart(self: *const DynamicRingBuffer, layer: usize) usize {
         return self.total_slots - self.recallSlots(layer);
@@ -219,14 +244,13 @@ pub const DynamicRingBuffer = struct {
     }
 
     pub fn clearRecall(self: *DynamicRingBuffer) void {
-        for (SPLIT_LAYER..self.num_layers) |l| {
+        for (0..self.num_layers) |l| {
             const base = l * self.total_slots + self.recallStart(l);
             @memset(self.active[base .. base + self.recallSlots(l)], false);
         }
     }
 
     pub fn writeRecallKV(self: *DynamicRingBuffer, layer: usize, rank: usize, k_src: []const f32, v_src: []const f32, clock: usize) void {
-        if (layer < SPLIT_LAYER) return;
         const slot = self.recallStart(layer) + rank;
         if (slot >= self.total_slots) return;
         const slot_idx = layer * self.total_slots + slot;

@@ -120,4 +120,69 @@ describe('Streaming Transduction Flow & In-Flight Barge-In', () => {
     assert.strictEqual(userMsg.sender, 'User')
     assert.strictEqual(sentPayloads[0].includes('cancel that and run a quick probe'), true)
   })
+
+  it('queues in-flight user barge-in into NotificationManager as pending interrupt without premature active assignment', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+
+    let sentPayloads = []
+    const mockClient = {
+      sendInput: (payload) => { sentPayloads.push(payload) },
+    }
+    const mockSession = {}
+    const mockOrchestrator = {
+      getWaitingForUserTasks: () => [],
+      getActiveStep: () => null,
+    }
+    const mockTimers = {}
+    const { NotificationManager } = require('../lib/notify')
+    const notManager = NotificationManager()
+
+    const fs = require('fs')
+    const os = require('os')
+    const path = require('path')
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vfs-bargein-test-'))
+    const { Vfs } = require('../lib/vfs')
+    const vfs = Vfs(tmpDir)
+
+    controller.init(store, mockClient, mockSession, mockOrchestrator, mockTimers, 'You are Gemma.', vfs, notManager)
+
+    // Simulate an active turn in-flight
+    const initialTurn = notManager.notify('msg/user/1001.txt', 'Initial task', 'not101')
+    notManager.markServicing(initialTurn.id)
+    controller.refs.activeTurnNotificationId = initialTurn.id
+
+    store.appendActiveResponse('Starting initial response...')
+    store.setGenerating(true)
+
+    const mockCtx = {
+      setFocus: () => {},
+      redraw: () => {},
+    }
+
+    // User barges in mid-generation
+    controller.onSubmitInput(mockCtx, {
+      value: 'No python please',
+    })
+
+    // Previous active turn should be suspended
+    const suspended = notManager.getSuspended()
+    assert.strictEqual(suspended.length, 1)
+    assert.strictEqual(suspended[0].id, 'not101')
+
+    // Active turn notification ID must NOT be prematurely assigned to new item
+    assert.strictEqual(controller.refs.activeTurnNotificationId, null)
+
+    // Unserviced queue must contain the new barge-in notification
+    const unserviced = notManager.getUnserviced().filter(a => a.id !== controller.refs.activeTurnNotificationId)
+    assert.strictEqual(unserviced.length, 1)
+    assert.strictEqual(unserviced[0].preview, 'No python please')
+    assert.strictEqual(unserviced[0].status, 'PENDING')
+
+    // Input was queued for elastic yield, not dispatched immediately
+    assert.strictEqual(sentPayloads.length, 0)
+
+    // Clean up tmpDir
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
 })
