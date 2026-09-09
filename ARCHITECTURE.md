@@ -121,6 +121,29 @@ pub const LayerTelemetry = struct {
 };
 ```
 
+### E. Autonomic Control Plane & Hardware-Accelerated Instruction Dispatch (Kernel Tools)
+
+To eliminate the latency and context-pollution bottlenecks of text-serialized JSON RPCs for high-frequency actions, the engine introduces a dual-plane execution hierarchy:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                               DUAL-PLANE EXECUTION MODEL                                │
+├─────────────────────────────────────────────┬───────────────────────────────────────────┤
+│ 1. KERNEL CONTROL PLANE (In-Engine / Direct)│ 2. APPLICATION TOOLING (Userland / Host) │
+├─────────────────────────────────────────────┼───────────────────────────────────────────┤
+│ • Sub-2ms Constrained 1-Token Probes.       │ • Rich variable arguments & JSON schemas. │
+│ • FSM action masking over valid transitions.│ • Free-form shell execution (`cmd`).      │
+│ • Autonomic task triage (`OP_EVENT_ROUTED`).│ • Persistent PTY terminals (`trm_*`).     │
+│ • Stateful push-stream reading (`read`).   │ • External API interactions & file edits. │
+│ • Interrupt dismissal (`ack` / `snooze`).   │ • Managed in userland host / client daemon│
+│ • Direct UMA logit evaluation on GPU.       │   with standard security boundaries.      │
+└─────────────────────────────────────────────┴───────────────────────────────────────────┘
+```
+
+1. **Kernel-Level µOp Instructions:** Discrete decisions (e.g. triaging an incoming notification to an existing Task vs. creating a New Task, acknowledging alerts, or continuing a read stream) are evaluated via constrained logit masking over candidate tokens in a single forward pass, executing in under 2 milliseconds without emitting text.
+2. **Stateful Task-Owned Read Streams:** Open file cursors and reading buffers are owned by persistent `Task` contexts rather than ephemeral `Notification` events. When an external interrupt occurs, reading is paused at the nearest natural boundary and resumed seamlessly once the interrupt is serviced.
+3. **Dedicated Specification:** For comprehensive architectural details, action grammar schemas, robotics use-cases, and benchmark comparisons, see [KERNEL_TOOLS.md](KERNEL_TOOLS.md).
+
 ---
 
 ## 3. PHASE 1: Zero-Retraining Streaming Engine & Dynamic Ring Baseline

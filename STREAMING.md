@@ -301,3 +301,39 @@ When slots are evicted non-contiguously and compacted into contiguous physical m
 ### Phase 2: Native Flow Control via Fine-Tuning
 - **Native `<|yield|>` Emission**: Fine-tune Gemma 4 on conversational and technical micro-burst datasets so the model learns to emit `<|yield|>` at self-chosen, structurally sound pause points.
 - **Bidirectional Transduction**: Eliminates all external heuristic boundary detection, enabling perfectly synchronized, interactive dialogue and multi-step tool execution at line rate.
+
+---
+
+## 9. Natural-Boundary Ingestion & Bidirectional Streaming (Push-Reading)
+
+While soft yielding (`STOP_ELASTIC_YIELD`) solves the output generation side of streaming transduction, true full-duplex operation requires symmetry on the **input ingestion side**.
+
+```
+                         BIDIRECTIONAL STREAMING TRANSDUCTION
+                               
+      INPUT INGESTION (Push-Reading)              OUTPUT DECODE (Micro-Bursting)
+  ┌─────────────────────────────────────┐     ┌─────────────────────────────────────┐
+  │ • Paragraph / Semantic Slicing      │     │ • Syntactic Stack Boundary Gating   │
+  │ • Prefill chunk into Ring Buffer    │     │ • Generate elastic phrase burst     │
+  │ • Yield at natural rest points      │     │ • Yield at low-entropy phrase break │
+  └──────────────────┬──────────────────┘     └──────────────────┬──────────────────┘
+                     │                                           │
+                     ▼                                           ▼
+             [ ELASTIC YIELD ]                           [ ELASTIC YIELD ]
+         Check Interrupts / Probes                   Check Interrupts / Probes
+```
+
+### 1. The Flaw of Artificial Pagination
+Conventional agent tooling reads files via rigid character-count slicing (e.g. 512 chars at a time). This severs sentences in half, breaks code blocks mid-expression, and forces the model to expend a full conversational turn and 50+ tokens of tool calling boilerplate for every slice.
+
+### 2. Natural Semantic Boundaries & Surprisal Gating
+Push-stream reading replaces rigid slicing with natural syntactic chunking:
+* Inbound text is chunked along blank lines (`\n\n`), sentence boundaries, or function signatures up to a bounded size (~128–256 tokens).
+* **Comprehension Entropy**: As tokens are ingested during prefill, negative log-likelihood (surprisal) drops to local minima at semantic completion points (the end of a paragraph or code block).
+* The engine pauses prefill at these natural comprehension resting points, soft-yielding to check for pending environmental notifications (`STOP_ELASTIC_YIELD`).
+
+### 3. Stateful Task-Owned Reading & Zero-Turn Continuation
+* **Task Ownership**: Reading streams are bound to persistent `Task` contexts, not ephemeral notifications. If a background command alert interrupts a read, the cursor is frozen on the task; once the alert is serviced, reading continues without amnesia or re-reading.
+* **Autonomous Push**: If no interrupts are pending, the engine uses the autonomic control plane (a constrained 1-token probe or `OP_RESUME`) to ingest the next paragraph directly into the dynamic ring buffer at line rate (~1,000 tok/s), eliminating roundtrip tool call latency.
+* **Architecture Details**: See [ENGINEERING.md](ENGINEERING.md) Section 15 and [KERNEL_TOOLS.md](KERNEL_TOOLS.md) for complete control plane specifications.
+

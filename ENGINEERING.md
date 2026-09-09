@@ -454,6 +454,30 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 * **Additive Group Rotary Shifting:** When episodes are recalled from episodic memory into Tier 3 recall slots, $K$ vectors are dynamically re-rotated head-by-head using the delta angle $\Delta\theta = \theta \times (\text{target\_clock} - \text{mem\_clock})$.
 * **Controlled Relative Distance:** Recalled memories are positioned into synthetic recent attention context ($\text{current\_clock} - (\text{rank} + 1)$), allowing the model to attend to recalled context with natural geometric proximity.
 
+---
+
+## 15. Autonomic Control Plane, Task-Event Separation, and Stateful Push-Stream Reading
+
+### 1. Deconstructing `maxTokens` into an Asynchronous Runaway Circuit-Breaker
+* **The Monolithic Cutoff Fallacy:** Hard turn-level token limits (e.g. 256 tokens) break streaming transduction when long explanations are interleaved with tool executions, background notifications, and elastic soft yields (`STOP_ELASTIC_YIELD`).
+* **Streaming Odometer Model:** Tokens are tracked continuously across session milestones in `.stream.jsonl`. Instead of an artificial turn truncation wall, `maxTokens` is elevated to an asynchronous runaway safety watchdog (e.g. 4,096 tokens without yielding), while turn termination and length governance are driven naturally by canonical `<end_of_turn>` tokens and real-time user barge-in.
+
+### 2. The Event vs. Task Architectural Invariant
+* **Notifications (Signals / Events):** Ephemeral, LIFO-queued alerts indicating an environmental state change (`msg/user/...`, `cmd`, `trm`). Once acknowledged (`ack`), the notification lifecycle terminates.
+* **Tasks (Execution Contexts):** Durable threads of intent that own execution resources, including open read streams, scratchpad memory, and hierarchical plan steps.
+* **Separation of Concerns:** Multiple notifications can target a single ongoing task (e.g., an in-flight steering directive like "No Python please"), while a single channel can spawn multiple distinct tasks (e.g., "Add Owen's birthday to my calendar" mid-explanation). Tasks persist across interruptions without orphaning resources.
+
+### 3. Autonomic Task Triage via Constrained 1-Token Probing
+* **The Routing Bottleneck:** Heuristic channel-based routing fails in natural dialogue because user intent is semantic, not syntactic. Forcing the model to emit full JSON routing tool calls (`call:route_task{...}`) incurs 1–2 seconds of latency and context clutter.
+* **The Triage Probe:** When a new notification arrives, the engine formats an internal micro-frame listing active task IDs (`[0: New Task, 1: Task A, 2: Task B]`) and restricts the sampling vocabulary strictly to the candidate indices.
+* **Sub-2ms Dispatch:** A single forward step selects the target task via logit argmax, and the server emits an `OP_EVENT_ROUTED` binary frame to the client orchestrator, maintaining zero JSON overhead.
+
+### 4. Stateful Push-Stream Reading & Natural Boundary Chunking
+* **Replacing Rigid Pagination:** Replaces artificial 512-character slicing with natural semantic boundaries (paragraphs, blank lines, sentence breaks $\le 512$ chars).
+* **Task-Owned Read Streams:** Open file descriptors and read cursors are held by the active Task. When an interrupt arrives, the task pauses its cursor. When dismissed, reading resumes immediately without the model needing to re-specify file paths or offsets.
+* **Push-Stream Cooperative Yields:** The engine prefills paragraph chunks into the ring buffer, soft-yielding between chunks (`STOP_ELASTIC_YIELD`). If no external interrupts are pending, an autonomous continuation probe or `OP_RESUME` feeds the next chunk, enabling high-speed document ingestion (~500–1000 tok/s) with zero turn-overhead.
+
+
 
 
 

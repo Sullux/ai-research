@@ -103,6 +103,12 @@ When a recurrent pattern is retrieved into the landmark zone frequently enough t
 $$\sum \text{Working Memory Tax}(P) > \text{Plasticity Risk Tax}(P)$$
 The engine consolidates that episodic memory directly into the layer's MLP weight deltas ($\Delta W$). Once baked into the weights, utilizing that knowledge costs **zero context slots** and **zero retrieval operations**.
 
+### 7. Autonomic Control Plane & Hardware-Accelerated Instruction Dispatch (Kernel Tools)
+Just as input and output are unified into continuous temporal streams, machine actions are unified into a **two-tier execution model**:
+* **Kernel Control Plane (Sub-2ms µOps):** Discrete, high-frequency operations (e.g., triage of incoming events to tasks, acknowledging alerts, or continuing stateful push-reading streams) bypass text-serialized JSON RPCs. Instead, decisions are evaluated via constrained 1-token logit probing directly on the GPU, executing in under 2 milliseconds with zero context clutter or syntax hallucination.
+* **Task-Owned Push-Stream Reading:** Reading operates as an autonomous push stream sliced at natural comprehension boundaries (paragraphs, blank lines). Reading state is owned by persistent `Task` contexts, allowing the engine to pause, service external notifications, and resume seamlessly.
+* *For comprehensive architectural details and use-cases in robotics and software state machines, see [KERNEL_TOOLS.md](KERNEL_TOOLS.md) and [STREAMING.md](STREAMING.md).*
+
 ---
 
 ## Detailed Benefits of the New Approach
