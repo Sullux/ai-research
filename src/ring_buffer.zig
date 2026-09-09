@@ -130,6 +130,26 @@ pub const DynamicRingBuffer = struct {
         return slot;
     }
 
+    pub fn deactivateSlot(self: *DynamicRingBuffer, layer: usize, clock: usize) void {
+        const slot = self.getSlotIndexLayer(layer, clock);
+        const slot_idx = layer * self.total_slots + slot;
+        if (self.clocks[slot_idx] == clock) {
+            self.active[slot_idx] = false;
+            self.clocks[slot_idx] = 0;
+            self.attention_mass[slot_idx] = 0.0;
+        }
+    }
+
+    pub fn rollbackClock(self: *DynamicRingBuffer, target_clock: usize) void {
+        if (target_clock >= self.total_ingested) return;
+        for (target_clock..self.total_ingested) |c| {
+            for (0..self.num_layers) |l| {
+                self.deactivateSlot(l, c);
+            }
+        }
+        self.total_ingested = target_clock;
+    }
+
     pub fn recordAttention(self: *DynamicRingBuffer, layer: usize, slot: usize, mass: f32) void {
         if (layer < self.num_layers and slot < self.total_slots) {
             self.attention_mass[layer * self.total_slots + slot] += mass;
@@ -550,4 +570,28 @@ test "getWorkingSetGini distinguishes focused vs diffuse attention distributions
     const concentrated_gini = ring2.getWorkingSetGini();
     try std.testing.expect(concentrated_gini > 0.60);
     try std.testing.expect(!ring2.isWorkingSetSaturated(0.0005, 0.35));
+}
+
+test "ring buffer rollbackClock cleanly deactivates transient probe slots" {
+    var ring = try DynamicRingBuffer.init(std.testing.allocator, 2, 64, 4, 8, 4);
+    defer ring.deinit();
+
+    // Ingest 10 base tokens
+    for (0..10) |c| {
+        for (0..2) |l| _ = ring.activateSlot(l, c);
+    }
+    try std.testing.expectEqual(@as(usize, 10), ring.total_ingested);
+
+    // Ingest 3 transient probe tokens
+    for (10..13) |c| {
+        for (0..2) |l| _ = ring.activateSlot(l, c);
+    }
+    try std.testing.expectEqual(@as(usize, 13), ring.total_ingested);
+    const slot11 = ring.getSlotIndex(11);
+    try std.testing.expectEqual(true, ring.active[slot11]);
+
+    // Rollback to base clock 10
+    ring.rollbackClock(10);
+    try std.testing.expectEqual(@as(usize, 10), ring.total_ingested);
+    try std.testing.expectEqual(false, ring.active[slot11]);
 }

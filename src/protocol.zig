@@ -13,6 +13,9 @@ pub const OP_SET_SYSTEM: u16 = 0x0007;
 pub const OP_SNAPSHOT_SAVE: u16 = 0x0008;
 pub const OP_SNAPSHOT_LOAD: u16 = 0x0009;
 pub const OP_RESUME: u16 = 0x000A;
+pub const OP_TASK_TRIAGE: u16 = 0x000B;
+pub const OP_READ_STREAM_OPEN: u16 = 0x000C;
+pub const OP_READ_STREAM_CLOSE: u16 = 0x000D;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
 
@@ -23,6 +26,8 @@ pub const OP_TOOL_CALL: u16 = 0x0104;
 pub const OP_MEM_RESPONSE: u16 = 0x0105;
 pub const OP_STATUS: u16 = 0x0106;
 pub const OP_SNAPSHOT_STATUS: u16 = 0x0107;
+pub const OP_EVENT_ROUTED: u16 = 0x0108;
+pub const OP_READ_STREAM_STATUS: u16 = 0x0109;
 pub const OP_PONG: u16 = 0x010E;
 pub const OP_ERROR: u16 = 0x01FF;
 
@@ -53,6 +58,10 @@ pub const QUERY_PINNED: u8 = 0x03;
 pub const SNAPSHOT_STATUS_SAVED: u8 = 0;
 pub const SNAPSHOT_STATUS_LOADED: u8 = 1;
 pub const SNAPSHOT_STATUS_EXISTS: u8 = 2;
+
+pub const READ_STATUS_CHUNK: u8 = 0;
+pub const READ_STATUS_EOF: u8 = 1;
+pub const READ_STATUS_ERROR: u8 = 2;
 
 pub const Header = extern struct {
     magic: u32 = MAGIC,
@@ -166,6 +175,23 @@ pub fn writeSnapshotStatus(writer: anytype, msg_id: u16, status: u8, clock: u64,
     if (s_len > 0) try writer.writeAll(stream_id[0..s_len]);
 }
 
+pub fn writeEventRouted(writer: anytype, msg_id: u16, event_id: u16, task_id: u16, is_new_task: u8) !void {
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_EVENT_ROUTED, .payload_len = 6 });
+    try writer.writeInt(u16, event_id, .little);
+    try writer.writeInt(u16, task_id, .little);
+    try writer.writeByte(is_new_task);
+    try writer.writeByte(0); // reserved
+}
+
+pub fn writeReadStreamStatus(writer: anytype, msg_id: u16, task_id: u16, status: u8, bytes_read: u32, new_offset: u64) !void {
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_READ_STREAM_STATUS, .payload_len = 16 });
+    try writer.writeInt(u16, task_id, .little);
+    try writer.writeByte(status);
+    try writer.writeByte(0); // reserved
+    try writer.writeInt(u32, bytes_read, .little);
+    try writer.writeInt(u64, new_offset, .little);
+}
+
 pub fn writeError(writer: anytype, msg_id: u16, msg: []const u8) !void {
     const len: u32 = @intCast(msg.len);
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_ERROR, .payload_len = len });
@@ -198,4 +224,39 @@ test "protocol write token frame" {
     const parsed_hdr = try readHeader(stream.reader());
     try std.testing.expectEqual(OP_STREAM_CONTENT, parsed_hdr.opcode);
     try std.testing.expectEqual(@as(u32, 24 + 5), parsed_hdr.payload_len);
+}
+
+test "protocol write event routed frame" {
+    var buf: [128]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeEventRouted(stream.writer(), 1, 101, 2, 0);
+    stream.pos = 0;
+    const parsed_hdr = try readHeader(stream.reader());
+    try std.testing.expectEqual(OP_EVENT_ROUTED, parsed_hdr.opcode);
+    try std.testing.expectEqual(@as(u32, 6), parsed_hdr.payload_len);
+    const event_id = try stream.reader().readInt(u16, .little);
+    const task_id = try stream.reader().readInt(u16, .little);
+    const is_new_task = try stream.reader().readByte();
+    try std.testing.expectEqual(@as(u16, 101), event_id);
+    try std.testing.expectEqual(@as(u16, 2), task_id);
+    try std.testing.expectEqual(@as(u8, 0), is_new_task);
+}
+
+test "protocol write read stream status frame" {
+    var buf: [128]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeReadStreamStatus(stream.writer(), 1, 5, READ_STATUS_CHUNK, 512, 1024);
+    stream.pos = 0;
+    const parsed_hdr = try readHeader(stream.reader());
+    try std.testing.expectEqual(OP_READ_STREAM_STATUS, parsed_hdr.opcode);
+    try std.testing.expectEqual(@as(u32, 16), parsed_hdr.payload_len);
+    const task_id = try stream.reader().readInt(u16, .little);
+    const status = try stream.reader().readByte();
+    _ = try stream.reader().readByte(); // reserved
+    const bytes_read = try stream.reader().readInt(u32, .little);
+    const new_offset = try stream.reader().readInt(u64, .little);
+    try std.testing.expectEqual(@as(u16, 5), task_id);
+    try std.testing.expectEqual(READ_STATUS_CHUNK, status);
+    try std.testing.expectEqual(@as(u32, 512), bytes_read);
+    try std.testing.expectEqual(@as(u64, 1024), new_offset);
 }

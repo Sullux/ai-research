@@ -40,17 +40,6 @@ tools:
         type: integer
         description: Maximum number of memories to return (default 5)
         required: false
-  read:
-    description: Read bounded chunk (up to 512 chars) from a file, user message (msg/user/<id>.txt), command log (tmp/cmd_<id>.stdout.log), or terminal screen (trm/<name>/screen.txt)
-    parameters:
-      path:
-        type: string
-        description: Relative path under filesystem root or project file path (e.g. msg/user/1001.txt)
-        required: true
-      offset:
-        type: integer
-        description: Character offset to begin reading
-        required: false
   cmd:
     description: Execute a shell command in an ephemeral subshell. Fast commands (<= 250ms, <= 128 chars) return inline; long commands detach to background logs (tmp/cmd_<id>.stdout.log) with a reminder timer.
     parameters:
@@ -102,28 +91,9 @@ tools:
         type: string
         description: Key name (e.g. ctrl+c, enter, esc, up)
         required: true
-  ack:
-    description: Permanently dismiss and resolve one or more pending notifications (accepts id string e.g. "not47" or list/comma-separated e.g. "not47, not48")
-    parameters:
-      id:
-        type: string
-        description: Notification identifier or comma-separated list of identifiers (e.g. not47 or not47, not48)
-        required: true
-  snooze:
-    description: Suppress or defer a notification or interrupt. Without a duration, defers the item to the bottom of the queue until active tasks finish; with a duration (e.g. 30s, 1m, 5m), suppresses until the timer elapses.
-    parameters:
-      id:
-        type: string
-        description: Target identifier (e.g. not47, cmd_101, step_1001.2)
-        required: true
-      duration:
-        type: string
-        description: Optional duration string e.g. 30s, 1m, 5m. Omit to defer until current active work completes.
-        required: false
 ---
 
 Operational Directives:
-- Incoming messages and environmental alerts arrive with an envelope header `[Event: <id> | Source: <source>]` followed by the message payload. The `<id>` (e.g. `not101`) identifies the item in your notification queue.
 - Virtual File Subsystem (VFS) layout (paths relative to root):
   - `msg/user/`: Inbound read-only user messages (`<id>.txt` e.g. `1001.txt`).
   - `tmp/`: Detached background command logs (`cmd_<id>.stdout.log`).
@@ -131,8 +101,5 @@ Operational Directives:
 - For multi-step tasks, always formulate a plan using the plan tool before taking actions.
 - After completing a task step, immediately mark it complete using the done tool.
 - When user intervention or approval is strictly required, request input using the ask_user tool.
-- When a notification indicates a truncated message or file (`...` or `read: <path>`), you MUST inspect the full text using the read tool with the given path and offset 0 before formulating a final answer or plan. Never guess or assume the contents of truncated inputs.
-- When background operations or alerts require time, defer or suppress them using the snooze tool. If an interrupt arrives while in the middle of an existing task or response, defer it to the back of the queue using the snooze tool without a duration until active work finishes.
-- To permanently resolve or dismiss handled notifications, dismiss them using the ack tool.
 - When asked about earlier conversation or context beyond immediate view, search episodic memory using the recall tool.
 - Think deeply and strategically within reasoning thoughts before calling tools or answering.

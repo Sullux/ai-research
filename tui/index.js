@@ -14,7 +14,14 @@ const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
-const { STOP_END_OF_TURN, STOP_ELASTIC_YIELD, STOP_TOOL_CALL } = require('./lib/protocol/constants')
+const { TaskManager } = require('./lib/tasks')
+const {
+  STOP_END_OF_TURN,
+  STOP_ELASTIC_YIELD,
+  STOP_TOOL_CALL,
+  READ_STATUS_CHUNK,
+  READ_STATUS_EOF,
+} = require('./lib/protocol/constants')
 const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
 
@@ -214,10 +221,11 @@ const main = () => {
     extraArgs,
   })
   const orchestrator = Orchestrator(timers)
+  const taskManager = TaskManager()
   const registry = ToolRegistry(vfs, cmdRunner, trmManager, notManager, client, orchestrator)
   const parser = ToolParser(registry, client, store)
 
-  controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager)
+  controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager, taskManager)
   controller.refs.isEngineReady = false
 
   // Automatic Snapshot Checkpointing State
@@ -553,6 +561,44 @@ const main = () => {
 
   client.on('memResponse', ({ count, status }) => {
     store.setStatus(`Memory retrieved: ${count} episodes (status: ${status})`)
+    requestRedraw()
+  })
+
+  client.on('eventRouted', ({ eventId, taskId, isNewTask }) => {
+    if (isNewTask) {
+      const alert = notManager.getPending().find(a => a.seq === eventId || a.id === `not${eventId}`)
+      const title = alert?.preview?.slice(0, 40) || `Task ${eventId}`
+      const newTask = taskManager.createTask(title)
+      store.addStreamEntry({
+        type: 'system',
+        title: '🎯 NEW TASK',
+        content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${title}"`,
+      })
+    } else {
+      taskManager.setActiveTask(taskId)
+      store.addStreamEntry({
+        type: 'system',
+        title: '🎯 ROUTED',
+        content: `Autonomic triage routed Event not${eventId} to Task #${taskId}`,
+      })
+    }
+    requestRedraw()
+  })
+
+  client.on('readStreamStatus', ({ taskId, status, bytesRead, newOffset }) => {
+    const task = taskManager.getTask(taskId)
+    if (task) {
+      if (status === READ_STATUS_EOF) {
+        taskManager.closeReadStream(taskId)
+        store.addStreamEntry({
+          type: 'system',
+          title: '📖 READ COMPLETE',
+          content: `Push reading completed for Task #${taskId} (${newOffset} bytes read).`,
+        })
+      } else if (status === READ_STATUS_CHUNK) {
+        taskManager.updateReadStream(taskId, { offset: newOffset, bytesRead })
+      }
+    }
     requestRedraw()
   })
 

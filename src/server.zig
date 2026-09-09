@@ -170,6 +170,9 @@ pub const Server = struct {
                 protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_LOAD => try self.handleSnapshotLoad(hdr.msg_id, p, &async_writer),
+                protocol.OP_TASK_TRIAGE => try self.handleTaskTriage(hdr.msg_id, p, &async_writer),
+                protocol.OP_READ_STREAM_OPEN => try self.handleReadStreamOpen(hdr.msg_id, p, &async_writer),
+                protocol.OP_READ_STREAM_CLOSE => self.handleReadStreamClose(p),
                 protocol.OP_SET_CONFIG => self.handleSetConfig(p),
                 protocol.OP_MEM_QUERY => try self.handleMemQuery(hdr.msg_id, p, &async_writer),
                 protocol.OP_MEM_COMMIT => self.handleMemCommit(),
@@ -917,6 +920,163 @@ pub const Server = struct {
             const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
             _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
         }
+    }
+
+    fn handleTaskTriage(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
+        if (p.len < 4) {
+            try protocol.writeEventRouted(writer, msg_id, 0, 0, 1);
+            writer.flush();
+            return;
+        }
+        const event_id = std.mem.readInt(u16, p[0..2][0..2], .little);
+        const num_tasks = std.mem.readInt(u16, p[2..4][0..2], .little);
+        var offset: usize = 4;
+
+        var task_ids: [16]u16 = undefined;
+        var task_count: usize = 0;
+
+        var prompt_buf: [2048]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&prompt_buf);
+        const p_writer = stream.writer();
+
+        try p_writer.writeAll("\n[Triage] Classify target task index (0 for new task):\n0: New Task\n");
+
+        for (0..num_tasks) |_| {
+            if (offset + 4 > p.len) break;
+            const tid = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
+            const title_len = std.mem.readInt(u16, p[offset + 2 .. offset + 4][0..2], .little);
+            offset += 4;
+            if (offset + title_len > p.len) break;
+            const title = p[offset .. offset + title_len];
+            offset += title_len;
+            if (task_count < 15) {
+                task_ids[task_count] = tid;
+                task_count += 1;
+                try std.fmt.format(p_writer, "{d}: {s}\n", .{ task_count, title });
+            }
+        }
+
+        if (offset + 2 <= p.len) {
+            const ev_len = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
+            offset += 2;
+            if (offset + ev_len <= p.len) {
+                const ev_text = p[offset .. offset + ev_len];
+                try std.fmt.format(p_writer, "Event: {s}\nTarget index: ", .{ ev_text });
+            }
+        }
+
+        if (task_count == 0) {
+            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
+            writer.flush();
+            return;
+        }
+
+        var cand_toks: [16]u32 = undefined;
+        var cand_count: usize = 0;
+        for (0..task_count + 1) |i| {
+            var digit_buf: [4]u8 = undefined;
+            const digit_str = try std.fmt.bufPrint(&digit_buf, "{d}", .{i});
+            const encoded = try self.tok.encode(self.allocator, digit_str, false);
+            defer self.allocator.free(encoded);
+            if (encoded.len > 0) {
+                cand_toks[cand_count] = encoded[0];
+                cand_count += 1;
+            }
+        }
+
+        const prompt_str = stream.getWritten();
+        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
+        defer self.allocator.free(tokens);
+
+        if (tokens.len == 0 or cand_count == 0) {
+            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
+            writer.flush();
+            return;
+        }
+
+        const saved_clock = self.clock;
+        var chosen_idx: usize = 0;
+
+        const last_tok: u32 = tokens[tokens.len - 1];
+        if (tokens.len > 1) {
+            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
+        }
+        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+        self.clock += 1;
+
+        const winning_tok = if (self.gpu_opt != null)
+            self.sampler.sampleConstrainedTopK(&self.scratch.topk_candidates, cand_toks[0..cand_count])
+        else
+            self.sampler.sampleConstrained(self.scratch.logits, cand_toks[0..cand_count]);
+
+        for (cand_toks[0..cand_count], 0..) |ct, idx| {
+            if (ct == winning_tok) {
+                chosen_idx = idx;
+                break;
+            }
+        }
+
+        self.ring.rollbackClock(saved_clock);
+        self.clock = saved_clock;
+
+        if (chosen_idx == 0) {
+            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
+        } else {
+            const target_task_id = task_ids[chosen_idx - 1];
+            try protocol.writeEventRouted(writer, msg_id, event_id, target_task_id, 0);
+        }
+        writer.flush();
+    }
+
+    fn handleReadStreamOpen(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
+        if (p.len < 12) return;
+        const task_id = std.mem.readInt(u16, p[0..2][0..2], .little);
+        const file_offset = std.mem.readInt(u64, p[2..10][0..8], .little);
+        const path_len = std.mem.readInt(u16, p[10..12][0..2], .little);
+        if (12 + path_len > p.len) return;
+        const file_path = p[12 .. 12 + path_len];
+
+        const file = std.fs.cwd().openFile(file_path, .{}) catch {
+            try protocol.writeReadStreamStatus(writer, msg_id, task_id, protocol.READ_STATUS_ERROR, 0, file_offset);
+            writer.flush();
+            return;
+        };
+        defer file.close();
+
+        file.seekTo(file_offset) catch {
+            try protocol.writeReadStreamStatus(writer, msg_id, task_id, protocol.READ_STATUS_ERROR, 0, file_offset);
+            writer.flush();
+            return;
+        };
+
+        var buf: [512]u8 = undefined;
+        const bytes_read = file.read(&buf) catch {
+            try protocol.writeReadStreamStatus(writer, msg_id, task_id, protocol.READ_STATUS_ERROR, 0, file_offset);
+            writer.flush();
+            return;
+        };
+
+        const new_offset = file_offset + bytes_read;
+        const is_eof = (bytes_read < buf.len);
+        const status: u8 = if (is_eof) protocol.READ_STATUS_EOF else protocol.READ_STATUS_CHUNK;
+
+        if (bytes_read > 0) {
+            var chunk_buf: [1024]u8 = undefined;
+            const chunk_text = try std.fmt.bufPrint(&chunk_buf, "\n[Stream Task {d} chunk]:\n{s}\n", .{ task_id, buf[0..bytes_read] });
+            const tokens = try self.tok.encode(self.allocator, chunk_text, false);
+            defer self.allocator.free(tokens);
+            if (tokens.len > 0) {
+                _ = try self.prefillTokens(msg_id, tokens, writer, false);
+            }
+        }
+
+        try protocol.writeReadStreamStatus(writer, msg_id, task_id, status, @intCast(bytes_read), new_offset);
+        writer.flush();
+    }
+
+    fn handleReadStreamClose(self: *Server, p: []const u8) void {
+        _ = self;
+        _ = p;
     }
 
     fn advanceToken(self: *Server, cur: u32, recent_tokens: []const u32) u32 {

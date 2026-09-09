@@ -9,7 +9,7 @@
   ],
   "runtime": {
     "thinkingBudget": 256,
-    "maxTokens": 1024,
+    "maxTokens": 4096,
     "temp": 0.7,
     "topP": 0.95,
     "minP": 0.05,

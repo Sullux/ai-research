@@ -11,6 +11,9 @@ const {
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
   OP_RESUME,
+  OP_TASK_TRIAGE,
+  OP_READ_STREAM_OPEN,
+  OP_READ_STREAM_CLOSE,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -110,6 +113,63 @@ const snapshotLoadFrame = (snapPath, msgId = 1) => {
 
 const resumeFrame = (msgId = 1) => headerBuffer(OP_RESUME, msgId, 0)
 
+const taskTriageFrame = (eventId, tasks = [], eventText = '', msgId = 1) => {
+  const eventBytes = Buffer.from(eventText, 'utf-8')
+  let taskBytesTotal = 0
+  const encodedTasks = tasks.map((t) => {
+    const titleBytes = Buffer.from(t.title ?? '', 'utf-8')
+    taskBytesTotal += 4 + titleBytes.length
+    return { id: t.id, titleBytes }
+  })
+  const payload = Buffer.alloc(4 + taskBytesTotal + 2 + eventBytes.length)
+  payload.writeUInt16LE(eventId, 0)
+  payload.writeUInt16LE(encodedTasks.length, 2)
+  let off = 4
+  for (const t of encodedTasks) {
+    payload.writeUInt16LE(t.id, off)
+    payload.writeUInt16LE(t.titleBytes.length, off + 2)
+    t.titleBytes.copy(payload, off + 4)
+    off += 4 + t.titleBytes.length
+  }
+  payload.writeUInt16LE(eventBytes.length, off)
+  eventBytes.copy(payload, off + 2)
+  const hdr = headerBuffer(OP_TASK_TRIAGE, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
+const readStreamOpenFrame = (taskId, offset = 0n, path = '', msgId = 1) => {
+  const pathBytes = Buffer.from(path, 'utf-8')
+  const payload = Buffer.alloc(2 + 8 + 2 + pathBytes.length)
+  payload.writeUInt16LE(taskId, 0)
+  payload.writeBigUInt64LE(BigInt(offset), 2)
+  payload.writeUInt16LE(pathBytes.length, 10)
+  pathBytes.copy(payload, 12)
+  const hdr = headerBuffer(OP_READ_STREAM_OPEN, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
+const readStreamCloseFrame = (taskId, msgId = 1) => {
+  const payload = Buffer.alloc(2)
+  payload.writeUInt16LE(taskId, 0)
+  const hdr = headerBuffer(OP_READ_STREAM_CLOSE, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
+const parseEventRouted = (payload) => {
+  const eventId = payload.readUInt16LE(0)
+  const taskId = payload.readUInt16LE(2)
+  const isNewTask = Boolean(payload.readUInt8(4))
+  return { eventId, taskId, isNewTask }
+}
+
+const parseReadStreamStatus = (payload) => {
+  const taskId = payload.readUInt16LE(0)
+  const status = payload.readUInt8(2)
+  const bytesRead = payload.readUInt32LE(4)
+  const newOffset = payload.readBigUInt64LE(8)
+  return { taskId, status, bytesRead, newOffset }
+}
+
 const toolReturnFrame = (toolName, result, callId = 1, status = 0, msgId = 1) => {
   const nameBytes = Buffer.from(toolName, 'utf-8')
   const jsonStr = typeof result === 'string' ? result : JSON.stringify(result)
@@ -152,6 +212,11 @@ module.exports = {
   toolReturnFrame,
   snapshotSaveFrame,
   snapshotLoadFrame,
+  taskTriageFrame,
+  readStreamOpenFrame,
+  readStreamCloseFrame,
+  parseEventRouted,
+  parseReadStreamStatus,
   configFrame,
   parsedFrame,
 }

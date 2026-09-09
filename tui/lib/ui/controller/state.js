@@ -15,11 +15,12 @@ const refs = {
   activeTurnNotificationId: null,
   vfs: null,
   notManager: null,
+  taskManager: null,
   isEngineReady: true,
   pendingInputTurn: null,
 }
 
-const init = (s, c, sess, orch, tmrs, sysPrompt = '', vfs = null, notManager = null) => {
+const init = (s, c, sess, orch, tmrs, sysPrompt = '', vfs = null, notManager = null, taskManager = null) => {
   refs.store = s
   refs.client = c
   refs.session = sess
@@ -29,6 +30,7 @@ const init = (s, c, sess, orch, tmrs, sysPrompt = '', vfs = null, notManager = n
   refs.hasSentFirstTurn = false
   refs.vfs = vfs
   refs.notManager = notManager
+  refs.taskManager = taskManager
   refs.isEngineReady = true
   refs.pendingInputTurn = null
 }

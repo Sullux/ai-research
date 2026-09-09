@@ -11,6 +11,11 @@ const {
   snapshotLoadFrame,
   resumeFrame,
   toolReturnFrame,
+  taskTriageFrame,
+  readStreamOpenFrame,
+  readStreamCloseFrame,
+  parseEventRouted,
+  parseReadStreamStatus,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -25,6 +30,10 @@ const {
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
   OP_RESUME,
+  OP_TASK_TRIAGE,
+  OP_READ_STREAM_OPEN,
+  OP_READ_STREAM_CLOSE,
+  READ_STATUS_CHUNK,
   OP_PING,
 } = require('../lib/protocol/constants')
 
@@ -117,4 +126,56 @@ test('parsedFrame handles incomplete buffers gracefully', () => {
   const frame = pingFrame(1)
   const partial = frame.subarray(0, 10)
   assert.strictEqual(parsedFrame(partial), null)
+})
+
+test('taskTriageFrame serializes candidate tasks and event text', () => {
+  const tasks = [
+    { id: 1, title: 'Refactor parser' },
+    { id: 2, title: 'Analyze memory dump' },
+  ]
+  const frame = taskTriageFrame(105, tasks, 'No Python please', 14)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_TASK_TRIAGE)
+  assert.strictEqual(parsed.header.msgId, 14)
+  assert.strictEqual(parsed.payload.readUInt16LE(0), 105) // eventId
+  assert.strictEqual(parsed.payload.readUInt16LE(2), 2) // numTasks
+})
+
+test('readStreamOpenFrame and readStreamCloseFrame serialize properly', () => {
+  const openBuf = readStreamOpenFrame(3, 1024n, 'src/main.zig', 15)
+  const parsedOpen = parsedFrame(openBuf)
+  assert.strictEqual(parsedOpen.header.opcode, OP_READ_STREAM_OPEN)
+  assert.strictEqual(parsedOpen.header.msgId, 15)
+  assert.strictEqual(parsedOpen.payload.readUInt16LE(0), 3) // taskId
+  assert.strictEqual(parsedOpen.payload.readBigUInt64LE(2), 1024n) // offset
+  const pathLen = parsedOpen.payload.readUInt16LE(10)
+  assert.strictEqual(parsedOpen.payload.subarray(12, 12 + pathLen).toString('utf-8'), 'src/main.zig')
+
+  const closeBuf = readStreamCloseFrame(3, 16)
+  const parsedClose = parsedFrame(closeBuf)
+  assert.strictEqual(parsedClose.header.opcode, OP_READ_STREAM_CLOSE)
+  assert.strictEqual(parsedClose.header.msgId, 16)
+  assert.strictEqual(parsedClose.payload.readUInt16LE(0), 3)
+})
+
+test('parseEventRouted and parseReadStreamStatus unpack binary payloads', () => {
+  const routedBuf = Buffer.alloc(6)
+  routedBuf.writeUInt16LE(105, 0)
+  routedBuf.writeUInt16LE(2, 2)
+  routedBuf.writeUInt8(0, 4) // isNewTask = false
+  const routed = parseEventRouted(routedBuf)
+  assert.strictEqual(routed.eventId, 105)
+  assert.strictEqual(routed.taskId, 2)
+  assert.strictEqual(routed.isNewTask, false)
+
+  const statusBuf = Buffer.alloc(16)
+  statusBuf.writeUInt16LE(4, 0) // taskId
+  statusBuf.writeUInt8(READ_STATUS_CHUNK, 2) // status
+  statusBuf.writeUInt32LE(512, 4) // bytesRead
+  statusBuf.writeBigUInt64LE(2048n, 8) // newOffset
+  const status = parseReadStreamStatus(statusBuf)
+  assert.strictEqual(status.taskId, 4)
+  assert.strictEqual(status.status, READ_STATUS_CHUNK)
+  assert.strictEqual(status.bytesRead, 512)
+  assert.strictEqual(status.newOffset, 2048n)
 })

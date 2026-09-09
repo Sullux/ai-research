@@ -3,11 +3,12 @@ const { EventEmitter } = require('events')
 const {
   OP_STREAM_CONTENT, OP_STREAM_THOUGHT, OP_TURN_COMPLETE,
   OP_TOOL_CALL,
-  OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
+  OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_EVENT_ROUTED, OP_READ_STREAM_STATUS, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
 } = require('../protocol/constants')
 const {
   streamInputFrame, resumeFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
-  snapshotSaveFrame, snapshotLoadFrame, toolReturnFrame, parsedFrame,
+  snapshotSaveFrame, snapshotLoadFrame, toolReturnFrame, taskTriageFrame, readStreamOpenFrame, readStreamCloseFrame,
+  parseEventRouted, parseReadStreamStatus, parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -43,6 +44,14 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
       const idLen = p.readUInt16LE(12)
       const streamId = p.subarray(14, 14 + idLen).toString('utf-8')
       emitter.emit('snapshotStatus', { status, activeSlots, clock, streamId, msgId: h.msgId })
+    }
+    else if (h.opcode === OP_EVENT_ROUTED) {
+      const routed = parseEventRouted(p)
+      emitter.emit('eventRouted', { ...routed, msgId: h.msgId })
+    }
+    else if (h.opcode === OP_READ_STREAM_STATUS) {
+      const streamStatus = parseReadStreamStatus(p)
+      emitter.emit('readStreamStatus', { ...streamStatus, msgId: h.msgId })
     }
     else if (h.opcode === OP_MEM_RESPONSE) emitter.emit('memResponse', { count: p.readUInt16LE(0), status: p.readUInt8(2), msgId: h.msgId })
     else if (h.opcode === OP_PONG) emitter.emit('pong', { msgId: h.msgId })
@@ -88,6 +97,24 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   const sendResume = () => {
     const id = nextMsgId++
     if (proc?.stdin?.writable) proc.stdin.write(resumeFrame(id))
+    return id
+  }
+
+  const sendTaskTriage = (eventId, tasks, eventText) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(taskTriageFrame(eventId, tasks, eventText, id))
+    return id
+  }
+
+  const sendReadStreamOpen = (taskId, offset, path) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(readStreamOpenFrame(taskId, offset, path, id))
+    return id
+  }
+
+  const sendReadStreamClose = (taskId) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(readStreamCloseFrame(taskId, id))
     return id
   }
 
@@ -162,6 +189,9 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     start,
     sendInput,
     sendResume,
+    sendTaskTriage,
+    sendReadStreamOpen,
+    sendReadStreamClose,
     sendSystem,
     sendToolReturn,
     sendSnapshotSave,

@@ -311,6 +311,38 @@ pub const Sampler = struct {
 
         return chosen_id;
     }
+
+    pub fn sampleConstrained(self: *Sampler, logits: []const f32, candidate_tokens: []const u32) u32 {
+        _ = self;
+        if (candidate_tokens.len == 0) return 0;
+        var best_tok: u32 = candidate_tokens[0];
+        var max_val: f32 = -1e9;
+        for (candidate_tokens) |tok| {
+            if (tok < logits.len) {
+                if (logits[tok] > max_val) {
+                    max_val = logits[tok];
+                    best_tok = tok;
+                }
+            }
+        }
+        return best_tok;
+    }
+
+    pub fn sampleConstrainedTopK(self: *Sampler, candidates: []const TopKCandidate, candidate_tokens: []const u32) u32 {
+        _ = self;
+        if (candidate_tokens.len == 0) return 0;
+        var best_tok: u32 = candidate_tokens[0];
+        var max_val: f32 = -1e9;
+        for (candidate_tokens) |tok| {
+            for (candidates) |c| {
+                if (c.id == tok and c.val > max_val) {
+                    max_val = c.val;
+                    best_tok = tok;
+                }
+            }
+        }
+        return best_tok;
+    }
 };
 
 test "sampler.sampleTopK re-sorts penalized candidates" {
@@ -383,4 +415,16 @@ test "sampler.sampleTopK suppresses critique tokens when suppress_critique is ac
 
     const chosen = sampler.sampleTopK(&candidates, null);
     try std.testing.expectEqual(@as(u32, 705), chosen);
+}
+
+test "sampler.sampleConstrained selects highest candidate logit" {
+    var sampler = Sampler.init(42, 0.0, 0.95);
+    const candidates = [_]TopKCandidate{
+        .{ .id = 101, .val = 15.0 },
+        .{ .id = 202, .val = 25.0 },
+        .{ .id = 303, .val = 18.0 },
+    };
+    const cands = [_]u32{ 101, 303 };
+    const chosen = sampler.sampleConstrainedTopK(&candidates, &cands);
+    try std.testing.expectEqual(@as(u32, 303), chosen);
 }
