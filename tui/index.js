@@ -554,6 +554,10 @@ const main = () => {
         title: '🎯 NEW TASK',
         content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${title}"`,
       })
+      if (controller.refs?.activeTurnNotificationId) {
+        notManager.suspend(controller.refs.activeTurnNotificationId)
+        controller.refs.activeTurnNotificationId = null
+      }
     } else {
       taskManager.setActiveTask(taskId)
       store.addStreamEntry({

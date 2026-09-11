@@ -711,7 +711,11 @@ pub const Server = struct {
             const window_tokens = recent_buf[w_start..recent_count];
 
             if (cur == 100) {
-                if (self.sampler.suppress_thinking) {
+                if (self.sampler.suppress_thinking or self.in_thinking_channel) {
+                    self.in_thinking_channel = false;
+                    self.sampler.suppress_thinking = true;
+                    self.sampler.suppress_critique = false;
+                    self.ring.markBoundary(self.clock, .response_sentence, 1.0);
                     cur = self.advanceToken(101, window_tokens);
                     continue;
                 }
@@ -820,12 +824,19 @@ pub const Server = struct {
             // Only yields when syntactically at rest (no unclosed code fences, quotes, parens, brackets, or braces).
             if (syntax.isAtRest()) {
                 const is_para_break = (cur == 108 or (str.len > 0 and std.mem.endsWith(u8, str, "\n\n")));
-                const is_sentence_newline = (cur == 107 and recent_count >= 2 and (
-                    recent_buf[recent_count - 2] == 108 or
-                    recent_buf[recent_count - 2] == 235270 or // '.'
-                    recent_buf[recent_count - 2] == 235327 or // '?'
-                    recent_buf[recent_count - 2] == 235272    // '!'
-                ));
+                const is_sentence_newline = (cur == 107 and (
+                    (recent_count >= 2 and (
+                        recent_buf[recent_count - 2] == 108 or
+                        recent_buf[recent_count - 2] == 236761 or // '.'
+                        recent_buf[recent_count - 2] == 236881 or // '?'
+                        recent_buf[recent_count - 2] == 236888    // '!'
+                    )) or
+                    (recent_count >= 3 and (
+                        recent_buf[recent_count - 3] == 236761 or
+                        recent_buf[recent_count - 3] == 236881 or
+                        recent_buf[recent_count - 3] == 236888
+                    ))
+                )) or (str.len >= 2 and (std.mem.endsWith(u8, str, ".\n") or std.mem.endsWith(u8, str, "?\n") or std.mem.endsWith(u8, str, "!\n")));
 
                 if (self.in_thinking_channel) {
                     // In thinking mode, yield at paragraph breaks or complete bullet/numbered thought steps (>= 24 tokens)

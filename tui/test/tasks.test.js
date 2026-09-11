@@ -70,3 +70,25 @@ test('TaskManager formatCandidates returns active candidate list', () => {
     { id: 2, title: 'Benchmark GEMV' },
   ])
 })
+
+test('TaskManager routes steering events to active task and distinct events to new task', () => {
+  const TaskManager = taskManagerFactory(() => 6000)()
+  const t1 = TaskManager.createTask('Summarize 10GB file')
+  assert.strictEqual(TaskManager.getActiveTask()?.id, t1.id)
+
+  // Simulated triage outcome 1: event routed to existing Task 1 (steering)
+  const routedEvent = { eventId: 103, taskId: t1.id, isNewTask: false }
+  if (!routedEvent.isNewTask) {
+    TaskManager.setActiveTask(routedEvent.taskId)
+  }
+  assert.strictEqual(TaskManager.getActiveTask()?.id, t1.id)
+  assert.strictEqual(TaskManager.getTask(t1.id)?.status, TASK_STATUS.ACTIVE)
+
+  // Simulated triage outcome 2: event routed as new task
+  const newEvent = { eventId: 104, taskId: 0, isNewTask: true }
+  if (newEvent.isNewTask) {
+    TaskManager.createTask('Check weather in Tokyo')
+  }
+  assert.strictEqual(TaskManager.getActiveTask()?.id, 2)
+  assert.strictEqual(TaskManager.getTask(t1.id)?.status, TASK_STATUS.PAUSED)
+})

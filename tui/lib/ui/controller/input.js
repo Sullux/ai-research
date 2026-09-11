@@ -37,9 +37,15 @@ const onSubmitInput = (ctx, payload) => {
   if (refs.vfs) {
     savedMsg = refs.vfs.saveUserMessage(val)
 
-    // If an existing turn is currently active and user barges in, mark it as SUSPENDED
-    // so it is not treated as an unserviced emergency on micro-bursts, but can be cleanly resumed later.
-    if (refs.activeTurnNotificationId && isGenerating) {
+    // Autonomic task triage: if existing active tasks exist, query 1-token probe
+    const activeTasks = refs.taskManager?.getActiveTasks() || []
+    if (activeTasks.length > 0 && refs.client) {
+      refs.client.sendTaskTriage(savedMsg.id, refs.taskManager.formatCandidates(), val)
+    } else if (refs.taskManager) {
+      refs.taskManager.createTask(val.slice(0, 40))
+    }
+
+    if (!refs.taskManager && refs.activeTurnNotificationId && isGenerating) {
       refs.notManager?.suspend(refs.activeTurnNotificationId)
       refs.activeTurnNotificationId = null
     }
