@@ -52,32 +52,25 @@ const formatBacklogResumeNudge = (notItem) => [
   '<|turn>model',
   '<|channel>thought',
   `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
-  `- If already satisfied or incorporated into previous answers: dismiss notification "${notItem.id}" using the ack tool.`,
-  `- If pending work remains: address or continue it now, then dismiss notification "${notItem.id}" using the ack tool.`,
+  `- If already satisfied or incorporated into previous answers: continue active work.`,
+  `- If pending work remains: address or continue it now.`,
   'Next action:',
 ].join('\n') + '\n'
 
 const formatNotificationInterrupt = (notItem) => {
-  const isTruncated = Boolean(notItem.extra?.isTruncated || notItem.preview?.endsWith('...'))
   const lines = [
     '<|turn>model',
     '<|channel>thought',
     `[Interrupt Event: ${notItem.id} | Source: ${notItem.source}]`,
     `Payload: ${notItem.preview}`,
+    'Evaluate interrupt and determine next action.',
+    'Next action:',
   ]
-  if (isTruncated) {
-    lines.push(`Input event ${notItem.id} is truncated.`)
-    lines.push(`Required action: Inspect full content using the read tool with path "${notItem.source}" and offset 0, defer using the snooze tool, or dismiss using the ack tool.`)
-  } else {
-    lines.push(`Evaluate interrupt: execute immediate action, defer using the snooze tool, or dismiss notification "${notItem.id}" using the ack tool.`)
-  }
-  lines.push('Next action:')
   return lines.join('\n') + '\n'
 }
 
-const formatTruncatedTurn = (userText, eventId, relPath) => [
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\nNotice: Event ${eventId} payload is truncated.\nRequired action: Inspect full content using the read tool with path "${relPath}" and offset 0 before answering.\nNext action:\n`,
-].join('\n')
+const formatTruncatedTurn = (userText) =>
+  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
 
 module.exports = {
   formatTurn1,

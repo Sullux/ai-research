@@ -45,22 +45,6 @@ const toolRegistryFactory = () => (vfs, cmdRunner, trmManager, notManager, clien
       return { status: 'query_submitted', query, topK }
     },
 
-    // VFS Bounded Streaming Reader (Capped at 512 chars)
-    read: async (args) => {
-      if (!vfs) return { error: 'No VFS available' }
-      const path = args.path || args.file || ''
-      const offset = args.offset || 0
-      const res = vfs.read(path, offset)
-      // If reading a user message file from msg/user/<seq>.txt, acknowledge the corresponding turn notification
-      if (notManager && path.startsWith('msg/user/')) {
-        const alerts = notManager.getPending().filter(a => a.source === path || a.source === `/${path}`)
-        for (const a of alerts) {
-          notManager.ack(a.id)
-        }
-      }
-      return res
-    },
-
     // Ephemeral Subshell Command
     cmd: async (args) => {
       if (!cmdRunner) return { error: 'No command runner available' }

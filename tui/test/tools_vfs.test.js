@@ -67,11 +67,11 @@ describe('ToolRegistry (Streaming & VFS Tools)', () => {
     assert.strictEqual(res.output.trim(), 'test tool')
   })
 
-  it('executes read tool with bounded 512 char slices', async () => {
+  it('reads bounded 512 char slices via VFS', () => {
     const filePath = path.join(TEST_ROOT, 'tmp', 'data.txt')
     fs.writeFileSync(filePath, 'Hello world streaming reader', 'utf-8')
 
-    const res = await registry.execute('read', { path: 'tmp/data.txt', offset: 0 })
+    const res = vfs.read('tmp/data.txt', 0)
     assert.strictEqual(res.content, 'Hello world streaming reader')
     assert.strictEqual(res.eof, true)
   })

@@ -3,7 +3,6 @@ const {
   formatTurn1,
   formatUserTurn,
   formatUserDecisionTurn,
-  formatTruncatedTurn,
 } = require('../../template')
 
 const onSubmitInput = (ctx, payload) => {
@@ -49,20 +48,15 @@ const onSubmitInput = (ctx, payload) => {
       savedMsg.relPath,
       savedMsg.preview,
       savedMsg.id,
-      { isTurnContext: true, isTruncated: savedMsg.isTruncated },
+      { isTurnContext: true },
     )
     if (!isGenerating && notItem) {
       refs.notManager?.markServicing(notItem.id)
       refs.activeTurnNotificationId = notItem.id
     }
     eventId = notItem?.id || savedMsg.id
-    if (savedMsg.isTruncated) {
-      turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath} | ${savedMsg.tokenCount} tok | read: ${savedMsg.relPath}]\n`
-      turnBody = `${savedMsg.preview}... [Truncated. Use read with path "${savedMsg.relPath}" to inspect full content]`
-    } else {
-      turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
-      turnBody = savedMsg.payload
-    }
+    turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
+    turnBody = savedMsg.payload
   }
 
   const turnContent = `${turnHeader}${turnBody}`
@@ -84,16 +78,7 @@ const onSubmitInput = (ctx, payload) => {
   const alertsRollup = refs.notManager?.formatTurnAlerts?.() || ''
 
   let payloadText = ''
-  if (savedMsg?.isTruncated) {
-    if (!refs.hasSentFirstTurn && refs.systemPrompt) {
-      refs.hasSentFirstTurn = true
-    }
-    payloadText = formatTruncatedTurn(
-      `${alertsRollup}${turnContent}`,
-      eventId,
-      savedMsg.relPath,
-    )
-  } else if (!refs.hasSentFirstTurn && refs.systemPrompt) {
+  if (!refs.hasSentFirstTurn && refs.systemPrompt) {
     refs.hasSentFirstTurn = true
     payloadText = formatTurn1(refs.systemPrompt, `${alertsRollup}${turnContent}`)
   } else {
