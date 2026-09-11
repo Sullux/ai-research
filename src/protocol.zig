@@ -18,6 +18,7 @@ pub const OP_READ_STREAM_OPEN: u16 = 0x000C;
 pub const OP_READ_STREAM_CLOSE: u16 = 0x000D;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
+pub const OP_BACKLOG_TRIAGE: u16 = 0x0010;
 
 pub const OP_STREAM_CONTENT: u16 = 0x0101;
 pub const OP_STREAM_THOUGHT: u16 = 0x0102;
@@ -28,6 +29,7 @@ pub const OP_STATUS: u16 = 0x0106;
 pub const OP_SNAPSHOT_STATUS: u16 = 0x0107;
 pub const OP_EVENT_ROUTED: u16 = 0x0108;
 pub const OP_READ_STREAM_STATUS: u16 = 0x0109;
+pub const OP_BACKLOG_ROUTED: u16 = 0x010A;
 pub const OP_PONG: u16 = 0x010E;
 pub const OP_ERROR: u16 = 0x01FF;
 
@@ -62,6 +64,10 @@ pub const SNAPSHOT_STATUS_EXISTS: u8 = 2;
 pub const READ_STATUS_CHUNK: u8 = 0;
 pub const READ_STATUS_EOF: u8 = 1;
 pub const READ_STATUS_ERROR: u8 = 2;
+
+pub const BACKLOG_ACTION_ACK: u8 = 0;
+pub const BACKLOG_ACTION_RESUME: u8 = 1;
+pub const BACKLOG_ACTION_SNOOZE: u8 = 2;
 
 pub const Header = extern struct {
     magic: u32 = MAGIC,
@@ -183,6 +189,13 @@ pub fn writeEventRouted(writer: anytype, msg_id: u16, event_id: u16, task_id: u1
     try writer.writeByte(0); // reserved
 }
 
+pub fn writeBacklogRouted(writer: anytype, msg_id: u16, event_id: u16, action: u8) !void {
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_BACKLOG_ROUTED, .payload_len = 4 });
+    try writer.writeInt(u16, event_id, .little);
+    try writer.writeByte(action);
+    try writer.writeByte(0); // reserved
+}
+
 pub fn writeReadStreamStatus(writer: anytype, msg_id: u16, task_id: u16, status: u8, bytes_read: u32, new_offset: u64) !void {
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_READ_STREAM_STATUS, .payload_len = 16 });
     try writer.writeInt(u16, task_id, .little);
@@ -240,6 +253,20 @@ test "protocol write event routed frame" {
     try std.testing.expectEqual(@as(u16, 101), event_id);
     try std.testing.expectEqual(@as(u16, 2), task_id);
     try std.testing.expectEqual(@as(u8, 0), is_new_task);
+}
+
+test "protocol write backlog routed frame" {
+    var buf: [128]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeBacklogRouted(stream.writer(), 1, 102, BACKLOG_ACTION_ACK);
+    stream.pos = 0;
+    const parsed_hdr = try readHeader(stream.reader());
+    try std.testing.expectEqual(OP_BACKLOG_ROUTED, parsed_hdr.opcode);
+    try std.testing.expectEqual(@as(u32, 4), parsed_hdr.payload_len);
+    const event_id = try stream.reader().readInt(u16, .little);
+    const action = try stream.reader().readByte();
+    try std.testing.expectEqual(@as(u16, 102), event_id);
+    try std.testing.expectEqual(BACKLOG_ACTION_ACK, action);
 }
 
 test "protocol write read stream status frame" {

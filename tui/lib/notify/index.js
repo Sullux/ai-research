@@ -24,6 +24,7 @@ const notificationManagerFactory = (now) => (timers) => {
       source, // e.g. '/msg/user/1042.txt' or '/sys/cmd/cmd_101'
       preview: typeof preview === 'string' ? preview : JSON.stringify(preview || ''),
       refId, // e.g. '1042', 'cmd_101'
+      seq: notCounter,
       extra,
       timestamp: now(),
       status: 'PENDING',

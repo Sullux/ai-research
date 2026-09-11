@@ -37,19 +37,6 @@ const onSubmitInput = (ctx, payload) => {
   if (refs.vfs) {
     savedMsg = refs.vfs.saveUserMessage(val)
 
-    // Autonomic task triage: if existing active tasks exist, query 1-token probe
-    const activeTasks = refs.taskManager?.getActiveTasks() || []
-    if (activeTasks.length > 0 && refs.client) {
-      refs.client.sendTaskTriage(savedMsg.id, refs.taskManager.formatCandidates(), val)
-    } else if (refs.taskManager) {
-      refs.taskManager.createTask(val.slice(0, 40))
-    }
-
-    if (!refs.taskManager && refs.activeTurnNotificationId && isGenerating) {
-      refs.notManager?.suspend(refs.activeTurnNotificationId)
-      refs.activeTurnNotificationId = null
-    }
-
     const notItem = refs.notManager?.notify(
       savedMsg.relPath,
       savedMsg.preview,
@@ -63,6 +50,20 @@ const onSubmitInput = (ctx, payload) => {
     eventId = notItem?.id || savedMsg.id
     turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
     turnBody = savedMsg.payload
+
+    // Autonomic task triage: if existing active tasks exist, query 1-token probe
+    const activeTasks = refs.taskManager?.getActiveTasks() || []
+    if (activeTasks.length > 0 && refs.client) {
+      const triageSeq = notItem ? notItem.seq : parseInt(savedMsg.id, 10)
+      refs.client.sendTaskTriage(triageSeq, refs.taskManager.formatCandidates(), val)
+    } else if (refs.taskManager) {
+      refs.taskManager.createTask(val.slice(0, 40))
+    }
+
+    if (!refs.taskManager && refs.activeTurnNotificationId && isGenerating) {
+      refs.notManager?.suspend(refs.activeTurnNotificationId)
+      refs.activeTurnNotificationId = null
+    }
   }
 
   const turnContent = `${turnHeader}${turnBody}`

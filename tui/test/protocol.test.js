@@ -14,8 +14,10 @@ const {
   taskTriageFrame,
   readStreamOpenFrame,
   readStreamCloseFrame,
+  backlogTriageFrame,
   parseEventRouted,
   parseReadStreamStatus,
+  parseBacklogRouted,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -33,6 +35,9 @@ const {
   OP_TASK_TRIAGE,
   OP_READ_STREAM_OPEN,
   OP_READ_STREAM_CLOSE,
+  OP_BACKLOG_TRIAGE,
+  OP_BACKLOG_ROUTED,
+  BACKLOG_ACTION_ACK,
   READ_STATUS_CHUNK,
   OP_PING,
 } = require('../lib/protocol/constants')
@@ -178,4 +183,21 @@ test('parseEventRouted and parseReadStreamStatus unpack binary payloads', () => 
   assert.strictEqual(status.status, READ_STATUS_CHUNK)
   assert.strictEqual(status.bytesRead, 512)
   assert.strictEqual(status.newOffset, 2048n)
+})
+
+test('backlogTriageFrame and parseBacklogRouted serialize and unpack properly', () => {
+  const frame = backlogTriageFrame(102, 'Summarize large file', 17)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_BACKLOG_TRIAGE)
+  assert.strictEqual(parsed.header.msgId, 17)
+  assert.strictEqual(parsed.payload.readUInt16LE(0), 102) // eventId
+  const titleLen = parsed.payload.readUInt16LE(2)
+  assert.strictEqual(parsed.payload.subarray(4, 4 + titleLen).toString('utf-8'), 'Summarize large file')
+
+  const routedBuf = Buffer.alloc(4)
+  routedBuf.writeUInt16LE(102, 0)
+  routedBuf.writeUInt8(BACKLOG_ACTION_ACK, 2)
+  const routed = parseBacklogRouted(routedBuf)
+  assert.strictEqual(routed.eventId, 102)
+  assert.strictEqual(routed.action, BACKLOG_ACTION_ACK)
 })

@@ -91,6 +91,13 @@ tools:
         type: string
         description: Key name (e.g. ctrl+c, enter, esc, up)
         required: true
+  ack:
+    description: Acknowledge and permanently dismiss a completed or satisfied notification or task
+    parameters:
+      id:
+        type: string
+        description: Notification or task ID to acknowledge (e.g. not102)
+        required: true
 ---
 
 Operational Directives:
@@ -98,6 +105,7 @@ Operational Directives:
   - `msg/user/`: Inbound read-only user messages (`<id>.txt` e.g. `1001.txt`).
   - `tmp/`: Detached background command logs (`cmd_<id>.stdout.log`).
   - `trm/<name>/`: Live persistent terminal sessions (`screen.txt` for 24x80 rendered screen, `stdout.log` for raw output stream).
+- When an alert, interrupt, or resumed event has already been satisfied or resolved, immediately dismiss it using the ack tool.
 - For multi-step tasks, always formulate a plan using the plan tool before taking actions.
 - After completing a task step, immediately mark it complete using the done tool.
 - When user intervention or approval is strictly required, request input using the ask_user tool.
