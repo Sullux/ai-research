@@ -43,6 +43,9 @@ const onSubmitInput = (ctx, payload) => {
       savedMsg.id,
       { isTurnContext: true },
     )
+    if (isGenerating && refs.activeTurnNotificationId) {
+      refs.interruptedTurnNotificationId = refs.activeTurnNotificationId
+    }
     if (!isGenerating && notItem) {
       refs.notManager?.markServicing(notItem.id)
       refs.activeTurnNotificationId = notItem.id

@@ -330,7 +330,7 @@ pub const Server = struct {
                 }
             }
             self.in_thinking_channel = in_thought;
-            self.sampler.suppress_thinking = !in_thought;
+            self.sampler.suppress_thinking = false;
         }
         return cur;
     }
@@ -530,6 +530,7 @@ pub const Server = struct {
 
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        self.sampler.suppress_thinking = false;
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
 
@@ -575,6 +576,7 @@ pub const Server = struct {
 
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
         const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        self.sampler.suppress_thinking = false;
         try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
     }
 
@@ -684,7 +686,6 @@ pub const Server = struct {
         const recent_buf = try self.allocator.alloc(u32, max_recent);
         defer self.allocator.free(recent_buf);
         var recent_count: usize = 0;
-        self.sampler.suppress_thinking = !self.in_thinking_channel;
         var syntax = SyntaxTracker{};
 
         while (true) {
@@ -951,7 +952,7 @@ pub const Server = struct {
         var stream = std.io.fixedBufferStream(&prompt_buf);
         const p_writer = stream.writer();
 
-        try p_writer.writeAll("\n[Triage] Classify target task index (0 for new task):\n0: New Task\n");
+        try p_writer.writeAll("\n[Triage] Route event to existing task or 0 for new task.\nFollow-ups, constraints, and steering belong to their active task.\n0: New independent task\n");
 
         for (0..num_tasks) |_| {
             if (offset + 4 > p.len) break;

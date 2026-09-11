@@ -54,6 +54,7 @@ const formatBacklogResumeNudge = (notItem) => [
   `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
   `- If already satisfied or incorporated into previous answers: continue active work.`,
   `- If pending work remains: address or continue it now.`,
+  'If addressing user, exit thought channel with <channel|> and speak directly to the user.',
   'Next action:',
 ].join('\n') + '\n'
 
@@ -63,7 +64,8 @@ const formatNotificationInterrupt = (notItem) => {
     '<|channel>thought',
     `[Interrupt Event: ${notItem.id} | Source: ${notItem.source}]`,
     `Payload: ${notItem.preview}`,
-    'Evaluate interrupt and determine next action.',
+    'Evaluate interrupt in reasoning thoughts.',
+    'If addressing or acknowledging the user, exit thought channel with <channel|> and deliver your response directly to the user.',
     'Next action:',
   ]
   return lines.join('\n') + '\n'

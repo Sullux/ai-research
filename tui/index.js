@@ -565,9 +565,16 @@ const main = () => {
         title: '🎯 NEW TASK',
         content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${title}"`,
       })
-      if (controller.refs?.activeTurnNotificationId) {
-        notManager.suspend(controller.refs.activeTurnNotificationId)
-        controller.refs.activeTurnNotificationId = null
+      const targetToSuspend = controller.refs?.interruptedTurnNotificationId ||
+        (controller.refs?.activeTurnNotificationId !== alert?.id ? controller.refs?.activeTurnNotificationId : null)
+      if (targetToSuspend) {
+        notManager.suspend(targetToSuspend)
+      }
+      if (controller.refs) {
+        controller.refs.interruptedTurnNotificationId = null
+        if (controller.refs.activeTurnNotificationId === targetToSuspend) {
+          controller.refs.activeTurnNotificationId = null
+        }
       }
     } else {
       taskManager.setActiveTask(taskId)
@@ -576,6 +583,9 @@ const main = () => {
         title: '🎯 ROUTED',
         content: `Autonomic triage routed Event not${eventId} to Task #${taskId}`,
       })
+      if (controller.refs) {
+        controller.refs.interruptedTurnNotificationId = null
+      }
     }
     requestRedraw()
   })
