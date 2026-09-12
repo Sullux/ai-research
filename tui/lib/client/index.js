@@ -3,12 +3,12 @@ const { EventEmitter } = require('events')
 const {
   OP_STREAM_CONTENT, OP_STREAM_THOUGHT, OP_TURN_COMPLETE,
   OP_TOOL_CALL,
-  OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_EVENT_ROUTED, OP_READ_STREAM_STATUS, OP_BACKLOG_ROUTED, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
+  OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_EVENT_ROUTED, OP_READ_STREAM_STATUS, OP_BACKLOG_ROUTED, OP_TASK_TITLE_RESULT, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
 } = require('../protocol/constants')
 const {
   streamInputFrame, resumeFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
   snapshotSaveFrame, snapshotLoadFrame, toolReturnFrame, taskTriageFrame, readStreamOpenFrame, readStreamCloseFrame,
-  backlogTriageFrame, parseEventRouted, parseReadStreamStatus, parseBacklogRouted, parsedFrame,
+  backlogTriageFrame, taskTitleFrame, parseEventRouted, parseReadStreamStatus, parseBacklogRouted, parseTaskTitleResult, parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -56,6 +56,10 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     else if (h.opcode === OP_BACKLOG_ROUTED) {
       const backlogRouted = parseBacklogRouted(p)
       emitter.emit('backlogRouted', { ...backlogRouted, msgId: h.msgId })
+    }
+    else if (h.opcode === OP_TASK_TITLE_RESULT) {
+      const titleResult = parseTaskTitleResult(p)
+      if (titleResult) emitter.emit('taskTitleResult', { ...titleResult, msgId: h.msgId })
     }
     else if (h.opcode === OP_MEM_RESPONSE) emitter.emit('memResponse', { count: p.readUInt16LE(0), status: p.readUInt8(2), msgId: h.msgId })
     else if (h.opcode === OP_PONG) emitter.emit('pong', { msgId: h.msgId })
@@ -125,6 +129,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   const sendBacklogTriage = (eventId, title) => {
     const id = nextMsgId++
     if (proc?.stdin?.writable) proc.stdin.write(backlogTriageFrame(eventId, title, id))
+    return id
+  }
+
+  const sendTaskTitle = (taskId, text) => {
+    const id = nextMsgId++
+    if (proc?.stdin?.writable) proc.stdin.write(taskTitleFrame(taskId, text, id))
     return id
   }
 
@@ -203,6 +213,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     sendReadStreamOpen,
     sendReadStreamClose,
     sendBacklogTriage,
+    sendTaskTitle,
     sendSystem,
     sendToolReturn,
     sendSnapshotSave,

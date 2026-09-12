@@ -19,6 +19,7 @@ pub const OP_READ_STREAM_CLOSE: u16 = 0x000D;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
 pub const OP_BACKLOG_TRIAGE: u16 = 0x0010;
+pub const OP_TASK_TITLE: u16 = 0x0011;
 
 pub const OP_STREAM_CONTENT: u16 = 0x0101;
 pub const OP_STREAM_THOUGHT: u16 = 0x0102;
@@ -30,6 +31,7 @@ pub const OP_SNAPSHOT_STATUS: u16 = 0x0107;
 pub const OP_EVENT_ROUTED: u16 = 0x0108;
 pub const OP_READ_STREAM_STATUS: u16 = 0x0109;
 pub const OP_BACKLOG_ROUTED: u16 = 0x010A;
+pub const OP_TASK_TITLE_RESULT: u16 = 0x010B;
 pub const OP_PONG: u16 = 0x010E;
 pub const OP_ERROR: u16 = 0x01FF;
 
@@ -205,6 +207,14 @@ pub fn writeReadStreamStatus(writer: anytype, msg_id: u16, task_id: u16, status:
     try writer.writeInt(u64, new_offset, .little);
 }
 
+pub fn writeTaskTitleResult(writer: anytype, msg_id: u16, task_id: u32, title: []const u8) !void {
+    const payload_len: u16 = @intCast(4 + 2 + title.len);
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_TASK_TITLE_RESULT, .payload_len = payload_len });
+    try writer.writeInt(u32, task_id, .little);
+    try writer.writeInt(u16, @intCast(title.len), .little);
+    try writer.writeAll(title);
+}
+
 pub fn writeError(writer: anytype, msg_id: u16, msg: []const u8) !void {
     const len: u32 = @intCast(msg.len);
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_ERROR, .payload_len = len });
@@ -286,4 +296,21 @@ test "protocol write read stream status frame" {
     try std.testing.expectEqual(READ_STATUS_CHUNK, status);
     try std.testing.expectEqual(@as(u32, 512), bytes_read);
     try std.testing.expectEqual(@as(u64, 1024), new_offset);
+}
+
+test "protocol write task title result frame" {
+    var buf: [128]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeTaskTitleResult(stream.writer(), 1, 42, "Summarize large text file");
+    stream.pos = 0;
+    const parsed_hdr = try readHeader(stream.reader());
+    try std.testing.expectEqual(OP_TASK_TITLE_RESULT, parsed_hdr.opcode);
+    try std.testing.expectEqual(@as(u32, 4 + 2 + 25), parsed_hdr.payload_len);
+    const task_id = try stream.reader().readInt(u32, .little);
+    const title_len = try stream.reader().readInt(u16, .little);
+    var title_buf: [32]u8 = undefined;
+    try stream.reader().readNoEof(title_buf[0..title_len]);
+    try std.testing.expectEqual(@as(u32, 42), task_id);
+    try std.testing.expectEqual(@as(u16, 25), title_len);
+    try std.testing.expectEqualStrings("Summarize large text file", title_buf[0..title_len]);
 }

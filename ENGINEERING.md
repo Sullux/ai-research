@@ -477,6 +477,33 @@ In Google Gemma 4, reasoning/thinking is implemented as a **global session mode 
 * **Task-Owned Read Streams:** Open file descriptors and read cursors are held by the active Task. When an interrupt arrives, the task pauses its cursor. When dismissed, reading resumes immediately without the model needing to re-specify file paths or offsets.
 * **Push-Stream Cooperative Yields:** The engine prefills paragraph chunks into the ring buffer, soft-yielding between chunks (`STOP_ELASTIC_YIELD`). If no external interrupts are pending, an autonomous continuation probe or `OP_RESUME` feeds the next chunk, enabling high-speed document ingestion (~500–1000 tok/s) with zero turn-overhead.
 
+---
+
+## 16. Autonomic Task Title Probing, Non-Blocking Snapshot Subsystem, and Thinking Channel Stabilization
+
+### 1. Autonomic Task Title Generation Probe (`OP_TASK_TITLE`)
+* **Eliminating Truncation Blindness:** Replacing coarse 40-character text slicing (`val.slice(0, 40)`), which frequently broke mid-word and degraded triage accuracy, with a dual-phase title lifecycle:
+  * **Phase 1 (Immediate Fallback):** First sentence/clause extracted cleanly up to 80 characters.
+  * **Phase 2 (Model-Generated Probe):** The client emits `OP_TASK_TITLE` (`0x0011`). The server executes a lightweight micro-decode (10–14 tokens, ~300ms) with clock rollback, generating a punchy 4-to-10 word title without punctuation or quotes, returning `OP_TASK_TITLE_RESULT` (`0x010B`).
+* **Enhanced Triage Context:** Subsequent triage probes (`OP_TASK_TRIAGE`) now operate on high-salience task titles rather than truncated sentence fragments.
+
+### 2. Eliminating Index `0` Bias in Task Triage
+* **Candidate Re-ordering:** In `handleTaskTriage`, active tasks (1..N) are listed and sampled first, with `0: New independent task` positioned last.
+* **Steering & Negative Constraint Guidance:** The routing prompt explicitly guides the model: `"Note: Follow-ups, revisions, negative constraints ('no X', 'use Y instead'), corrections, and steering belong to the active task being steered."` This eliminates misclassification of user corrections and steering interjections into competing independent tasks.
+
+### 3. Backlog Deferral Quiescence
+* **Single-Queue Loop Resolution:** Resolved the logic loop where snoozing/deferring the only task on the backlog immediately caused `processNextBacklog()` to pop it back into active execution.
+* **Gated Resumption:** Gated deferred queue popping (`processNextBacklog(allowDeferred = false)`) so that snoozed tasks remain deferred at the queue tail, allowing the engine to transition cleanly into `IDLE` state and arm the working state snapshot checkpoint timer.
+
+### 4. Non-Blocking Working State Snapshotting & 1MB Buffered I/O
+* **100x Syscall Elimination:** Wrapped snapshot serialization and deserialization in `src/snapshot.zig` with 1MB buffered I/O (`std.io.BufferedWriter` / `std.io.BufferedReader`), collapsing over 106,000 unbuffered 8KB syscalls into a few hundred large sequential block writes.
+* **Background Thread Dispatch:** Offloaded `snapshot.saveSnapshot` in `src/server.zig` to a detached worker thread (`std.Thread.spawn`). Because historical KV slots ($0..N-1$) are read-only and memory is host-visible/UMA coherent, saving runs concurrently with zero interference to the main server loop. Inference and client messaging never stall during quiescence checkpointing.
+
+### 5. Thinking Channel Sampler State Stabilization
+* **Channel Reset Invariant:** Corrected the timing of `self.sampler.suppress_thinking = false` in `src/server.zig` to ensure it is reset prior to sampling the initial token of every turn (`prefillTokens`, `handleStreamInput`, `handleResume`, `handleToolReturn`).
+* **Preserving Multi-Turn Reasoning:** Prevents token 100 (`<|channel>thought\n`) from being suppressed after Turn 1, ensuring the model retains its thinking scratchpad across all conversational turns and eliminates unreasoned 0-indexed list generation.
+
+
 
 
 

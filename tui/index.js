@@ -439,7 +439,7 @@ const main = () => {
     requestRedraw()
   })
 
-  const processNextBacklog = () => {
+  const processNextBacklog = (allowDeferred = false) => {
     const suspended = notManager.getSuspended()
     if (suspended.length > 0) {
       const nextSuspended = suspended[0]
@@ -448,16 +448,18 @@ const main = () => {
       return true
     }
 
-    const deferred = notManager.getPending().filter(a => a.isDeferred)
-    if (deferred.length > 0) {
-      const nextDeferred = deferred[0]
-      nextDeferred.isDeferred = false
-      notManager.markServicing(nextDeferred.id)
-      if (controller.refs) controller.refs.activeTurnNotificationId = nextDeferred.id
-      const interruptNudge = formatNotificationInterrupt(nextDeferred)
-      store.setGenerating(true)
-      client.sendInput(interruptNudge)
-      return true
+    if (allowDeferred) {
+      const deferred = notManager.getPending().filter(a => a.isDeferred)
+      if (deferred.length > 0) {
+        const nextDeferred = deferred[0]
+        nextDeferred.isDeferred = false
+        notManager.markServicing(nextDeferred.id)
+        if (controller.refs) controller.refs.activeTurnNotificationId = nextDeferred.id
+        const interruptNudge = formatNotificationInterrupt(nextDeferred)
+        store.setGenerating(true)
+        client.sendInput(interruptNudge)
+        return true
+      }
     }
 
     scheduleSnapshot()
@@ -558,12 +560,17 @@ const main = () => {
         a.id === `not${eventId}` ||
         a.refId === String(eventId)
       )
-      const title = alert?.preview?.slice(0, 40) || `Task ${eventId}`
-      const newTask = taskManager.createTask(title)
+      const rawText = alert?.extra?.payload || alert?.preview || `Task ${eventId}`
+      const firstLine = rawText.trim().split('\n')[0]
+      const fallbackTitle = firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine
+      const newTask = taskManager.createTask(fallbackTitle)
+      if (client) {
+        client.sendTaskTitle(newTask.id, rawText)
+      }
       store.addStreamEntry({
         type: 'system',
         title: '🎯 NEW TASK',
-        content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${title}"`,
+        content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${fallbackTitle}"`,
       })
       const targetToSuspend = controller.refs?.interruptedTurnNotificationId ||
         (controller.refs?.activeTurnNotificationId !== alert?.id ? controller.refs?.activeTurnNotificationId : null)
@@ -620,7 +627,7 @@ const main = () => {
         title: '💤 DEFERRED',
         content: `Autonomic probe deferred Task ${alert.id} to queue tail.`,
       })
-      processNextBacklog()
+      processNextBacklog(false)
     }
     requestRedraw()
   })
@@ -640,6 +647,18 @@ const main = () => {
       }
     }
     requestRedraw()
+  })
+
+  client.on('taskTitleResult', ({ taskId, title }) => {
+    if (title && taskManager.getTask(taskId)) {
+      taskManager.updateTask(taskId, { title })
+      store.addStreamEntry({
+        type: 'system',
+        title: '🏷 TASK TITLE',
+        content: `Task #${taskId} titled: "${title}"`,
+      })
+      requestRedraw()
+    }
   })
 
   client.on('drain', requestRedraw)

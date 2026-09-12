@@ -15,9 +15,11 @@ const {
   readStreamOpenFrame,
   readStreamCloseFrame,
   backlogTriageFrame,
+  taskTitleFrame,
   parseEventRouted,
   parseReadStreamStatus,
   parseBacklogRouted,
+  parseTaskTitleResult,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -36,7 +38,9 @@ const {
   OP_READ_STREAM_OPEN,
   OP_READ_STREAM_CLOSE,
   OP_BACKLOG_TRIAGE,
+  OP_TASK_TITLE,
   OP_BACKLOG_ROUTED,
+  OP_TASK_TITLE_RESULT,
   BACKLOG_ACTION_ACK,
   READ_STATUS_CHUNK,
   OP_PING,
@@ -200,4 +204,22 @@ test('backlogTriageFrame and parseBacklogRouted serialize and unpack properly', 
   const routed = parseBacklogRouted(routedBuf)
   assert.strictEqual(routed.eventId, 102)
   assert.strictEqual(routed.action, BACKLOG_ACTION_ACK)
+})
+
+test('taskTitleFrame and parseTaskTitleResult serialize and unpack properly', () => {
+  const frame = taskTitleFrame(42, 'Summarize large text file', 18)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_TASK_TITLE)
+  assert.strictEqual(parsed.header.msgId, 18)
+  assert.strictEqual(parsed.payload.readUInt32LE(0), 42)
+  const promptLen = parsed.payload.readUInt16LE(4)
+  assert.strictEqual(parsed.payload.subarray(6, 6 + promptLen).toString('utf-8'), 'Summarize large text file')
+
+  const resultBuf = Buffer.alloc(6 + 25)
+  resultBuf.writeUInt32LE(42, 0)
+  resultBuf.writeUInt16LE(25, 4)
+  Buffer.from('Summarize large text file', 'utf-8').copy(resultBuf, 6)
+  const result = parseTaskTitleResult(resultBuf)
+  assert.strictEqual(result.taskId, 42)
+  assert.strictEqual(result.title, 'Summarize large text file')
 })

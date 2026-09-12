@@ -91,7 +91,7 @@ const SyntaxTracker = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null, turn_open: bool = false,
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null, turn_open: bool = false, out_queue: ?*server_queue.OutboundQueue = null, is_saving_snapshot: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -138,6 +138,12 @@ pub const Server = struct {
         var async_writer = server_queue.AsyncWriter.init(&out_queue, self.allocator);
         defer async_writer.deinit();
 
+        self.out_queue = &out_queue;
+        defer {
+            while (self.is_saving_snapshot.load(.monotonic)) std.time.sleep(10 * std.time.ns_per_ms);
+            self.out_queue = null;
+        }
+
         try protocol.writeStatus(&async_writer, 0, protocol.STATUS_IDLE, 0.0, 0, 0, 0, 0, if (self.gpu_opt != null) 1 else 0, 0);
         async_writer.flush();
 
@@ -171,6 +177,7 @@ pub const Server = struct {
                 protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_LOAD => try self.handleSnapshotLoad(hdr.msg_id, p, &async_writer),
                 protocol.OP_TASK_TRIAGE => try self.handleTaskTriage(hdr.msg_id, p, &async_writer),
+                protocol.OP_TASK_TITLE => try self.handleTaskTitle(hdr.msg_id, p, &async_writer),
                 protocol.OP_BACKLOG_TRIAGE => try self.handleBacklogTriage(hdr.msg_id, p, &async_writer),
                 protocol.OP_READ_STREAM_OPEN => try self.handleReadStreamOpen(hdr.msg_id, p, &async_writer),
                 protocol.OP_READ_STREAM_CLOSE => self.handleReadStreamClose(p),
@@ -314,6 +321,7 @@ pub const Server = struct {
         }
 
         if (!is_system_only and tokens.len > 0) {
+            self.sampler.suppress_thinking = false;
             cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
             // If the prompt ended inside a thinking channel (<|channel>thought\n), preserve in_thinking_channel
             var in_thought = false;
@@ -330,7 +338,6 @@ pub const Server = struct {
                 }
             }
             self.in_thinking_channel = in_thought;
-            self.sampler.suppress_thinking = false;
         }
         return cur;
     }
@@ -478,15 +485,71 @@ pub const Server = struct {
             return;
         }
 
-        snapshot.saveSnapshot(snap_path, stream_id, self.clock, self.ring, &self.config, self.gpu_opt) catch |err| {
-            try protocol.writeError(writer, msg_id, "Failed to save snapshot");
+        if (self.is_saving_snapshot.swap(true, .seq_cst)) {
+            try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_EXISTS, @intCast(self.clock), self.slots(), stream_id);
             writer.flush();
-            return err;
+            return;
+        }
+
+        const out_q = self.out_queue orelse {
+            self.is_saving_snapshot.store(false, .seq_cst);
+            return;
         };
 
-        self.last_snapshot_clock = self.clock;
-        try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_SAVED, @intCast(self.clock), self.slots(), stream_id);
-        writer.flush();
+        const owned_path = try self.allocator.dupe(u8, snap_path);
+        errdefer self.allocator.free(owned_path);
+        const owned_stream_id = try self.allocator.dupe(u8, stream_id);
+        errdefer self.allocator.free(owned_stream_id);
+
+        const SaveTask = struct {
+            server: *Server,
+            msg_id: u16,
+            path: []u8,
+            stream_id: []u8,
+            clock: usize,
+            slots: u16,
+            out_queue: *server_queue.OutboundQueue,
+
+            fn run(t: @This()) void {
+                defer {
+                    t.server.is_saving_snapshot.store(false, .seq_cst);
+                    t.server.allocator.free(t.path);
+                    t.server.allocator.free(t.stream_id);
+                }
+                snapshot.saveSnapshot(t.path, t.stream_id, t.clock, t.server.ring, &t.server.config, t.server.gpu_opt) catch |err| {
+                    std.log.err("Background snapshot failed: {any}", .{err});
+                    var err_writer = server_queue.AsyncWriter.init(t.out_queue, t.server.allocator);
+                    defer err_writer.deinit();
+                    protocol.writeError(&err_writer, t.msg_id, "Failed to save snapshot") catch {};
+                    err_writer.flush();
+                    return;
+                };
+
+                t.server.last_snapshot_clock = t.clock;
+                var stat_writer = server_queue.AsyncWriter.init(t.out_queue, t.server.allocator);
+                defer stat_writer.deinit();
+                protocol.writeSnapshotStatus(&stat_writer, t.msg_id, protocol.SNAPSHOT_STATUS_SAVED, @intCast(t.clock), t.slots, t.stream_id) catch {};
+                stat_writer.flush();
+            }
+        };
+
+        const task = SaveTask{
+            .server = self,
+            .msg_id = msg_id,
+            .path = owned_path,
+            .stream_id = owned_stream_id,
+            .clock = self.clock,
+            .slots = self.slots(),
+            .out_queue = out_q,
+        };
+
+        const thread = std.Thread.spawn(.{}, SaveTask.run, .{task}) catch |err| {
+            self.is_saving_snapshot.store(false, .seq_cst);
+            self.allocator.free(owned_path);
+            self.allocator.free(owned_stream_id);
+            return err;
+        };
+        thread.detach();
     }
 
     fn handleSnapshotLoad(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
@@ -962,7 +1025,7 @@ pub const Server = struct {
         var stream = std.io.fixedBufferStream(&prompt_buf);
         const p_writer = stream.writer();
 
-        try p_writer.writeAll("\n[Triage] Route event to existing task or 0 for new task.\nFollow-ups, constraints, and steering belong to their active task.\n0: New independent task\n");
+        try p_writer.writeAll("\n[Task Routing]\nActive tasks:\n");
 
         for (0..num_tasks) |_| {
             if (offset + 4 > p.len) break;
@@ -978,6 +1041,8 @@ pub const Server = struct {
                 try std.fmt.format(p_writer, "{d}: {s}\n", .{ task_count, title });
             }
         }
+
+        try p_writer.writeAll("0: New independent task (only if completely unrelated to active tasks above)\n\nNote: Follow-ups, revisions, negative constraints (\"no X\", \"use Y instead\"), corrections, and steering belong to the active task being steered.\n");
 
         if (offset + 2 <= p.len) {
             const ev_len = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
@@ -996,10 +1061,20 @@ pub const Server = struct {
 
         var cand_toks: [16]u32 = undefined;
         var cand_count: usize = 0;
-        for (0..task_count + 1) |i| {
+        // Check active tasks 1..task_count first
+        for (1..task_count + 1) |i| {
             var digit_buf: [4]u8 = undefined;
             const digit_str = try std.fmt.bufPrint(&digit_buf, "{d}", .{i});
             const encoded = try self.tok.encode(self.allocator, digit_str, false);
+            defer self.allocator.free(encoded);
+            if (encoded.len > 0) {
+                cand_toks[cand_count] = encoded[0];
+                cand_count += 1;
+            }
+        }
+        // Then append 0 for new task
+        {
+            const encoded = try self.tok.encode(self.allocator, "0", false);
             defer self.allocator.free(encoded);
             if (encoded.len > 0) {
                 cand_toks[cand_count] = encoded[0];
@@ -1034,7 +1109,11 @@ pub const Server = struct {
 
         for (cand_toks[0..cand_count], 0..) |ct, idx| {
             if (ct == winning_tok) {
-                chosen_idx = idx;
+                if (idx < task_count) {
+                    chosen_idx = idx + 1;
+                } else {
+                    chosen_idx = 0;
+                }
                 break;
             }
         }
@@ -1048,6 +1127,92 @@ pub const Server = struct {
             const target_task_id = task_ids[chosen_idx - 1];
             try protocol.writeEventRouted(writer, msg_id, event_id, target_task_id, 0);
         }
+        writer.flush();
+    }
+
+    fn handleTaskTitle(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
+        if (p.len < 6) return;
+        const task_id = std.mem.readInt(u32, p[0..4][0..4], .little);
+        const prompt_len = std.mem.readInt(u16, p[4..6][0..2], .little);
+        if (p.len < 6 + prompt_len) return;
+        const prompt_text = p[6 .. 6 + prompt_len];
+
+        var prompt_buf: [2048]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&prompt_buf);
+        const p_writer = stream.writer();
+
+        try p_writer.writeAll("\n[Instruction] Summarize the user task into a concise 4 to 10 word title. Output only the title, without quotes or punctuation.\nUser task: ");
+        const max_sample = @min(prompt_text.len, 256);
+        try p_writer.writeAll(prompt_text[0..max_sample]);
+        try p_writer.writeAll("\nTitle: ");
+
+        const prompt_str = stream.getWritten();
+        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
+        defer self.allocator.free(tokens);
+
+        if (tokens.len == 0) return;
+
+        const saved_clock = self.clock;
+        defer {
+            self.ring.rollbackClock(saved_clock);
+            self.clock = saved_clock;
+        }
+
+        const last_tok: u32 = tokens[tokens.len - 1];
+        if (tokens.len > 1) {
+            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
+        }
+        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+        self.clock += 1;
+
+        var decoded_tokens: [16]u32 = undefined;
+        var decoded_count: usize = 0;
+
+        var next_tok = if (self.gpu_opt != null)
+            self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
+        else
+            self.sampler.sample(self.scratch.logits, null);
+
+        while (decoded_count < 14) {
+            if (next_tok == 106 or next_tok == 100 or next_tok == 101 or next_tok == 107 or next_tok == 108) break;
+            decoded_tokens[decoded_count] = next_tok;
+            decoded_count += 1;
+
+            _ = self.m.forwardToken(self.ring, self.scratch, next_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+            self.clock += 1;
+
+            next_tok = if (self.gpu_opt != null)
+                self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
+            else
+                self.sampler.sample(self.scratch.logits, null);
+        }
+
+        var title_buf: [256]u8 = undefined;
+        var title_len: usize = 0;
+        for (decoded_tokens[0..decoded_count]) |dt| {
+            const piece = self.tok.decode(dt);
+            if (title_len + piece.len > title_buf.len) break;
+            @memcpy(title_buf[title_len .. title_len + piece.len], piece);
+            title_len += piece.len;
+        }
+
+        var title_str: []const u8 = "";
+        if (title_len > 0) {
+            const full_text = title_buf[0..title_len];
+            const trimmed = std.mem.trim(u8, full_text, " \t\r\n\"'");
+            var clean_len = trimmed.len;
+            if (std.mem.indexOf(u8, trimmed, "\n")) |nl| {
+                clean_len = nl;
+            }
+            title_str = std.mem.trim(u8, trimmed[0..clean_len], " \t\r\n\"'");
+        }
+
+        if (title_str.len == 0) {
+            const fb_len = @min(prompt_text.len, 50);
+            title_str = prompt_text[0..fb_len];
+        }
+
+        try protocol.writeTaskTitleResult(writer, msg_id, task_id, title_str);
         writer.flush();
     }
 

@@ -60,7 +60,12 @@ const onSubmitInput = (ctx, payload) => {
       const triageSeq = notItem ? notItem.seq : parseInt(savedMsg.id, 10)
       refs.client.sendTaskTriage(triageSeq, refs.taskManager.formatCandidates(), val)
     } else if (refs.taskManager) {
-      refs.taskManager.createTask(val.slice(0, 40))
+      const firstLine = val.trim().split('\n')[0]
+      const fallbackTitle = firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine
+      const newTask = refs.taskManager.createTask(fallbackTitle)
+      if (refs.client) {
+        refs.client.sendTaskTitle(newTask.id, val)
+      }
     }
 
     if (!refs.taskManager && refs.activeTurnNotificationId && isGenerating) {

@@ -43,6 +43,9 @@ pub fn saveSnapshot(
         std.fs.cwd().deleteFile(tmp_path) catch {};
     }
 
+    var buf_writer = std.io.BufferedWriter(1024 * 1024, @TypeOf(file.writer())){ .unbuffered_writer = file.writer() };
+    const writer = buf_writer.writer();
+
     var hdr = SnapshotHeader{
         .clock = @intCast(clock),
         .num_anchors = @intCast(ring.num_anchors),
@@ -60,17 +63,17 @@ pub fn saveSnapshot(
         hdr.turn_boundaries[i] = @intCast(ring.turn_boundaries[i]);
     }
 
-    try file.writeAll(std.mem.asBytes(&hdr));
+    try writer.writeAll(std.mem.asBytes(&hdr));
 
     // Write ring buffer metadata: clocks, active, attention_mass
     const slot_count = ring.num_layers * ring.total_slots;
     for (ring.clocks[0..slot_count]) |c| {
-        try file.writer().writeInt(u64, @intCast(c), .little);
+        try writer.writeInt(u64, @intCast(c), .little);
     }
     for (ring.active[0..slot_count]) |a| {
-        try file.writer().writeByte(if (a) 1 else 0);
+        try writer.writeByte(if (a) 1 else 0);
     }
-    try file.writeAll(std.mem.sliceAsBytes(ring.attention_mass[0..slot_count]));
+    try writer.writeAll(std.mem.sliceAsBytes(ring.attention_mass[0..slot_count]));
 
     // Write KV caches across layers only for active slots!
     // Since only active slots contain valid attention history, saving active slots reduces
@@ -84,9 +87,9 @@ pub fn saveSnapshot(
             active_count += 1;
         }
     }
-    try file.writer().writeInt(u32, @intCast(active_count), .little);
+    try writer.writeInt(u32, @intCast(active_count), .little);
     for (active_slot_indices[0..active_count]) |s| {
-        try file.writer().writeInt(u32, @intCast(s), .little);
+        try writer.writeInt(u32, @intCast(s), .little);
     }
 
     if (gpu_opt) |g| {
@@ -95,8 +98,8 @@ pub fn saveSnapshot(
             const v_slice = g.layers[l].buf_v_cache.asSlice(f32);
             for (active_slot_indices[0..active_count]) |s| {
                 const off = s * ring.max_kv_dim;
-                try file.writeAll(std.mem.sliceAsBytes(k_slice[off .. off + ring.max_kv_dim]));
-                try file.writeAll(std.mem.sliceAsBytes(v_slice[off .. off + ring.max_kv_dim]));
+                try writer.writeAll(std.mem.sliceAsBytes(k_slice[off .. off + ring.max_kv_dim]));
+                try writer.writeAll(std.mem.sliceAsBytes(v_slice[off .. off + ring.max_kv_dim]));
             }
         }
     } else {
@@ -104,12 +107,13 @@ pub fn saveSnapshot(
             const base = l * ring.total_slots * ring.max_kv_dim;
             for (active_slot_indices[0..active_count]) |s| {
                 const off = base + s * ring.max_kv_dim;
-                try file.writeAll(std.mem.sliceAsBytes(ring.k[off .. off + ring.max_kv_dim]));
-                try file.writeAll(std.mem.sliceAsBytes(ring.v[off .. off + ring.max_kv_dim]));
+                try writer.writeAll(std.mem.sliceAsBytes(ring.k[off .. off + ring.max_kv_dim]));
+                try writer.writeAll(std.mem.sliceAsBytes(ring.v[off .. off + ring.max_kv_dim]));
             }
         }
     }
 
+    try buf_writer.flush();
     file.close();
     try std.fs.cwd().rename(tmp_path, path);
 }
@@ -125,8 +129,11 @@ pub fn loadSnapshot(
     var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
 
+    var buf_reader = std.io.BufferedReader(1024 * 1024, @TypeOf(file.reader())){ .unbuffered_reader = file.reader() };
+    const reader = buf_reader.reader();
+
     var hdr: SnapshotHeader = undefined;
-    try file.reader().readNoEof(std.mem.asBytes(&hdr));
+    try reader.readNoEof(std.mem.asBytes(&hdr));
 
     if (!std.mem.eql(u8, &hdr.magic, &SNAPSHOT_MAGIC)) return error.InvalidSnapshotMagic;
     if (hdr.version != SNAPSHOT_VERSION) return error.UnsupportedSnapshotVersion;
@@ -147,18 +154,18 @@ pub fn loadSnapshot(
 
     const slot_count = ring.num_layers * ring.total_slots;
     for (ring.clocks[0..slot_count]) |*c| {
-        c.* = @intCast(try file.reader().readInt(u64, .little));
+        c.* = @intCast(try reader.readInt(u64, .little));
     }
     for (ring.active[0..slot_count]) |*a| {
-        const byte = try file.reader().readByte();
+        const byte = try reader.readByte();
         a.* = (byte != 0);
     }
-    try file.reader().readNoEof(std.mem.sliceAsBytes(ring.attention_mass[0..slot_count]));
+    try reader.readNoEof(std.mem.sliceAsBytes(ring.attention_mass[0..slot_count]));
 
-    const active_count: usize = @intCast(try file.reader().readInt(u32, .little));
+    const active_count: usize = @intCast(try reader.readInt(u32, .little));
     var active_slot_indices: [4096]usize = undefined;
     for (0..active_count) |i| {
-        active_slot_indices[i] = @intCast(try file.reader().readInt(u32, .little));
+        active_slot_indices[i] = @intCast(try reader.readInt(u32, .little));
     }
 
     if (gpu_opt) |g| {
@@ -168,8 +175,8 @@ pub fn loadSnapshot(
             const base = l * ring.total_slots * ring.max_kv_dim;
             for (active_slot_indices[0..active_count]) |s| {
                 const off = s * ring.max_kv_dim;
-                try file.reader().readNoEof(std.mem.sliceAsBytes(k_slice[off .. off + ring.max_kv_dim]));
-                try file.reader().readNoEof(std.mem.sliceAsBytes(v_slice[off .. off + ring.max_kv_dim]));
+                try reader.readNoEof(std.mem.sliceAsBytes(k_slice[off .. off + ring.max_kv_dim]));
+                try reader.readNoEof(std.mem.sliceAsBytes(v_slice[off .. off + ring.max_kv_dim]));
                 // Keep CPU ring buffer in sync with GPU for memory/salience diff tracking
                 const ring_off = base + off;
                 @memcpy(ring.k[ring_off .. ring_off + ring.max_kv_dim], k_slice[off .. off + ring.max_kv_dim]);
@@ -181,8 +188,8 @@ pub fn loadSnapshot(
             const base = l * ring.total_slots * ring.max_kv_dim;
             for (active_slot_indices[0..active_count]) |s| {
                 const off = base + s * ring.max_kv_dim;
-                try file.reader().readNoEof(std.mem.sliceAsBytes(ring.k[off .. off + ring.max_kv_dim]));
-                try file.reader().readNoEof(std.mem.sliceAsBytes(ring.v[off .. off + ring.max_kv_dim]));
+                try reader.readNoEof(std.mem.sliceAsBytes(ring.k[off .. off + ring.max_kv_dim]));
+                try reader.readNoEof(std.mem.sliceAsBytes(ring.v[off .. off + ring.max_kv_dim]));
             }
         }
     }

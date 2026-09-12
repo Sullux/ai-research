@@ -15,6 +15,7 @@ const {
   OP_READ_STREAM_OPEN,
   OP_READ_STREAM_CLOSE,
   OP_BACKLOG_TRIAGE,
+  OP_TASK_TITLE,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -166,6 +167,25 @@ const backlogTriageFrame = (eventId, title = '', msgId = 1) => {
   return Buffer.concat([hdr, payload])
 }
 
+const taskTitleFrame = (taskId, text = '', msgId = 1) => {
+  const textBytes = Buffer.from(text || '', 'utf-8')
+  const payload = Buffer.alloc(4 + 2 + textBytes.length)
+  payload.writeUInt32LE(taskId, 0)
+  payload.writeUInt16LE(textBytes.length, 4)
+  textBytes.copy(payload, 6)
+  const hdr = headerBuffer(OP_TASK_TITLE, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
+const parseTaskTitleResult = (payload) => {
+  if (payload.length < 6) return null
+  const taskId = payload.readUInt32LE(0)
+  const titleLen = payload.readUInt16LE(4)
+  if (payload.length < 6 + titleLen) return null
+  const title = payload.slice(6, 6 + titleLen).toString('utf-8')
+  return { taskId, title }
+}
+
 const parseBacklogRouted = (payload) => {
   const eventId = payload.readUInt16LE(0)
   const action = payload.readUInt8(2)
@@ -233,9 +253,11 @@ module.exports = {
   readStreamOpenFrame,
   readStreamCloseFrame,
   backlogTriageFrame,
+  taskTitleFrame,
   parseEventRouted,
   parseReadStreamStatus,
   parseBacklogRouted,
+  parseTaskTitleResult,
   configFrame,
   parsedFrame,
 }
