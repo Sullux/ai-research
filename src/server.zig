@@ -91,7 +91,7 @@ const SyntaxTracker = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null,
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null, turn_open: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -104,7 +104,7 @@ pub const Server = struct {
             const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
             hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null, .last_yield_token = null };
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null, .last_yield_token = null, .turn_open = false };
     }
     pub fn deinit(self: *Server) void {
         if (self.hippo) |*h| h.deinit();
@@ -525,6 +525,14 @@ pub const Server = struct {
             self.ring.setNumAnchors(if (sys_len > 0) sys_len else @min(tokens.len, 512));
         }
 
+        if (self.turn_open and tokens.len > 0 and tokens[0] != 106) {
+            // Mid-stream interruption: close open model turn with <turn|>
+            _ = self.m.forwardToken(self.ring, self.scratch, 106, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
+            self.clock += 1;
+            self.ring.markBoundary(self.clock, .turn_end, 1.0);
+            self.turn_open = false;
+        }
+
         const cur = try self.prefillTokens(msg_id, tokens, writer, false);
         if (self.is_aborted.load(.monotonic)) return;
 
@@ -687,6 +695,7 @@ pub const Server = struct {
         defer self.allocator.free(recent_buf);
         var recent_count: usize = 0;
         var syntax = SyntaxTracker{};
+        self.turn_open = true;
 
         while (true) {
             if (self.is_aborted.load(.monotonic)) {
@@ -695,6 +704,7 @@ pub const Server = struct {
                 break;
             }
             if (cur == self.tok.eos_token_id or cur == 106) {
+                self.turn_open = false;
                 _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
                 self.clock += 1; break;
             }

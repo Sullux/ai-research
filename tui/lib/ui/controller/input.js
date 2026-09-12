@@ -41,7 +41,7 @@ const onSubmitInput = (ctx, payload) => {
       savedMsg.relPath,
       savedMsg.preview,
       savedMsg.id,
-      { isTurnContext: true },
+      { isTurnContext: true, payload: savedMsg.payload },
     )
     if (isGenerating && refs.activeTurnNotificationId) {
       refs.interruptedTurnNotificationId = refs.activeTurnNotificationId

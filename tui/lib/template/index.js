@@ -48,27 +48,20 @@ const formatResumeAfterInterrupt = (stepId, brief) => [
   'Next action:',
 ].join('\n') + '\n'
 
-const formatBacklogResumeNudge = (notItem) => [
-  '<|turn>model',
-  '<|channel>thought',
-  `Resuming previous context [Event: ${notItem.id} | Source: ${notItem.source}].`,
-  `- If already satisfied or incorporated into previous answers: continue active work.`,
-  `- If pending work remains: address or continue it now.`,
-  'If addressing user, exit thought channel with <channel|> and speak directly to the user.',
-  'Next action:',
-].join('\n') + '\n'
+const formatBacklogResumeNudge = (notItem) => {
+  const text = notItem.extra?.payload || notItem.preview || ''
+  if (notItem.source?.startsWith('msg/user/')) {
+    return `<|turn>user\n[Resume: ${notItem.id} | Source: ${notItem.source}] ${text}\nPlease continue addressing this task.\n<turn|>\n<|turn>model\n`
+  }
+  return `<|turn>user\n[Resume Event: ${notItem.id} | Source: ${notItem.source}] ${text}\nPlease continue addressing this item.\n<turn|>\n<|turn>model\n`
+}
 
 const formatNotificationInterrupt = (notItem) => {
-  const lines = [
-    '<|turn>model',
-    '<|channel>thought',
-    `[Interrupt Event: ${notItem.id} | Source: ${notItem.source}]`,
-    `Payload: ${notItem.preview}`,
-    'Evaluate interrupt in reasoning thoughts.',
-    'If addressing or acknowledging the user, exit thought channel with <channel|> and deliver your response directly to the user.',
-    'Next action:',
-  ]
-  return lines.join('\n') + '\n'
+  const text = notItem.extra?.payload || notItem.preview || ''
+  if (notItem.source?.startsWith('msg/user/')) {
+    return `<|turn>user\n${text}\n<turn|>\n<|turn>model\n`
+  }
+  return `<|turn>user\n[Event: ${notItem.id} | Source: ${notItem.source}]\n${text}\n<turn|>\n<|turn>model\n`
 }
 
 const formatTruncatedTurn = (userText) =>
