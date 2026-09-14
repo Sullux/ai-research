@@ -16,6 +16,7 @@ const {
   OP_READ_STREAM_CLOSE,
   OP_BACKLOG_TRIAGE,
   OP_TASK_TITLE,
+  OP_PROBE_AUTONOMIC,
   OP_PING,
   OP_SHUTDOWN,
   MODE_TEXT,
@@ -177,6 +178,42 @@ const taskTitleFrame = (taskId, text = '', msgId = 1) => {
   return Buffer.concat([hdr, payload])
 }
 
+const probeAutonomicFrame = (prompt, candidates = [], maxDecodeTokens = 1, minCertainty = 0.6, msgId = 1) => {
+  const promptBytes = Buffer.from(prompt || '', 'utf-8')
+  const candByteArrays = candidates.map(c => Buffer.from(c || '', 'utf-8'))
+  let totalCandBytes = 0
+  candByteArrays.forEach(b => { totalCandBytes += 2 + b.length })
+
+  const payload = Buffer.alloc(2 + 2 + 4 + 2 + promptBytes.length + totalCandBytes)
+  payload.writeUInt16LE(maxDecodeTokens, 0)
+  payload.writeUInt16LE(candidates.length, 2)
+  payload.writeFloatLE(minCertainty, 4)
+  payload.writeUInt16LE(promptBytes.length, 8)
+  promptBytes.copy(payload, 10)
+
+  let off = 10 + promptBytes.length
+  candByteArrays.forEach(b => {
+    payload.writeUInt16LE(b.length, off)
+    off += 2
+    b.copy(payload, off)
+    off += b.length
+  })
+
+  const hdr = headerBuffer(OP_PROBE_AUTONOMIC, msgId, payload.length)
+  return Buffer.concat([hdr, payload])
+}
+
+const parseAutonomicResult = (payload) => {
+  if (payload.length < 16) return null
+  const winningIdx = payload.readUInt16LE(0)
+  const confidence = payload.readFloatLE(2)
+  const entropy = payload.readFloatLE(6)
+  const costMs = payload.readFloatLE(10)
+  const textLen = payload.readUInt16LE(14)
+  const text = payload.length >= 16 + textLen ? payload.slice(16, 16 + textLen).toString('utf-8') : ''
+  return { winningIdx, confidence, entropy, costMs, text }
+}
+
 const parseTaskTitleResult = (payload) => {
   if (payload.length < 6) return null
   const taskId = payload.readUInt32LE(0)
@@ -254,10 +291,12 @@ module.exports = {
   readStreamCloseFrame,
   backlogTriageFrame,
   taskTitleFrame,
+  probeAutonomicFrame,
   parseEventRouted,
   parseReadStreamStatus,
   parseBacklogRouted,
   parseTaskTitleResult,
+  parseAutonomicResult,
   configFrame,
   parsedFrame,
 }

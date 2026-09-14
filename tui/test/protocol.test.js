@@ -16,10 +16,12 @@ const {
   readStreamCloseFrame,
   backlogTriageFrame,
   taskTitleFrame,
+  probeAutonomicFrame,
   parseEventRouted,
   parseReadStreamStatus,
   parseBacklogRouted,
   parseTaskTitleResult,
+  parseAutonomicResult,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -39,8 +41,10 @@ const {
   OP_READ_STREAM_CLOSE,
   OP_BACKLOG_TRIAGE,
   OP_TASK_TITLE,
+  OP_PROBE_AUTONOMIC,
   OP_BACKLOG_ROUTED,
   OP_TASK_TITLE_RESULT,
+  OP_AUTONOMIC_RESULT,
   BACKLOG_ACTION_ACK,
   READ_STATUS_CHUNK,
   OP_PING,
@@ -222,4 +226,29 @@ test('taskTitleFrame and parseTaskTitleResult serialize and unpack properly', ()
   const result = parseTaskTitleResult(resultBuf)
   assert.strictEqual(result.taskId, 42)
   assert.strictEqual(result.title, 'Summarize large text file')
+})
+
+test('probeAutonomicFrame and parseAutonomicResult serialize and unpack properly', () => {
+  const frame = probeAutonomicFrame('I should', ['wait', 'read'], 1, 0.75, 22)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_PROBE_AUTONOMIC)
+  assert.strictEqual(parsed.header.msgId, 22)
+  assert.strictEqual(parsed.payload.readUInt16LE(0), 1) // maxDecodeTokens
+  assert.strictEqual(parsed.payload.readUInt16LE(2), 2) // candidateCount
+  assert.ok(Math.abs(parsed.payload.readFloatLE(4) - 0.75) < 0.001) // minCertainty
+
+  const resultBuf = Buffer.alloc(16 + 8)
+  resultBuf.writeUInt16LE(1, 0) // winningIdx
+  resultBuf.writeFloatLE(0.88, 2) // confidence
+  resultBuf.writeFloatLE(0.25, 6) // entropy
+  resultBuf.writeFloatLE(15.4, 10) // costMs
+  resultBuf.writeUInt16LE(8, 14) // textLen
+  Buffer.from('finished', 'utf-8').copy(resultBuf, 16)
+
+  const res = parseAutonomicResult(resultBuf)
+  assert.strictEqual(res.winningIdx, 1)
+  assert.ok(Math.abs(res.confidence - 0.88) < 0.001)
+  assert.ok(Math.abs(res.entropy - 0.25) < 0.001)
+  assert.ok(Math.abs(res.costMs - 15.4) < 0.001)
+  assert.strictEqual(res.text, 'finished')
 })

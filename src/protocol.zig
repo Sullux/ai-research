@@ -20,6 +20,7 @@ pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
 pub const OP_BACKLOG_TRIAGE: u16 = 0x0010;
 pub const OP_TASK_TITLE: u16 = 0x0011;
+pub const OP_PROBE_AUTONOMIC: u16 = 0x0012;
 
 pub const OP_STREAM_CONTENT: u16 = 0x0101;
 pub const OP_STREAM_THOUGHT: u16 = 0x0102;
@@ -32,6 +33,7 @@ pub const OP_EVENT_ROUTED: u16 = 0x0108;
 pub const OP_READ_STREAM_STATUS: u16 = 0x0109;
 pub const OP_BACKLOG_ROUTED: u16 = 0x010A;
 pub const OP_TASK_TITLE_RESULT: u16 = 0x010B;
+pub const OP_AUTONOMIC_RESULT: u16 = 0x010C;
 pub const OP_PONG: u16 = 0x010E;
 pub const OP_ERROR: u16 = 0x01FF;
 
@@ -215,6 +217,17 @@ pub fn writeTaskTitleResult(writer: anytype, msg_id: u16, task_id: u32, title: [
     try writer.writeAll(title);
 }
 
+pub fn writeAutonomicResult(writer: anytype, msg_id: u16, winning_idx: u16, confidence: f32, entropy: f32, cost_ms: f32, text: []const u8) !void {
+    const payload_len: u32 = @intCast(2 + 4 + 4 + 4 + 2 + text.len);
+    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_AUTONOMIC_RESULT, .payload_len = payload_len });
+    try writer.writeInt(u16, winning_idx, .little);
+    try writer.writeInt(u32, @bitCast(confidence), .little);
+    try writer.writeInt(u32, @bitCast(entropy), .little);
+    try writer.writeInt(u32, @bitCast(cost_ms), .little);
+    try writer.writeInt(u16, @intCast(text.len), .little);
+    try writer.writeAll(text);
+}
+
 pub fn writeError(writer: anytype, msg_id: u16, msg: []const u8) !void {
     const len: u32 = @intCast(msg.len);
     try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_ERROR, .payload_len = len });
@@ -313,4 +326,19 @@ test "protocol write task title result frame" {
     try std.testing.expectEqual(@as(u32, 42), task_id);
     try std.testing.expectEqual(@as(u16, 25), title_len);
     try std.testing.expectEqualStrings("Summarize large text file", title_buf[0..title_len]);
+}
+
+test "protocol write autonomic result frame" {
+    var buf: [128]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeAutonomicResult(stream.writer(), 1, 2, 0.85, 0.35, 12.5, "test");
+    stream.pos = 0;
+    const parsed_hdr = try readHeader(stream.reader());
+    try std.testing.expectEqual(OP_AUTONOMIC_RESULT, parsed_hdr.opcode);
+    try std.testing.expectEqual(@as(u32, 2 + 4 + 4 + 4 + 2 + 4), parsed_hdr.payload_len);
+    const win_idx = try stream.reader().readInt(u16, .little);
+    const conf_u = try stream.reader().readInt(u32, .little);
+    const conf: f32 = @bitCast(conf_u);
+    try std.testing.expectEqual(@as(u16, 2), win_idx);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.85), conf, 0.001);
 }

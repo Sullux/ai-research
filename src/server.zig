@@ -91,7 +91,7 @@ const SyntaxTracker = struct {
 };
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null, turn_open: bool = false, out_queue: ?*server_queue.OutboundQueue = null, is_saving_snapshot: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null, turn_open: bool = false, out_queue: ?*server_queue.OutboundQueue = null, is_saving_snapshot: std.atomic.Value(bool) = std.atomic.Value(bool).init(false), thinking_gate: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
         @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
@@ -104,7 +104,7 @@ pub const Server = struct {
             const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
             hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null, .last_yield_token = null, .turn_open = false };
+        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null, .last_yield_token = null, .turn_open = false, .thinking_gate = false };
     }
     pub fn deinit(self: *Server) void {
         if (self.hippo) |*h| h.deinit();
@@ -179,6 +179,7 @@ pub const Server = struct {
                 protocol.OP_TASK_TRIAGE => try self.handleTaskTriage(hdr.msg_id, p, &async_writer),
                 protocol.OP_TASK_TITLE => try self.handleTaskTitle(hdr.msg_id, p, &async_writer),
                 protocol.OP_BACKLOG_TRIAGE => try self.handleBacklogTriage(hdr.msg_id, p, &async_writer),
+                protocol.OP_PROBE_AUTONOMIC => try self.handleProbeAutonomic(hdr.msg_id, p, &async_writer),
                 protocol.OP_READ_STREAM_OPEN => try self.handleReadStreamOpen(hdr.msg_id, p, &async_writer),
                 protocol.OP_READ_STREAM_CLOSE => self.handleReadStreamClose(p),
                 protocol.OP_SET_CONFIG => self.handleSetConfig(p),
@@ -210,6 +211,9 @@ pub const Server = struct {
         if (p.len >= 40) {
             self.sampler.frequency_penalty = @bitCast(std.mem.readInt(u32, p[32..36], .little));
             self.sampler.presence_penalty = @bitCast(std.mem.readInt(u32, p[36..40], .little));
+        }
+        if (p.len >= 41) {
+            self.thinking_gate = (p[40] != 0);
         }
     }
 
@@ -245,7 +249,7 @@ pub const Server = struct {
         writer.flush();
     }
 
-    fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: anytype, is_system_only: bool) !u32 {
+    fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: anytype, is_system_only: bool) anyerror!u32 {
         const total_prefill: u32 = @intCast(tokens.len);
         const prefill_start = std.time.milliTimestamp();
         const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
@@ -321,9 +325,7 @@ pub const Server = struct {
         }
 
         if (!is_system_only and tokens.len > 0) {
-            self.sampler.suppress_thinking = false;
-            cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
-            // If the prompt ended inside a thinking channel (<|channel>thought\n), preserve in_thinking_channel
+            // Check if prompt explicitly seeded thinking
             var in_thought = false;
             var t_idx: usize = tokens.len;
             while (t_idx > 0) {
@@ -338,6 +340,15 @@ pub const Server = struct {
                 }
             }
             self.in_thinking_channel = in_thought;
+
+            if (!in_thought and self.thinking_gate) {
+                const needs_thinking = try self.probeThinkingGate(msg_id, writer);
+                self.sampler.suppress_thinking = !needs_thinking;
+            } else {
+                self.sampler.suppress_thinking = false;
+            }
+
+            cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
         }
         return cur;
     }
@@ -1008,6 +1019,175 @@ pub const Server = struct {
         }
     }
 
+    pub const AutonomicProbeResult = struct {
+        winning_idx: usize,
+        winning_token: u32,
+        confidence: f32,
+        entropy: f32,
+        cost_ms: f32,
+        decoded_buf: [256]u8 = undefined,
+        decoded_len: usize = 0,
+
+        pub fn decoded(self: *const AutonomicProbeResult) []const u8 {
+            return self.decoded_buf[0..self.decoded_len];
+        }
+    };
+
+    pub fn probeAutonomic(
+        self: *Server,
+        msg_id: u16,
+        prompt: []const u8,
+        candidates: []const u32,
+        max_decode_tokens: usize,
+        writer: anytype,
+    ) anyerror!AutonomicProbeResult {
+        const t_start = std.time.milliTimestamp();
+        const tokens = try self.tok.encode(self.allocator, prompt, false);
+        defer self.allocator.free(tokens);
+
+        if (tokens.len == 0) {
+            return .{
+                .winning_idx = 0,
+                .winning_token = if (candidates.len > 0) candidates[0] else 0,
+                .confidence = 0.0,
+                .entropy = 0.0,
+                .cost_ms = 0.0,
+            };
+        }
+
+        const saved_clock = self.clock;
+        defer {
+            self.ring.rollbackClock(saved_clock);
+            self.clock = saved_clock;
+        }
+
+        const last_tok: u32 = tokens[tokens.len - 1];
+        if (tokens.len > 1) {
+            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
+        }
+        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+        self.clock += 1;
+
+        var result = AutonomicProbeResult{
+            .winning_idx = 0,
+            .winning_token = 0,
+            .confidence = 0.0,
+            .entropy = 0.0,
+            .cost_ms = 0.0,
+        };
+
+        if (max_decode_tokens <= 1 and candidates.len > 0) {
+            const eval_res = if (self.gpu_opt != null)
+                self.sampler.evalConstrainedTopK(&self.scratch.topk_candidates, candidates)
+            else
+                self.sampler.evalConstrained(self.scratch.logits, candidates);
+
+            result.winning_idx = eval_res.winning_idx;
+            result.winning_token = eval_res.winning_token;
+            result.confidence = eval_res.confidence;
+            result.entropy = eval_res.entropy;
+        } else {
+            var decoded_tokens: [16]u32 = undefined;
+            var decoded_count: usize = 0;
+            const max_count = @min(max_decode_tokens, decoded_tokens.len);
+
+            var next_tok = if (self.gpu_opt != null)
+                self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
+            else
+                self.sampler.sample(self.scratch.logits, null);
+
+            while (decoded_count < max_count) {
+                if (next_tok == 106 or next_tok == 100 or next_tok == 101 or next_tok == 107 or next_tok == 108) break;
+                decoded_tokens[decoded_count] = next_tok;
+                decoded_count += 1;
+
+                _ = self.m.forwardToken(self.ring, self.scratch, next_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+                self.clock += 1;
+
+                next_tok = if (self.gpu_opt != null)
+                    self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
+                else
+                    self.sampler.sample(self.scratch.logits, null);
+            }
+
+            var title_len: usize = 0;
+            for (decoded_tokens[0..decoded_count]) |dt| {
+                const piece = self.tok.decode(dt);
+                if (title_len + piece.len > result.decoded_buf.len) break;
+                @memcpy(result.decoded_buf[title_len .. title_len + piece.len], piece);
+                title_len += piece.len;
+            }
+
+            if (title_len > 0) {
+                const full_text = result.decoded_buf[0..title_len];
+                const trimmed = std.mem.trim(u8, full_text, " \t\r\n\"'");
+                var clean_len = trimmed.len;
+                if (std.mem.indexOf(u8, trimmed, "\n")) |nl| {
+                    clean_len = nl;
+                }
+                const clean_slice = std.mem.trim(u8, trimmed[0..clean_len], " \t\r\n\"'");
+                @memcpy(result.decoded_buf[0..clean_slice.len], clean_slice);
+                result.decoded_len = clean_slice.len;
+            }
+            result.confidence = 1.0;
+        }
+
+        const t_now = std.time.milliTimestamp();
+        result.cost_ms = @floatFromInt(@max(0, t_now - t_start));
+        return result;
+    }
+
+    pub fn probeThinkingGate(self: *Server, msg_id: u16, writer: anytype) anyerror!bool {
+        var cand_toks: [2]u32 = undefined;
+        const cand_strs = [_][]const u8{ "0", "1" };
+        for (cand_strs, 0..) |cs, i| {
+            const enc = try self.tok.encode(self.allocator, cs, false);
+            defer self.allocator.free(enc);
+            if (enc.len > 0) cand_toks[i] = enc[0] else return true;
+        }
+
+        const probe_prompt = "\n[Reflex Gate] For the preceding request, step-by-step reasoning is:\n0: Unnecessary (simple, factual, or conversational greeting)\n1: Essential (complex, logical, analytical, or multi-step)\nDecision: ";
+        const probe_res = try self.probeAutonomic(msg_id, probe_prompt, &cand_toks, 1, writer);
+        if (probe_res.winning_idx == 0 and probe_res.confidence >= 0.70) {
+            return false;
+        }
+        return true;
+    }
+
+    fn handleProbeAutonomic(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
+        if (p.len < 10) return;
+        const max_decode_tokens = std.mem.readInt(u16, p[0..2][0..2], .little);
+        const candidate_count = std.mem.readInt(u16, p[2..4][0..2], .little);
+        const prompt_len = std.mem.readInt(u16, p[8..10][0..2], .little);
+        if (p.len < 10 + prompt_len) return;
+        const prompt_str = p[10 .. 10 + prompt_len];
+
+        var offset: usize = 10 + prompt_len;
+        var cand_toks: [32]u32 = undefined;
+        var cand_count: usize = 0;
+
+        for (0..candidate_count) |_| {
+            if (offset + 2 > p.len) break;
+            const c_len = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
+            offset += 2;
+            if (offset + c_len > p.len) break;
+            const c_str = p[offset .. offset + c_len];
+            offset += c_len;
+            if (cand_count < cand_toks.len) {
+                const encoded = try self.tok.encode(self.allocator, c_str, false);
+                defer self.allocator.free(encoded);
+                if (encoded.len > 0) {
+                    cand_toks[cand_count] = encoded[0];
+                    cand_count += 1;
+                }
+            }
+        }
+
+        const res = try self.probeAutonomic(msg_id, prompt_str, cand_toks[0..cand_count], max_decode_tokens, writer);
+        try protocol.writeAutonomicResult(writer, msg_id, @intCast(res.winning_idx), res.confidence, res.entropy, res.cost_ms, res.decoded());
+        writer.flush();
+    }
+
     fn handleTaskTriage(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
         if (p.len < 4) {
             try protocol.writeEventRouted(writer, msg_id, 0, 0, 1);
@@ -1082,44 +1262,13 @@ pub const Server = struct {
             }
         }
 
-        const prompt_str = stream.getWritten();
-        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
-        defer self.allocator.free(tokens);
-
-        if (tokens.len == 0 or cand_count == 0) {
-            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
-            writer.flush();
-            return;
-        }
-
-        const saved_clock = self.clock;
+        const probe_res = try self.probeAutonomic(msg_id, stream.getWritten(), cand_toks[0..cand_count], 1, writer);
         var chosen_idx: usize = 0;
-
-        const last_tok: u32 = tokens[tokens.len - 1];
-        if (tokens.len > 1) {
-            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
+        if (probe_res.winning_idx < task_count) {
+            chosen_idx = probe_res.winning_idx + 1;
+        } else {
+            chosen_idx = 0;
         }
-        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-
-        const winning_tok = if (self.gpu_opt != null)
-            self.sampler.sampleConstrainedTopK(&self.scratch.topk_candidates, cand_toks[0..cand_count])
-        else
-            self.sampler.sampleConstrained(self.scratch.logits, cand_toks[0..cand_count]);
-
-        for (cand_toks[0..cand_count], 0..) |ct, idx| {
-            if (ct == winning_tok) {
-                if (idx < task_count) {
-                    chosen_idx = idx + 1;
-                } else {
-                    chosen_idx = 0;
-                }
-                break;
-            }
-        }
-
-        self.ring.rollbackClock(saved_clock);
-        self.clock = saved_clock;
 
         if (chosen_idx == 0) {
             try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
@@ -1146,67 +1295,8 @@ pub const Server = struct {
         try p_writer.writeAll(prompt_text[0..max_sample]);
         try p_writer.writeAll("\nTitle: ");
 
-        const prompt_str = stream.getWritten();
-        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
-        defer self.allocator.free(tokens);
-
-        if (tokens.len == 0) return;
-
-        const saved_clock = self.clock;
-        defer {
-            self.ring.rollbackClock(saved_clock);
-            self.clock = saved_clock;
-        }
-
-        const last_tok: u32 = tokens[tokens.len - 1];
-        if (tokens.len > 1) {
-            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
-        }
-        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-
-        var decoded_tokens: [16]u32 = undefined;
-        var decoded_count: usize = 0;
-
-        var next_tok = if (self.gpu_opt != null)
-            self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
-        else
-            self.sampler.sample(self.scratch.logits, null);
-
-        while (decoded_count < 14) {
-            if (next_tok == 106 or next_tok == 100 or next_tok == 101 or next_tok == 107 or next_tok == 108) break;
-            decoded_tokens[decoded_count] = next_tok;
-            decoded_count += 1;
-
-            _ = self.m.forwardToken(self.ring, self.scratch, next_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-            self.clock += 1;
-
-            next_tok = if (self.gpu_opt != null)
-                self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
-            else
-                self.sampler.sample(self.scratch.logits, null);
-        }
-
-        var title_buf: [256]u8 = undefined;
-        var title_len: usize = 0;
-        for (decoded_tokens[0..decoded_count]) |dt| {
-            const piece = self.tok.decode(dt);
-            if (title_len + piece.len > title_buf.len) break;
-            @memcpy(title_buf[title_len .. title_len + piece.len], piece);
-            title_len += piece.len;
-        }
-
-        var title_str: []const u8 = "";
-        if (title_len > 0) {
-            const full_text = title_buf[0..title_len];
-            const trimmed = std.mem.trim(u8, full_text, " \t\r\n\"'");
-            var clean_len = trimmed.len;
-            if (std.mem.indexOf(u8, trimmed, "\n")) |nl| {
-                clean_len = nl;
-            }
-            title_str = std.mem.trim(u8, trimmed[0..clean_len], " \t\r\n\"'");
-        }
-
+        const probe_res = try self.probeAutonomic(msg_id, stream.getWritten(), &.{}, 14, writer);
+        var title_str = probe_res.decoded();
         if (title_str.len == 0) {
             const fb_len = @min(prompt_text.len, 50);
             title_str = prompt_text[0..fb_len];
@@ -1249,41 +1339,8 @@ pub const Server = struct {
             }
         }
 
-        const prompt_str = stream.getWritten();
-        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
-        defer self.allocator.free(tokens);
-
-        if (tokens.len == 0 or cand_count < 3) {
-            try protocol.writeBacklogRouted(writer, msg_id, event_id, protocol.BACKLOG_ACTION_RESUME);
-            writer.flush();
-            return;
-        }
-
-        const saved_clock = self.clock;
-        var chosen_action: u8 = protocol.BACKLOG_ACTION_RESUME;
-
-        const last_tok: u32 = tokens[tokens.len - 1];
-        if (tokens.len > 1) {
-            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
-        }
-        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-
-        const winning_tok = if (self.gpu_opt != null)
-            self.sampler.sampleConstrainedTopK(&self.scratch.topk_candidates, cand_toks[0..cand_count])
-        else
-            self.sampler.sampleConstrained(self.scratch.logits, cand_toks[0..cand_count]);
-
-        for (cand_toks[0..cand_count], 0..) |ct, idx| {
-            if (ct == winning_tok) {
-                chosen_action = @intCast(idx);
-                break;
-            }
-        }
-
-        self.ring.rollbackClock(saved_clock);
-        self.clock = saved_clock;
-
+        const probe_res = try self.probeAutonomic(msg_id, stream.getWritten(), cand_toks[0..cand_count], 1, writer);
+        const chosen_action: u8 = @intCast(probe_res.winning_idx);
         try protocol.writeBacklogRouted(writer, msg_id, event_id, chosen_action);
         writer.flush();
     }
