@@ -90,15 +90,16 @@ test('memCommitFrame serializes commit opcode properly', () => {
 })
 
 test('configFrame serializes penalty and runtime options properly', () => {
-  const frame = configFrame(512, 0.7, 0.95, 0.001, 256, 0.05, 1.15, 64, 0.2, 0.3, 11)
+  const frame = configFrame(512, 0.7, 0.95, 0.001, 256, 0.05, 1.15, 64, 0.2, 0.3, true, 11)
   const parsed = parsedFrame(frame)
   assert.notStrictEqual(parsed, null)
   assert.strictEqual(parsed.header.msgId, 11)
   assert.strictEqual(parsed.header.opcode, OP_SET_CONFIG)
-  assert.strictEqual(parsed.payload.length, 40)
+  assert.strictEqual(parsed.payload.length, 41)
   assert.strictEqual(parsed.payload.readUInt32LE(0), 512)
   assert.strictEqual(parsed.payload.readUInt32LE(16), 256)
   assert.strictEqual(parsed.payload.readUInt32LE(28), 64)
+  assert.strictEqual(parsed.payload.readUInt8(40), 1)
 })
 
 test('snapshotSaveFrame and snapshotLoadFrame serialize properly', () => {

@@ -79,9 +79,10 @@ const configFrame = (
   repeatLastN = 64,
   frequencyPenalty = 0.1,
   presencePenalty = 0.1,
+  thinkingGate = false,
   msgId = 1,
 ) => {
-  const payload = Buffer.alloc(40)
+  const payload = Buffer.alloc(41)
   payload.writeUInt32LE(thinkingBudget, 0)
   payload.writeFloatLE(temp, 4)
   payload.writeFloatLE(topP, 8)
@@ -92,6 +93,7 @@ const configFrame = (
   payload.writeUInt32LE(repeatLastN, 28)
   payload.writeFloatLE(frequencyPenalty, 32)
   payload.writeFloatLE(presencePenalty, 36)
+  payload.writeUInt8(thinkingGate ? 1 : 0, 40)
   const hdr = headerBuffer(OP_SET_CONFIG, msgId, payload.length)
   return Buffer.concat([hdr, payload])
 }

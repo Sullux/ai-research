@@ -191,6 +191,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
           o.repeatLastN ?? 64,
           o.frequencyPenalty ?? 0.1,
           o.presencePenalty ?? 0.1,
+          Boolean(o.thinkingGate),
           nextMsgId++,
         ),
       )

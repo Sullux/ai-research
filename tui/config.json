@@ -17,6 +17,7 @@
     "repeatLastN": 64,
     "frequencyPenalty": 0.1,
     "presencePenalty": 0.1,
-    "qThresh": 0.0
+    "qThresh": 0.0,
+    "thinkingGate": true
   }
 }
