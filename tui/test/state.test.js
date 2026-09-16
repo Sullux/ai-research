@@ -74,6 +74,33 @@ describe('UI StateStore', () => {
     assert.strictEqual(persisted.length, 0) // hydration does not re-emit persistence
   })
 
+  it('hydrates user messages cleanly with rawText or strips event headers', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+
+    const historyItems = [
+      {
+        id: '1',
+        type: 'user',
+        content: '[Event: not101 | Source: msg/user/1001.txt]\nHello world',
+        time: 1000,
+      },
+      {
+        id: '2',
+        type: 'user',
+        content: '[Event: not102 | Source: msg/user/1002.txt]\nIgnored stream text',
+        rawText: 'Explicit clean text',
+        time: 1001,
+      },
+    ]
+
+    store.hydrateFromStream(historyItems)
+
+    assert.strictEqual(store.state.conversation.length, 2)
+    assert.strictEqual(store.state.conversation[0].text, 'Hello world')
+    assert.strictEqual(store.state.conversation[1].text, 'Explicit clean text')
+  })
+
   it('handles multi-phase thought and response channel transitions', () => {
     const StateStore = stateStoreFactory()
     const store = StateStore()

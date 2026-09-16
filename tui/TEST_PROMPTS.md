@@ -6,7 +6,11 @@ These are just some informal test prompt ideas for easy copy/pasting into the TU
 
 ---
 
-If I were to ask you to read and summarize a large text file for me (> 10 GB, plain English, no JSON or other markup), how would you go about it? What low-level tools would you use and how would you use them? Keep your response brief and to the point.
+If I were to ask you to read and summarize a large text file for me (> 10 GB, plain English, no JSON or other markup), how would you go about it? What low-level tools would you use and how would you use them?
+
+Keep your response brief and to the point. If you have multiple steps, try not to convey too much detail on each step. If I need more information about a step, I am happy to ask follow up questions.
+
+What do you think?
 
 ---
 

@@ -342,8 +342,30 @@ pub const Server = struct {
             self.in_thinking_channel = in_thought;
 
             if (!in_thought and self.thinking_gate) {
+                const saved_topk = self.scratch.topk_candidates;
+                var saved_logits: ?[]f32 = null;
+                if (self.gpu_opt == null) {
+                    saved_logits = try self.allocator.dupe(f32, self.scratch.logits);
+                }
+                defer if (saved_logits) |sl| self.allocator.free(sl);
+
                 const needs_thinking = try self.probeThinkingGate(msg_id, writer);
-                self.sampler.suppress_thinking = !needs_thinking;
+                if (!needs_thinking) {
+                    // Bypass thinking via canonical Gemma 4 closed channel: <|channel>thought\n<channel|>
+                    const bypass_tokens = [_]u32{ 100, 45518, 107, 101 };
+                    for (bypass_tokens) |bt| {
+                        _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
+                        self.clock += 1;
+                    }
+                    self.in_thinking_channel = false;
+                    self.sampler.suppress_thinking = true;
+                } else {
+                    self.scratch.topk_candidates = saved_topk;
+                    if (saved_logits) |sl| {
+                        @memcpy(self.scratch.logits[0..sl.len], sl);
+                    }
+                    self.sampler.suppress_thinking = false;
+                }
             } else {
                 self.sampler.suppress_thinking = false;
             }

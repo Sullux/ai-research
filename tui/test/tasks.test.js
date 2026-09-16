@@ -92,3 +92,17 @@ test('TaskManager routes steering events to active task and distinct events to n
   assert.strictEqual(TaskManager.getActiveTask()?.id, 2)
   assert.strictEqual(TaskManager.getTask(t1.id)?.status, TASK_STATUS.PAUSED)
 })
+
+test('TaskManager fires onChange callback and serializes all tasks', () => {
+  const changes = []
+  const TaskManager = taskManagerFactory(() => 7000)(
+    [{ id: 5, title: 'Existing Task', status: TASK_STATUS.ACTIVE }],
+    (tasks) => changes.push(tasks),
+  )
+
+  const t2 = TaskManager.createTask('Second Task')
+  assert.strictEqual(t2.id, 6)
+  assert.strictEqual(changes.length, 1)
+  assert.strictEqual(changes[0].length, 2)
+  assert.strictEqual(changes[0][1].title, 'Second Task')
+})

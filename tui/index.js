@@ -14,7 +14,7 @@ const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
-const { TaskManager } = require('./lib/tasks')
+const { TaskManager, taskManagerFactory } = require('./lib/tasks')
 const {
   STOP_END_OF_TURN,
   STOP_ELASTIC_YIELD,
@@ -180,6 +180,7 @@ const main = () => {
       extraArgs.push('--memory', episodicMemPath)
     }
     snapshotPath = path.join(memDir, '.snapshot.bin')
+    tasksPath = path.join(memDir, '.tasks.json')
     streamLog = StreamLog(memDir)
   }
 
@@ -224,7 +225,40 @@ const main = () => {
     extraArgs,
   })
   const orchestrator = Orchestrator(timers)
-  const taskManager = TaskManager()
+  let initialTasks = []
+  if (tasksPath && fs.existsSync(tasksPath)) {
+    try {
+      initialTasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'))
+    } catch (_) {}
+  } else if (streamLog.enabled) {
+    const allItems = streamLog.loadAll()
+    const foundTasks = new Map()
+    for (const it of allItems) {
+      if (it.type === 'system' && it.title === '🏷 TASK TITLE' && it.content) {
+        const m = it.content.match(/^Task #(\d+) titled: "(.*)"/)
+        if (m) {
+          const tid = parseInt(m[1], 10)
+          const title = m[2]
+          foundTasks.set(tid, {
+            id: tid,
+            title,
+            status: 'ACTIVE',
+            created: it.time || Date.now(),
+          })
+        }
+      }
+    }
+    initialTasks = Array.from(foundTasks.values())
+  }
+
+  const persistTasks = (tasksList) => {
+    if (!tasksPath) return
+    try {
+      fs.writeFileSync(tasksPath, JSON.stringify(tasksList, null, 2))
+    } catch (_) {}
+  }
+
+  const taskManager = taskManagerFactory(Date.now)(initialTasks, persistTasks)
   const registry = ToolRegistry(vfs, cmdRunner, trmManager, notManager, client, orchestrator)
   const parser = ToolParser(registry, client, store)
 
@@ -356,6 +390,7 @@ const main = () => {
     } else if (systemPrecached && status === 0 && !controller.refs.systemPrecacheLogged && activeSlots > 0) {
       controller.refs.systemPrecacheLogged = true
       controller.refs.isEngineReady = true
+      controller.refs.hasSentFirstTurn = true
       store.addStreamEntry({
         type: 'system',
         title: '⚙ SYSTEM',

@@ -91,7 +91,8 @@ const stateStoreFactory = () => (onStreamItem) => {
 
     for (const item of convItems) {
       if (item.type === 'user') {
-        addConversationMessage({ sender: 'User', text: item.content, time: item.time, id: item.id })
+        const userText = item.rawText || (item.content ? item.content.replace(/^\[Event: [^\]]+ \| Source: [^\]]+\]\r?\n/, '') : '')
+        addConversationMessage({ sender: 'User', text: userText, time: item.time, id: item.id })
       } else if (item.type === 'response') {
         addConversationMessage({ sender: 'Assistant', text: item.content, time: item.time, id: item.id })
       } else if (item.type === 'ask_user') {

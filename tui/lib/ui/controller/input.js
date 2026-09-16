@@ -84,7 +84,12 @@ const onSubmitInput = (ctx, payload) => {
   } else {
     refs.store?.addConversationMessage({ sender: 'User', text: val })
   }
-  refs.store?.addStreamEntry({ type: 'user', title: '👤 USER', content: turnContent })
+  refs.store?.addStreamEntry({
+    type: 'user',
+    title: '👤 USER',
+    content: turnContent,
+    rawText: val,
+  })
 
   refs.store?.setEditMode(false)
   ctx.setFocus?.(null)
