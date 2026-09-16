@@ -13,13 +13,8 @@ pub const OP_SET_SYSTEM: u16 = 0x0007;
 pub const OP_SNAPSHOT_SAVE: u16 = 0x0008;
 pub const OP_SNAPSHOT_LOAD: u16 = 0x0009;
 pub const OP_RESUME: u16 = 0x000A;
-pub const OP_TASK_TRIAGE: u16 = 0x000B;
-pub const OP_READ_STREAM_OPEN: u16 = 0x000C;
-pub const OP_READ_STREAM_CLOSE: u16 = 0x000D;
 pub const OP_PING: u16 = 0x000E;
 pub const OP_SHUTDOWN: u16 = 0x000F;
-pub const OP_BACKLOG_TRIAGE: u16 = 0x0010;
-pub const OP_TASK_TITLE: u16 = 0x0011;
 pub const OP_PROBE_AUTONOMIC: u16 = 0x0012;
 
 pub const OP_STREAM_CONTENT: u16 = 0x0101;
@@ -29,10 +24,6 @@ pub const OP_TOOL_CALL: u16 = 0x0104;
 pub const OP_MEM_RESPONSE: u16 = 0x0105;
 pub const OP_STATUS: u16 = 0x0106;
 pub const OP_SNAPSHOT_STATUS: u16 = 0x0107;
-pub const OP_EVENT_ROUTED: u16 = 0x0108;
-pub const OP_READ_STREAM_STATUS: u16 = 0x0109;
-pub const OP_BACKLOG_ROUTED: u16 = 0x010A;
-pub const OP_TASK_TITLE_RESULT: u16 = 0x010B;
 pub const OP_AUTONOMIC_RESULT: u16 = 0x010C;
 pub const OP_PONG: u16 = 0x010E;
 pub const OP_ERROR: u16 = 0x01FF;
@@ -64,14 +55,6 @@ pub const QUERY_PINNED: u8 = 0x03;
 pub const SNAPSHOT_STATUS_SAVED: u8 = 0;
 pub const SNAPSHOT_STATUS_LOADED: u8 = 1;
 pub const SNAPSHOT_STATUS_EXISTS: u8 = 2;
-
-pub const READ_STATUS_CHUNK: u8 = 0;
-pub const READ_STATUS_EOF: u8 = 1;
-pub const READ_STATUS_ERROR: u8 = 2;
-
-pub const BACKLOG_ACTION_ACK: u8 = 0;
-pub const BACKLOG_ACTION_RESUME: u8 = 1;
-pub const BACKLOG_ACTION_SNOOZE: u8 = 2;
 
 pub const Header = extern struct {
     magic: u32 = MAGIC,
@@ -159,6 +142,8 @@ pub const STATUS_GENERATING: u8 = 2;
 pub const STATUS_MEMORY: u8 = 3;
 pub const STATUS_CONSOLIDATING: u8 = 4;
 
+pub const FLAG_GPU: u16 = 1 << 0;
+pub const FLAG_THINKING_GATE: u16 = 1 << 1;
 pub const STATUS_FLAG_SATURATED: u16 = 0x0001;
 
 pub fn writeStatus(writer: anytype, msg_id: u16, status: u8, tok_sec: f32, active_slots: u16, archived_diffs: u16, current_tok: u32, total_tok: u32, is_gpu: u8, flags: u16) !void {
@@ -183,38 +168,6 @@ pub fn writeSnapshotStatus(writer: anytype, msg_id: u16, status: u8, clock: u64,
     try writer.writeInt(u64, clock, .little);
     try writer.writeInt(u16, s_len, .little);
     if (s_len > 0) try writer.writeAll(stream_id[0..s_len]);
-}
-
-pub fn writeEventRouted(writer: anytype, msg_id: u16, event_id: u16, task_id: u16, is_new_task: u8) !void {
-    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_EVENT_ROUTED, .payload_len = 6 });
-    try writer.writeInt(u16, event_id, .little);
-    try writer.writeInt(u16, task_id, .little);
-    try writer.writeByte(is_new_task);
-    try writer.writeByte(0); // reserved
-}
-
-pub fn writeBacklogRouted(writer: anytype, msg_id: u16, event_id: u16, action: u8) !void {
-    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_BACKLOG_ROUTED, .payload_len = 4 });
-    try writer.writeInt(u16, event_id, .little);
-    try writer.writeByte(action);
-    try writer.writeByte(0); // reserved
-}
-
-pub fn writeReadStreamStatus(writer: anytype, msg_id: u16, task_id: u16, status: u8, bytes_read: u32, new_offset: u64) !void {
-    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_READ_STREAM_STATUS, .payload_len = 16 });
-    try writer.writeInt(u16, task_id, .little);
-    try writer.writeByte(status);
-    try writer.writeByte(0); // reserved
-    try writer.writeInt(u32, bytes_read, .little);
-    try writer.writeInt(u64, new_offset, .little);
-}
-
-pub fn writeTaskTitleResult(writer: anytype, msg_id: u16, task_id: u32, title: []const u8) !void {
-    const payload_len: u16 = @intCast(4 + 2 + title.len);
-    try writeHeader(writer, .{ .msg_id = msg_id, .opcode = OP_TASK_TITLE_RESULT, .payload_len = payload_len });
-    try writer.writeInt(u32, task_id, .little);
-    try writer.writeInt(u16, @intCast(title.len), .little);
-    try writer.writeAll(title);
 }
 
 pub fn writeAutonomicResult(writer: anytype, msg_id: u16, winning_idx: u16, confidence: f32, entropy: f32, cost_ms: f32, text: []const u8) !void {
@@ -262,83 +215,17 @@ test "protocol write token frame" {
     try std.testing.expectEqual(@as(u32, 24 + 5), parsed_hdr.payload_len);
 }
 
-test "protocol write event routed frame" {
-    var buf: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    try writeEventRouted(stream.writer(), 1, 101, 2, 0);
-    stream.pos = 0;
-    const parsed_hdr = try readHeader(stream.reader());
-    try std.testing.expectEqual(OP_EVENT_ROUTED, parsed_hdr.opcode);
-    try std.testing.expectEqual(@as(u32, 6), parsed_hdr.payload_len);
-    const event_id = try stream.reader().readInt(u16, .little);
-    const task_id = try stream.reader().readInt(u16, .little);
-    const is_new_task = try stream.reader().readByte();
-    try std.testing.expectEqual(@as(u16, 101), event_id);
-    try std.testing.expectEqual(@as(u16, 2), task_id);
-    try std.testing.expectEqual(@as(u8, 0), is_new_task);
-}
-
-test "protocol write backlog routed frame" {
-    var buf: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    try writeBacklogRouted(stream.writer(), 1, 102, BACKLOG_ACTION_ACK);
-    stream.pos = 0;
-    const parsed_hdr = try readHeader(stream.reader());
-    try std.testing.expectEqual(OP_BACKLOG_ROUTED, parsed_hdr.opcode);
-    try std.testing.expectEqual(@as(u32, 4), parsed_hdr.payload_len);
-    const event_id = try stream.reader().readInt(u16, .little);
-    const action = try stream.reader().readByte();
-    try std.testing.expectEqual(@as(u16, 102), event_id);
-    try std.testing.expectEqual(BACKLOG_ACTION_ACK, action);
-}
-
-test "protocol write read stream status frame" {
-    var buf: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    try writeReadStreamStatus(stream.writer(), 1, 5, READ_STATUS_CHUNK, 512, 1024);
-    stream.pos = 0;
-    const parsed_hdr = try readHeader(stream.reader());
-    try std.testing.expectEqual(OP_READ_STREAM_STATUS, parsed_hdr.opcode);
-    try std.testing.expectEqual(@as(u32, 16), parsed_hdr.payload_len);
-    const task_id = try stream.reader().readInt(u16, .little);
-    const status = try stream.reader().readByte();
-    _ = try stream.reader().readByte(); // reserved
-    const bytes_read = try stream.reader().readInt(u32, .little);
-    const new_offset = try stream.reader().readInt(u64, .little);
-    try std.testing.expectEqual(@as(u16, 5), task_id);
-    try std.testing.expectEqual(READ_STATUS_CHUNK, status);
-    try std.testing.expectEqual(@as(u32, 512), bytes_read);
-    try std.testing.expectEqual(@as(u64, 1024), new_offset);
-}
-
-test "protocol write task title result frame" {
-    var buf: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    try writeTaskTitleResult(stream.writer(), 1, 42, "Summarize large text file");
-    stream.pos = 0;
-    const parsed_hdr = try readHeader(stream.reader());
-    try std.testing.expectEqual(OP_TASK_TITLE_RESULT, parsed_hdr.opcode);
-    try std.testing.expectEqual(@as(u32, 4 + 2 + 25), parsed_hdr.payload_len);
-    const task_id = try stream.reader().readInt(u32, .little);
-    const title_len = try stream.reader().readInt(u16, .little);
-    var title_buf: [32]u8 = undefined;
-    try stream.reader().readNoEof(title_buf[0..title_len]);
-    try std.testing.expectEqual(@as(u32, 42), task_id);
-    try std.testing.expectEqual(@as(u16, 25), title_len);
-    try std.testing.expectEqualStrings("Summarize large text file", title_buf[0..title_len]);
-}
-
 test "protocol write autonomic result frame" {
     var buf: [128]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
-    try writeAutonomicResult(stream.writer(), 1, 2, 0.85, 0.35, 12.5, "test");
+    try writeAutonomicResult(stream.writer(), 1, 3, 0.95, 0.12, 1.45, "hello");
     stream.pos = 0;
     const parsed_hdr = try readHeader(stream.reader());
     try std.testing.expectEqual(OP_AUTONOMIC_RESULT, parsed_hdr.opcode);
-    try std.testing.expectEqual(@as(u32, 2 + 4 + 4 + 4 + 2 + 4), parsed_hdr.payload_len);
-    const win_idx = try stream.reader().readInt(u16, .little);
+    try std.testing.expectEqual(@as(u32, 2 + 4 + 4 + 4 + 2 + 5), parsed_hdr.payload_len);
+    const idx = try stream.reader().readInt(u16, .little);
     const conf_u = try stream.reader().readInt(u32, .little);
     const conf: f32 = @bitCast(conf_u);
-    try std.testing.expectEqual(@as(u16, 2), win_idx);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.85), conf, 0.001);
+    try std.testing.expectEqual(@as(u16, 3), idx);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.95), conf, 0.001);
 }

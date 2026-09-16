@@ -54,17 +54,81 @@ const onSubmitInput = (ctx, payload) => {
     turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
     turnBody = savedMsg.payload
 
-    // Autonomic task triage: if existing active tasks exist, query 1-token probe
+    // Autonomic task triage & titling via client.probe()
     const activeTasks = refs.taskManager?.getActiveTasks() || []
     if (activeTasks.length > 0 && refs.client) {
       const triageSeq = notItem ? notItem.seq : parseInt(savedMsg.id, 10)
-      refs.client.sendTaskTriage(triageSeq, refs.taskManager.formatCandidates(), val)
+      const candList = activeTasks
+        .map((t, idx) => `${idx + 1}: ${t.title}`)
+        .join('\n')
+      const candDigits = activeTasks
+        .map((_, idx) => String(idx + 1))
+        .concat(['0'])
+      const triagePrompt = `Classify whether the incoming user message is a constraint, follow-up, or steering for an active task, or a new independent task.\n\nActive tasks:\n${candList}\n0: New independent task\n\nIncoming message: "${val}"\n\nAnswer with only the index number:`
+      refs.client.probe(triagePrompt, candDigits, 1).then((res) => {
+        const winningIdx = res.winningIdx
+        const isNewTask = winningIdx >= activeTasks.length
+        if (isNewTask) {
+          const firstLine = val.trim().split('\n')[0]
+          const fallbackTitle =
+            firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine
+          const newTask = refs.taskManager.createTask(fallbackTitle)
+          refs.store?.addStreamEntry({
+            type: 'system',
+            title: '🎯 NEW TASK',
+            content: `Autonomic triage assigned Event not${triageSeq} to new Task #${newTask.id}: "${fallbackTitle}"`,
+          })
+          const titlePrompt = `Provide a concise 2 to 5 word title for this user request:\n"${val.slice(0, 256)}"\nOutput only the title, nothing else.`
+          refs.client.probe(titlePrompt, [], 14).then((tRes) => {
+            if (tRes?.text) {
+              refs.taskManager.updateTask(newTask.id, { title: tRes.text })
+              refs.store?.addStreamEntry({
+                type: 'system',
+                title: '🏷 TASK TITLE',
+                content: `Task #${newTask.id} titled: "${tRes.text}"`,
+              })
+            }
+          })
+          const targetToSuspend =
+            refs.interruptedTurnNotificationId ||
+            (refs.activeTurnNotificationId !== notItem?.id
+              ? refs.activeTurnNotificationId
+              : null)
+          if (targetToSuspend) {
+            refs.notManager?.suspend(targetToSuspend)
+          }
+          refs.interruptedTurnNotificationId = null
+          if (refs.activeTurnNotificationId === targetToSuspend) {
+            refs.activeTurnNotificationId = null
+          }
+        } else {
+          const targetTask = activeTasks[winningIdx]
+          refs.taskManager.setActiveTask(targetTask.id)
+          refs.store?.addStreamEntry({
+            type: 'system',
+            title: '🎯 ROUTED',
+            content: `Autonomic triage routed Event not${triageSeq} to Task #${targetTask.id}`,
+          })
+          refs.interruptedTurnNotificationId = null
+        }
+      })
     } else if (refs.taskManager) {
       const firstLine = val.trim().split('\n')[0]
-      const fallbackTitle = firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine
+      const fallbackTitle =
+        firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine
       const newTask = refs.taskManager.createTask(fallbackTitle)
       if (refs.client) {
-        refs.client.sendTaskTitle(newTask.id, val)
+        const titlePrompt = `Provide a concise 2 to 5 word title for this user request:\n"${val.slice(0, 256)}"\nOutput only the title, nothing else.`
+        refs.client.probe(titlePrompt, [], 14).then((tRes) => {
+          if (tRes?.text) {
+            refs.taskManager.updateTask(newTask.id, { title: tRes.text })
+            refs.store?.addStreamEntry({
+              type: 'system',
+              title: '🏷 TASK TITLE',
+              content: `Task #${newTask.id} titled: "${tRes.text}"`,
+            })
+          }
+        })
       }
     }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 const template_state = @import("template_state.zig");
+const sampler = @import("../sampler.zig");
 const Server = @import("../server.zig").Server;
 
 pub const AutonomicProbeResult = struct {
@@ -9,7 +10,7 @@ pub const AutonomicProbeResult = struct {
     confidence: f32,
     entropy: f32,
     cost_ms: f32,
-    decoded_buf: [256]u8 = undefined,
+    decoded_buf: [128]u8 = undefined,
     decoded_len: usize = 0,
 
     pub fn decoded(self: *const AutonomicProbeResult) []const u8 {
@@ -27,7 +28,6 @@ pub fn probeAutonomic(
 ) anyerror!AutonomicProbeResult {
     const t_start = std.time.milliTimestamp();
 
-    // Canonical template framing based on outer template state
     const framed_prompt = try template_state.formatProbeFrame(self.allocator, self.template_state, prompt);
     defer self.allocator.free(framed_prompt);
 
@@ -120,29 +120,44 @@ pub fn probeAutonomic(
             @memcpy(result.decoded_buf[0..clean_slice.len], clean_slice);
             result.decoded_len = clean_slice.len;
         }
-        result.confidence = 1.0;
     }
 
-    const t_now = std.time.milliTimestamp();
-    result.cost_ms = @floatFromInt(@max(0, t_now - t_start));
+    const t_end = std.time.milliTimestamp();
+    result.cost_ms = @floatFromInt(t_end - t_start);
     return result;
 }
 
-pub fn probeThinkingGate(self: *Server, msg_id: u16, writer: anytype) anyerror!bool {
-    var cand_toks: [2]u32 = undefined;
-    const cand_strs = [_][]const u8{ "0", "1" };
-    for (cand_strs, 0..) |cs, i| {
-        const enc = try self.tok.encode(self.allocator, cs, false);
-        defer self.allocator.free(enc);
-        if (enc.len > 0) cand_toks[i] = enc[0] else return true;
-    }
+pub fn probeThinkingGate(
+    self: *Server,
+    msg_id: u16,
+    writer: anytype,
+) anyerror!bool {
+    if (!self.thinking_gate) return false;
 
-    const probe_prompt = "\n[Reflex Gate] For the preceding request, step-by-step reasoning is:\n0: Unnecessary (simple, factual, or conversational greeting)\n1: Essential (complex, logical, analytical, or multi-step)\nDecision: ";
-    const probe_res = try self.probeAutonomic(msg_id, probe_prompt, &cand_toks, 1, writer);
-    if (probe_res.winning_idx == 0 and probe_res.confidence >= 0.70) {
-        return false;
-    }
-    return true;
+    var gate_toks: [2]u32 = undefined;
+    const tok_0 = try self.tok.encode(self.allocator, "0", false);
+    defer self.allocator.free(tok_0);
+    const tok_1 = try self.tok.encode(self.allocator, "1", false);
+    defer self.allocator.free(tok_1);
+
+    if (tok_0.len == 0 or tok_1.len == 0) return false;
+    gate_toks[0] = tok_0[0];
+    gate_toks[1] = tok_1[0];
+
+    var topk_backup: [64]sampler.TopKCandidate = undefined;
+    @memcpy(&topk_backup, self.scratch.topk_candidates[0..64]);
+
+    const cpu_logits_backup = try self.allocator.alloc(f32, self.config.vocab_size);
+    defer self.allocator.free(cpu_logits_backup);
+    @memcpy(cpu_logits_backup, self.scratch.logits[0..self.config.vocab_size]);
+
+    const probe_prompt = "Thinking Gate Evaluation\nIs deliberate multi-step reasoning essential for this request, or can it be answered immediately?\n0: Unnecessary (simple greeting, trivial fact, brief acknowledgment, or immediate direct response)\n1: Essential (coding, complex logical analysis, multi-step math, tool planning)\nDecision: ";
+    const probe_res = try self.probeAutonomic(msg_id, probe_prompt, &gate_toks, 1, writer);
+
+    @memcpy(self.scratch.topk_candidates[0..64], &topk_backup);
+    @memcpy(self.scratch.logits[0..self.config.vocab_size], cpu_logits_backup);
+
+    return (probe_res.winning_idx == 0 and probe_res.confidence >= 0.70);
 }
 
 pub fn handleProbeAutonomic(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
@@ -176,160 +191,5 @@ pub fn handleProbeAutonomic(self: *Server, msg_id: u16, p: []const u8, writer: a
 
     const res = try self.probeAutonomic(msg_id, prompt_str, cand_toks[0..cand_count], max_decode_tokens, writer);
     try protocol.writeAutonomicResult(writer, msg_id, @intCast(res.winning_idx), res.confidence, res.entropy, res.cost_ms, res.decoded());
-    writer.flush();
-}
-
-pub fn handleTaskTriage(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-    if (p.len < 4) {
-        try protocol.writeEventRouted(writer, msg_id, 0, 0, 1);
-        writer.flush();
-        return;
-    }
-    const event_id = std.mem.readInt(u16, p[0..2][0..2], .little);
-    const num_tasks = std.mem.readInt(u16, p[2..4][0..2], .little);
-    var offset: usize = 4;
-
-    var task_ids: [16]u16 = undefined;
-    var task_count: usize = 0;
-
-    var prompt_buf: [2048]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&prompt_buf);
-    const p_writer = stream.writer();
-
-    try p_writer.writeAll("Task Routing\nActive tasks:\n");
-
-    for (0..num_tasks) |_| {
-        if (offset + 4 > p.len) break;
-        const tid = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
-        const title_len = std.mem.readInt(u16, p[offset + 2 .. offset + 4][0..2], .little);
-        offset += 4;
-        if (offset + title_len > p.len) break;
-        const title = p[offset .. offset + title_len];
-        offset += title_len;
-        if (task_count < 15) {
-            task_ids[task_count] = tid;
-            task_count += 1;
-            try std.fmt.format(p_writer, "{d}: {s}\n", .{ task_count, title });
-        }
-    }
-
-    try p_writer.writeAll("0: New independent task (only if completely unrelated to active tasks above)\n\nNote: Follow-ups, revisions, negative constraints (\"no X\", \"use Y instead\"), corrections, and steering belong to the active task being steered.\n");
-
-    if (offset + 2 <= p.len) {
-        const ev_len = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
-        offset += 2;
-        if (offset + ev_len <= p.len) {
-            const ev_text = p[offset .. offset + ev_len];
-            try std.fmt.format(p_writer, "Event: {s}\nTarget index: ", .{ ev_text });
-        }
-    }
-
-    if (task_count == 0) {
-        try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
-        writer.flush();
-        return;
-    }
-
-    var cand_toks: [16]u32 = undefined;
-    var cand_count: usize = 0;
-    for (1..task_count + 1) |i| {
-        var digit_buf: [4]u8 = undefined;
-        const digit_str = try std.fmt.bufPrint(&digit_buf, "{d}", .{i});
-        const encoded = try self.tok.encode(self.allocator, digit_str, false);
-        defer self.allocator.free(encoded);
-        if (encoded.len > 0) {
-            cand_toks[cand_count] = encoded[0];
-            cand_count += 1;
-        }
-    }
-    {
-        const encoded = try self.tok.encode(self.allocator, "0", false);
-        defer self.allocator.free(encoded);
-        if (encoded.len > 0) {
-            cand_toks[cand_count] = encoded[0];
-            cand_count += 1;
-        }
-    }
-
-    const probe_res = try self.probeAutonomic(msg_id, stream.getWritten(), cand_toks[0..cand_count], 1, writer);
-    var chosen_idx: usize = 0;
-    if (probe_res.winning_idx < task_count) {
-        chosen_idx = probe_res.winning_idx + 1;
-    } else {
-        chosen_idx = 0;
-    }
-
-    if (chosen_idx == 0) {
-        try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
-    } else {
-        const target_task_id = task_ids[chosen_idx - 1];
-        try protocol.writeEventRouted(writer, msg_id, event_id, target_task_id, 0);
-    }
-    writer.flush();
-}
-
-pub fn handleTaskTitle(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-    if (p.len < 6) return;
-    const task_id = std.mem.readInt(u32, p[0..4][0..4], .little);
-    const prompt_len = std.mem.readInt(u16, p[4..6][0..2], .little);
-    if (p.len < 6 + prompt_len) return;
-    const prompt_text = p[6 .. 6 + prompt_len];
-
-    var prompt_buf: [2048]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&prompt_buf);
-    const p_writer = stream.writer();
-
-    try p_writer.writeAll("Provide a concise 2 to 5 word title for this user request:\n\"");
-    const max_sample = @min(prompt_text.len, 256);
-    try p_writer.writeAll(prompt_text[0..max_sample]);
-    try p_writer.writeAll("\"\nOutput only the title, nothing else.");
-
-    const probe_res = try self.probeAutonomic(msg_id, stream.getWritten(), &.{}, 14, writer);
-    var title_str = probe_res.decoded();
-    if (title_str.len == 0) {
-        const fb_len = @min(prompt_text.len, 50);
-        title_str = prompt_text[0..fb_len];
-    }
-
-    try protocol.writeTaskTitleResult(writer, msg_id, task_id, title_str);
-    writer.flush();
-}
-
-pub fn handleBacklogTriage(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-    if (p.len < 4) {
-        try protocol.writeError(writer, msg_id, "Payload too short for backlog triage");
-        writer.flush();
-        return;
-    }
-    const event_id = std.mem.readInt(u16, p[0..2][0..2], .little);
-    const title_len = std.mem.readInt(u16, p[2..4][0..2], .little);
-    if (4 + title_len > p.len) {
-        try protocol.writeError(writer, msg_id, "Malformed backlog triage title");
-        writer.flush();
-        return;
-    }
-    const title = p[4 .. 4 + title_len];
-
-    var prompt_buf: [2048]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&prompt_buf);
-    const p_writer = stream.writer();
-
-    try std.fmt.format(p_writer, "Backlog Triage\nTask: {s}\n0: Satisfied or obsolete (ACK)\n1: Execute now (Resume)\n2: Defer for later (Snooze)\nDecision: ", .{ title });
-
-    const cand_strs = [_][]const u8{ "0", "1", "2" };
-    var cand_toks: [3]u32 = undefined;
-    var cand_count: usize = 0;
-    for (cand_strs) |cs| {
-        const encoded = try self.tok.encode(self.allocator, cs, false);
-        defer self.allocator.free(encoded);
-        if (encoded.len > 0) {
-            cand_toks[cand_count] = encoded[0];
-            cand_count += 1;
-        }
-    }
-
-    const probe_res = try self.probeAutonomic(msg_id, stream.getWritten(), cand_toks[0..cand_count], 1, writer);
-    const chosen_action: u8 = @intCast(probe_res.winning_idx);
-    try protocol.writeBacklogRouted(writer, msg_id, event_id, chosen_action);
     writer.flush();
 }

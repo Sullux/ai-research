@@ -8,295 +8,211 @@ In biological nervous systems, the brain does not operate as a single monolithic
 1. **The Autonomic Nervous System (Brainstem & Reflex Arcs):** Subconscious, millisecond-level feedback loops that regulate pupil dilation, cardiac rhythm, swallowing reflexes, and motor coordination. The autonomic system acts on sensory input rapidly and deterministically without conscious intervention.
 2. **The Cerebral Cortex (Conscious Deliberation):** Slow, high-energy, deliberative thought used for novel problem-solving, strategic planning, and reflective reasoning.
 
-The **Autonomic Finite State Machine (A-FSM)** equips the inference engine with an instinctual nervous system. By executing transient, constrained logit probes directly on the model's latent activations—and immediately rolling back the KV clock—the engine evaluates transitions, routes events, gates thinking channels, and selects communication targets in sub-2ms intervals without polluting the KV cache. The deliberative cortex is engaged only when genuine reasoning is required.
+The **Autonomic Finite State Machine (A-FSM)** equips the inference engine and host orchestrator with an instinctual nervous system. By executing transient, constrained logit probes directly on the model's latent activations—and immediately rolling back the KV clock—the engine evaluates transitions, routes events, gates thinking channels, and steers progressive stream ingestion in sub-2ms intervals without polluting the KV cache. The deliberative cortex is engaged only when genuine reasoning is required.
 
 ---
 
-## 2. Core Architecture & Mathematical Foundations
+## 2. Division of Labor: Brainstem Engine vs. Host Orchestrator
 
-### 2.1 The Standardized `probeAutonomic` Kernel
-All autonomic operations are grounded in a unified low-level execution primitive: `probeAutonomic`. Rather than performing a standard token generation cycle that permanently advances the conversational clock and appends tokens to the ring buffer, `probeAutonomic` executes a temporary forward pass, evaluates the output logits against a constrained vocabulary, and restores the exact KV cache state.
+To maintain clean separation of concerns and avoid bloated software design:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       HOST (Node.js)                        │
+│                                                             │
+│  ┌─────────────────────────┐   ┌─────────────────────────┐  │
+│  │    A-FSM Interpreter    │   │   Persistent Context    │  │
+│  │  (State Graph & Guards) │◄──┤ (Tasks, Notes, Cursors) │  │
+│  └────────────┬────────────┘   └─────────────────────────┘  │
+│               │                                             │
+│               │ client.probe(prompt, candDigits, 1)         │
+│               ▼                                             │
+├───────────────┼─────────────────────────────────────────────┤
+│  Unix Socket  │ Binary Wire Protocol (OP_PROBE_AUTONOMIC)   │
+├───────────────┼─────────────────────────────────────────────┤
+│               ▼                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │               BRAINSTEM ENGINE (Zig / GPU)            │  │
+│  │                                                       │  │
+│  │  • Physical KV Ring Buffer & RoPE (4096 slots)        │  │
+│  │  • Fast Constrained Logit Softmax & Entropy           │  │
+│  │  • O(1) rollbackClock() Non-Destructive Invariant     │  │
+│  │  • Outer TemplateState Turn Conformance               │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+1. **The Brainstem Engine (Zig / Vulkan GPU Compute):**
+   * High-performance tensor execution, physical ring buffer geometry, UMA memory synchronization, and canonical chat template framing.
+   * Exposes a single, universal reflex primitive over the wire: `OP_PROBE_AUTONOMIC` (`client.probe()`).
+   * Evaluates 1-token constrained probes in ~1.5 ms and micro-decodes in ~200–400 ms.
+   * Strictly agnostic to application state machines, YAML parsing, and task tree topologies.
+2. **The Host Orchestrator (Node.js / TUI):**
+   * Evaluates the A-FSM state graph, manages persistent context dictionaries, executes reducers/ops, and binds I/O streams.
+   * Compiles YAML state machines on-the-fly (< 5 ms).
+   * Drives progressive reading and soft-yield check-in loops.
+
+---
+
+## 3. Disambiguation: Operations (`op`) vs. Tools (`tool`)
+
+Overloading the term "tool" causes severe cognitive confusion across documentation, prompt design, and code. The A-FSM establishes a strict architectural boundary:
+
+* **Tools (`<|tool_call>`)**: Heavyweight, generative operations. The LLM must enter an explicit tool channel, generate structured JSON arguments, and wait for execution. Tools take hundreds of tokens and hundreds of milliseconds of decode time.
+* **Operations (`op`)**: Lightweight state transitions and micro-actions executed deterministically by the A-FSM host (`yield`, `reflect`, `resume`, `ask_user`, `emit`, `note`, `recall`, `edit_cell`). They execute in sub-millisecond time without generative overhead.
+
+---
+
+## 4. Mathematical Foundations of `probeAutonomic`
+
+All autonomic decisions are grounded in transient logit evaluation directly from the model's KV attention state.
 
 ```
 +-------------------------------------------------------------+
 |                     probeAutonomic                          |
 +-------------------------------------------------------------+
 | 1. Record snapshot clock: saved_clock = engine.clock        |
-| 2. Prefill probe prompt (transient slots)                   |
-| 3. If discrete (max_decode_tokens == 1):                    |
+| 2. Wrap prompt in canonical template (formatProbeFrame)     |
+| 3. Prefill probe prompt (transient slots)                   |
+| 4. If discrete (max_decode_tokens == 1):                    |
 |    a. Mask logits to candidate token set                    |
 |    b. Compute candidate softmax probabilities and entropy   |
-|    c. Select winning token via argmax / sample              |
-| 4. If generative (max_decode_tokens > 1):                   |
+|    c. Select winning candidate via argmax / sample          |
+| 5. If generative (max_decode_tokens > 1):                   |
 |    a. Autoregressively decode up to max_decode_tokens       |
 |    b. Extract decoded text slice                            |
-| 5. Rollback KV ring buffer: rollbackClock(saved_clock)      |
-| 6. Return winning index, token, confidence, entropy, cost   |
+| 6. Rollback KV ring buffer: rollbackClock(saved_clock)      |
+| 7. Return winning index, token, confidence, entropy, cost   |
 +-------------------------------------------------------------+
 ```
 
-### 2.2 Mathematical Metrics: Confidence & Entropy
-Probing an LLM via natural language to assess its own confidence (*"On a scale of 1-10, how sure are you?"*) fails due to sycophancy, overconfidence, and calibration drift. The A-FSM measures confidence directly from the raw pre-softmax logit distribution over the candidate token set $C = \{c_1, c_2, \dots, c_K\}$.
-
-#### 1. Normalized Candidate Probability (Confidence)
+### 4.1 Normalized Probability (Confidence) & Shannon Entropy
 Given unnormalized logits $z_{c_i}$ for each candidate token $c_i \in C$ at temperature $T$:
 
-$$P(c_i \mid C) = \frac{\exp(z_{c_i} / T)}{\sum_{j=1}^K \exp(z_{c_j} / T)}$$
-
-The **confidence** of the winning token $c^*$ is defined as:
-
-$$\text{confidence} = P(c^* \mid C) = \max_{i} P(c_i \mid C)$$
-
-#### 2. Candidate Logit Entropy (Uncertainty)
-To measure whether the model is decisive or conflicted between multiple valid branches, we compute the Shannon entropy across the candidate set:
+$$P(c_i \mid C) = \frac{\exp(z_{c_i} / T)}{\sum_{j=1}^K \exp(z_{c_j} / T)}, \quad \text{confidence} = \max_i P(c_i \mid C)$$
 
 $$H(C) = - \sum_{i=1}^K P(c_i \mid C) \ln P(c_i \mid C)$$
 
-* **Low Entropy ($H \to 0$):** Strong consensus; the model has an unambiguous latent bias toward one transition.
-* **High Entropy ($H \to \ln K$):** High uncertainty or ambivalence; triggers fallback cascades or escalates to conscious thinking.
-
-### 2.3 Hardware Invariants
-1. **$O(1)$ Transient Slot Eviction:** When `rollbackClock(saved_clock)` is invoked, dynamic ring buffer slots allocated during the probe are marked inactive, and attention mass counters are decremented.
-2. **Unified UMA Coherence:** On unified memory architectures (AMD APUs / RDNA 3.5), GPU-resident buffers (`buf_k_cache`, `buf_v_cache`) and CPU host descriptors remain perfectly synchronized without memory reallocations.
-3. **Zero Context Contamination:** The active conversation history never observes the prompt or tokens generated during the probe.
+* **Low Entropy ($H \to 0$):** Clear consensus; the model has an unambiguous latent bias toward one transition.
+* **High Entropy ($H \to \ln K$):** Ambivalence; triggers fallback cascades or conscious deliberation.
 
 ---
 
-## 3. The A-FSM Declarative Markup Language (YAML)
+## 5. Declarative A-FSM Specification (YAML)
 
-The A-FSM specification language is a declarative format for authoring complex autonomic behavior trees, hierarchical states, and reflexive tool pipelines.
+The A-FSM markup format is declarative and human-readable. It defines state topology, prompts, candidate action sets, and target operations.
 
-### 3.1 Specification Schema & Syntax
+### 5.1 Avoiding the "YAML Programming Language" Anti-Pattern
+To prevent building an accidental, fragile DSL in YAML, the A-FSM enforces a **State Chart + Reducer** pattern:
+* **The YAML defines the Graph:** States, Transitions, Prompts, Probe Candidates, and target `op` names.
+* **The Context is a plain dictionary:** (`Record<string, any>`) managed by the Host.
+* **Operations are pure Host functions:** `(context, probeResult) => nextContext`.
+
+### 5.2 Schema Definition
 
 ```yaml
-# An autonomic state definition
-<state_name>:
-  prompt: <string>                  # Seed clause presented to the model
-  [minCertainty: <float 0.0..1.0>]  # Global confidence floor for state options
-  [maxTokens: <int>]                # Maximum decode tokens (default: 1)
-  options:                          # Candidate transitions or dynamic provider
-    - prompt: <string>              # Candidate completion text / label
-      [minCertainty: <float>]       # Option-specific confidence floor
-      next: <state_name> | <tool>   # Next state name or tool execution directive
-    # OR:
-    # { context: <provider_name> }  # Dynamic runtime candidate injection
+name: <fsm_name>
+initial: <initial_state>
+
+states:
+  <state_name>:
+    probe:
+      prompt: <string | template>       # Prompt presented to the probe
+      candidates:                       # Discrete choices
+        "<token_label>":
+          op: <op_name>                 # Operation executed on selection
+          target: <next_state_name>     # Target state
+          [minCertainty: <float>]       # Optional threshold
+      # OR generative micro-decode:
+      # maxTokens: 14
+      # op: <op_name>
+      # target: <next_state_name>
 ```
 
-### 3.2 Transition Targets
-A transition `next` target can be one of two types:
-1. **State Transition (`next: <state_name>`):** Recursively transitions to another autonomic node within the state machine.
-2. **Action Primitive (`next: { tool: <built_in_action>, ...params }`):** Terminates the autonomic evaluation and signals the inference engine or client orchestrator to execute an action.
+---
 
-Built-in action primitives include:
-* `{ tool: yield }`: Pauses inference and yields control back to the event loop.
-* `{ tool: think }`: Enters the canonical reasoning channel (`<|channel>thought\n`).
-* `{ tool: respond, [channel: <target>] }`: Begins direct content generation on the designated output channel without thinking.
-* `{ tool: read_next, [mode: <chunk_mode>] }`: Advances the task's stateful push-stream reader.
-* `{ tool: ack, id: <not_id> }`: Acknowledges and clears an alert interrupt.
-* `{ tool: snooze, id: <not_id> }`: Defers an interrupt to the queue tail.
+## 6. Progressive Reading & Soft-Yield Check-In Loop
 
-### 3.3 Concrete Example: Comprehensive Conversational & Task Controller
+One of the primary applications of the A-FSM is **Progressive Stream Ingestion** (reading large files, logs, or multi-turn conversational histories).
+
+### 6.1 The Progressive Ingestion Architecture
+Rather than slicing texts by arbitrary regex heuristics or dumping 10 GB into memory, the host pushes raw 512-character blocks directly into the inference engine KV cache. 
+
+At natural syntactic resting points (sentences, code blocks, paragraph ends), the engine triggers an elastic soft yield (`STOP_ELASTIC_YIELD`). The A-FSM immediately executes a 1-token reflex probe directly on the ambient attention state:
 
 ```yaml
-on_idle:
-  prompt: "In this idle state, I should"
-  options:
-    - prompt: "maintain my current focus and wait"
-      minCertainty: 0.6
-      next: { tool: yield }
-    - prompt: "review pending tasks and pick what to focus on"
-      minCertainty: 0.4
-      next: decide_focus
-    - prompt: "perform background maintenance and memory consolidation"
-      minCertainty: 0.75
-      next: { tool: memory_consolidate }
+name: progressive_reader
+initial: reading
 
-on_input:
-  prompt: "The incoming input event"
-  options:
-    - prompt: "is background telemetry or status that does not require changing focus"
-      minCertainty: 0.7
-      next: { tool: ack }
-    - prompt: "is a steering correction or follow-up to the current active task"
-      minCertainty: 0.55
-      next: focus
-    - prompt: "is a completely new, independent user task"
-      minCertainty: 0.65
-      next: create_new_task
+states:
+  reading:
+    probe:
+      prompt: |
+        Reading Check-In:
+        Based on what I have read so far, what is my next action?
+        1: Continue reading next segment
+        2: Pause to make a distilled note
+        3: Pause to ask the user a clarifying question
+        4: Pause to emit a progress update
+        0: Reading complete, proceed to synthesis
+        Answer with only the index number:
+      candidates:
+        "1":
+          op: read_next_chunk
+          target: reading
+        "2":
+          op: take_micro_note
+          target: reflecting
+        "3":
+          op: ask_user
+          target: awaiting_user
+        "4":
+          op: emit_progress
+          target: reading
+        "0":
+          op: finalize_summary
+          target: synthesizing
 
-decide_focus:
-  prompt: "Next, the channel or task I will focus on is"
-  options: { context: active_tasks } # Dynamically populated with tasks 1..N
-
-focus:
-  prompt: "To address this task, I need to"
-  options:
-    - prompt: "directly answer without needing extended reasoning"
-      minCertainty: 0.65
-      next: { tool: respond }
-    - prompt: "think carefully and reason step-by-step"
-      minCertainty: 0.4
-      next: { tool: think }
-    - prompt: "read the next segment of the source document"
-      minCertainty: 0.7
-      next: { tool: read_next }
-    - prompt: "skim the document structure first"
-      minCertainty: 0.75
-      next: skim_mode
-    - prompt: "invoke an external subshell command"
-      minCertainty: 0.8
-      next: { tool: cmd_prepare }
-
-skim_mode:
-  prompt: "I should skim the content by extracting"
-  options:
-    - prompt: "headings and structural markdown tags"
-      next: { tool: skim, strategy: "headings" }
-    - prompt: "the opening sentence of each paragraph"
-      next: { tool: skim, strategy: "first_sentence" }
-    - prompt: "code block signatures and function declarations"
-      next: { tool: skim, strategy: "code_signatures" }
-
-create_new_task:
-  prompt: "Summarize this user request in a concise 4 to 10 word title:"
-  maxTokens: 14
-  next: { tool: task_init }
+  reflecting:
+    probe:
+      prompt: "Distill the key takeaway from the recent section in 1 to 2 sentences:"
+      maxTokens: 32
+      op: save_note
+      target: reading
 ```
+
+### 6.2 The Note-Taking Hybrid Model
+* **In-Band Attention:** Short reflective notes (15–30 tokens) enter the model's KV attention stream as high-salience semantic anchors.
+* **Out-of-Band Persistence:** The Host appends the note to `context.notes`. When the 4,096-slot physical ring buffer undergoes Tier 2 FIFO eviction, older raw text chunks are discarded, while the distilled notes survive both in associative memory (`Hippocampus`) and persistent context.
 
 ---
 
-## 4. Binary Compilation & Autonomic Bytecode (µOps)
+## 7. Dynamic Template Swapping
 
-To maintain sub-2ms evaluation times, the inference engine cannot parse YAML, allocate strings, or run regexes on the fast path. The declarative YAML is compiled ahead of time (or at session initialization) into a contiguous binary **Autonomic Action Graph (AAG)**.
+Because compilation of the YAML state graph in JavaScript takes under 5 ms, templates can be swapped dynamically based on current user intent:
 
-### 4.1 Bytecode Structure & Node Layout
-
-```zig
-pub const AutonomicOpcode = enum(u8) {
-    OP_PROBE_DISCRETE = 0x01, // Formats prompt, samples 1 token from pre-tokenized candidates
-    OP_PROBE_DECODE   = 0x02, // Prefills prompt, generates up to max_tokens (generative decode)
-    OP_DISPATCH_TOOL  = 0x03, // Executes built-in tool / action primitive
-    OP_BRANCH_CONF    = 0x04, // Evaluates min_certainty condition and branches
-    OP_HALT           = 0x05, // Terminates state machine
-};
-
-pub const AutonomicNode = extern struct {
-    id: u16,
-    opcode: AutonomicOpcode,
-    candidate_count: u8,
-    min_certainty_f32: f32,
-    prompt_str_offset: u32,
-    prompt_str_len: u16,
-    candidate_token_ids: [8]u32, // Pre-encoded vocabulary IDs!
-    transition_node_ids: [8]u16, // Child state indices
-    fallback_node_id: u16,       // Executed if max confidence < min_certainty
-};
-```
-
-### 4.2 Pre-Tokenized Candidate Evaluation
-During compilation, every candidate prompt (`"1: read"`, `"2: think"`) is pre-tokenized against the model's vocabulary. When evaluating `OP_PROBE_DISCRETE`:
-1. The engine prefills the prompt slice.
-2. The logits of `candidate_token_ids[0..candidate_count]` are extracted directly from GPU scratch memory.
-3. Candidate softmax probabilities are computed across the small candidate array in under $50\,\mu\text{s}$.
-4. If `confidence >= min_certainty_f32`, execution transitions immediately to `transition_node_ids[winning_idx]`.
-5. If confidence falls below the threshold, execution jumps directly to `fallback_node_id`.
-
----
-
-## 5. Multi-Channel Context Hygiene: Directional Envelopes
-
-A recurring failure mode in multi-channel LLM systems is channel confusion. When an LLM interacts across multiple sinks (e.g., desktop chat, Telegram bot, text-to-speech engine, open log files), standard tool-calling approaches fail because:
-1. Emitting JSON tool payloads for everyday replies is slow and unnatural for conversational weights.
-2. Models insist on producing a final direct conversational response, repeating what they already sent via the tool.
-3. Non-canonical synthetic tokens (`<|to_telegram|>`) cause distribution shift, attention degradation, and delimiter hallucination.
-
-### 5.1 Directional Envelopes inside Canonical Turns
-The A-FSM solves this by preserving 100% canonical Gemma 4 chat template syntax (`<|turn>user\n...<turn|>` and `<|turn>model\n...<turn|>`) while embedding **Directional Channel Descriptors** at the head of content blocks.
-
-#### Inbound Envelope (Reading / Ingestion):
-```text
-<|turn>user
-[from: tg/@sullux] Hey, did the ReleaseFast GPU build finish?
-<turn|>
-```
-```text
-<|turn>user
-[from: trm/build stdout] ninja: build complete. 0 failures.
-<turn|>
-```
-
-#### Outbound Envelope (Writing / Response):
-When the A-FSM determines that a response is directed to a specific channel, the server **pre-seeds the channel header** into the turn start:
-```text
-<|turn>model
-<|channel>thought
-Charles is asking via Telegram about the build status. The build terminal indicates zero failures. I will confirm to his Telegram channel.
-<channel|>[to: tg/@sullux] Yes, the ReleaseFast GPU build succeeded with 0 failures.
-<turn|>
-```
-
-#### Multi-Sink Responses:
-If the model determines that an action requires multi-destination broadcasting, it can emit multiple blocks within a single turn:
-```text
-<|turn>model
-<|channel>thought
-I should update the Telegram chat and also announce the completion over the desktop TTS speaker.
-<channel|>[to: tg/@sullux] Build complete. Ready for testing.
-[to: audio/tts] GPU compilation completed successfully.
-<turn|>
-```
-
-### 5.2 Architectural Advantages:
-1. **Canonical Context Validity:** The KV cache retains clean, natural language. The model's attention mechanism easily learns that `[from: X]` represents sensory input and `[to: X]` represents motor output.
-2. **Zero Hallucination:** The server autonomic engine can pre-seed `[to: <selected_channel>]\n` as forced tokens immediately following `<channel|>`. The model never has to guess the channel formatting.
-3. **Causal Client Demultiplexing:** The streaming parser monitors for `[to: <target>]` headers. When encountered, it binds the downstream token pipe to that specific target (Telegram HTTP webhook, TTS audio synthesis queue, or chat UI) until a new header or turn boundary arrives.
-
----
-
-## 6. Autonomic Turn Gating & Reflex Controls
-
-### 6.1 The 1-Token Thinking Gate
-Instead of relying on the model to freely decide whether to spend 500 tokens reasoning about a trivial greeting, the engine implements a 1-token reflex gate at the initiation of every turn:
-
-```
-[Inbound Prompt]
-       │
-       ▼
-[Autonomic Reflex Probe]
-Prompt: "For this user prompt, deliberative reasoning is: [0: Unnecessary, 1: Essential]"
-Candidates: ['0', '1']
-       │
-       ├─────────────────────────────────┐
-       ▼                                 ▼
- winning = '0'                     winning = '1'
- (Confidence >= 0.70)              (Or Confidence < 0.70 fallback)
-       │                                 │
-       ▼                                 ▼
-Inject: Direct response            Inject: <|channel>thought\n
-Set: suppress_thinking = true      Set: suppress_thinking = false
-Result: Instant response (27 t/s)  Result: Full deep reasoning
-```
-
-### 6.2 Autonomic Barge-In Arbitration
-When an interrupt event arrives during active model generation:
-1. Active forward passes pause at the current micro-step.
-2. The engine formats a transient 1-token probe:
-   ```text
-   Active task: <current_task_title>
-   Incoming event: <event_preview>
-   Directive: Should this event immediately interrupt the active response?
-   Decision: [0: Queue until turn end, 1: Interrupt immediately]
-   ```
-3. If `0`: Inference resumes seamlessly. The event is enqueued into `PENDING` without dropping tokens.
-4. If `1`: The engine forces a clean syntactic closure (`... [interrupted] <turn|>`), preserves the partial KV cache, and switches to the interrupt handler.
-
----
-
-## 7. Roadmap & Implementation Phases
-
-| Phase | Component | Description |
+| Template | Trigger | Primary Operations |
 |---|---|---|
-| **Phase 1** | **Unified `probeAutonomic` Kernel** | Consolidate `handleTaskTriage`, `handleBacklogTriage`, and `handleTaskTitle` in `src/server.zig` into a reusable, hardened primitive with normalized probability and entropy calculation. |
-| **Phase 2** | **1-Token Thinking Gate** | Implement pre-turn reflex evaluation to suppress unnecessary `<|channel>thought` phases on simple conversational turns. |
-| **Phase 3** | **Directional Envelopes & Channel Demux** | Standardize `[from: ...]` and `[to: ...]` headers in prompts and implement client-side stream routing to multi-channel sinks. |
-| **Phase 4** | **A-FSM Bytecode Compiler & Runtime** | Implement parser for `.afsm.yaml` behavior trees compiling to binary µOps evaluated natively inside `src/server.zig`. |
+| `chat.yaml` | Default conversational turn | `yield`, `think_gate`, `respond`, `route_task` |
+| `reader.yaml` | Reading files or large logs | `read_next_chunk`, `take_micro_note`, `ask_user` |
+| `terminal.yaml`| Subshell / REPL execution | `poll_output`, `send_key`, `kill_subshell` |
+| `table.yaml`   | Structured data / spreadsheets| `select_cell`, `edit_cell`, `compute_formula` |
+
+---
+
+## 8. Multi-Channel Context Hygiene: Directional Envelopes
+
+To maintain seamless multi-channel multiplexing across chat UI, terminal streams, and external alerts without delimiter hallucination:
+
+```text
+<|turn>user
+[from: tg/@sullux] Did the build succeed?
+<turn|>
+<|turn>model
+<|channel>thought
+Confirming build status to Telegram.
+<channel|>[to: tg/@sullux] Build complete. 0 failures.
+<turn|>
+```
+
+The streaming parser inspects `[to: <target>]` at turn start and routes tokens to the corresponding sink without requiring artificial JSON tool emissions.

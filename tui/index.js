@@ -478,18 +478,45 @@ const main = () => {
     const suspended = notManager.getSuspended()
     if (suspended.length > 0) {
       const nextSuspended = suspended[0]
-      const seq = nextSuspended.seq || parseInt(String(nextSuspended.id).replace(/\D/g, ''), 10) || 1
-      client.sendBacklogTriage(seq, nextSuspended.preview)
+      const probePrompt = `Autonomic Backlog Triage\nEvaluate whether this pending background task has been completed, should be executed now, or should be deferred:\nTask: "${nextSuspended.preview}"\n0: Satisfied/Completed\n1: Execute now\n2: Defer\nDecision: `
+      client.probe(probePrompt, ['0', '1', '2'], 1).then((res) => {
+        if (res.winningIdx === 0) {
+          notManager.ack(nextSuspended.id)
+          store.addStreamEntry({
+            type: 'system',
+            title: '🎯 AUTO-ACK',
+            content: `Autonomic probe resolved Task ${nextSuspended.id}: satisfied in prior response.`,
+          })
+          processNextBacklog()
+        } else if (res.winningIdx === 1) {
+          notManager.markServicing(nextSuspended.id)
+          if (controller.refs)
+            controller.refs.activeTurnNotificationId = nextSuspended.id
+          const resumeNudge = formatBacklogResumeNudge(nextSuspended)
+          store.setGenerating(true)
+          client.sendInput(resumeNudge)
+        } else {
+          notManager.snooze(nextSuspended.id)
+          store.addStreamEntry({
+            type: 'system',
+            title: '💤 DEFERRED',
+            content: `Autonomic probe deferred Task ${nextSuspended.id} to queue tail.`,
+          })
+          processNextBacklog(false)
+        }
+        requestRedraw()
+      })
       return true
     }
 
     if (allowDeferred) {
-      const deferred = notManager.getPending().filter(a => a.isDeferred)
+      const deferred = notManager.getPending().filter((a) => a.isDeferred)
       if (deferred.length > 0) {
         const nextDeferred = deferred[0]
         nextDeferred.isDeferred = false
         notManager.markServicing(nextDeferred.id)
-        if (controller.refs) controller.refs.activeTurnNotificationId = nextDeferred.id
+        if (controller.refs)
+          controller.refs.activeTurnNotificationId = nextDeferred.id
         const interruptNudge = formatNotificationInterrupt(nextDeferred)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
@@ -586,114 +613,6 @@ const main = () => {
   client.on('memResponse', ({ count, status }) => {
     store.setStatus(`Memory retrieved: ${count} episodes (status: ${status})`)
     requestRedraw()
-  })
-
-  client.on('eventRouted', ({ eventId, taskId, isNewTask }) => {
-    if (isNewTask) {
-      const alert = notManager.getPending().find(a =>
-        a.seq === eventId ||
-        a.id === `not${eventId}` ||
-        a.refId === String(eventId)
-      )
-      const rawText = alert?.extra?.payload || alert?.preview || `Task ${eventId}`
-      const firstLine = rawText.trim().split('\n')[0]
-      const fallbackTitle = firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine
-      const newTask = taskManager.createTask(fallbackTitle)
-      if (client) {
-        client.sendTaskTitle(newTask.id, rawText)
-      }
-      store.addStreamEntry({
-        type: 'system',
-        title: '🎯 NEW TASK',
-        content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${fallbackTitle}"`,
-      })
-      const targetToSuspend = controller.refs?.interruptedTurnNotificationId ||
-        (controller.refs?.activeTurnNotificationId !== alert?.id ? controller.refs?.activeTurnNotificationId : null)
-      if (targetToSuspend) {
-        notManager.suspend(targetToSuspend)
-      }
-      if (controller.refs) {
-        controller.refs.interruptedTurnNotificationId = null
-        if (controller.refs.activeTurnNotificationId === targetToSuspend) {
-          controller.refs.activeTurnNotificationId = null
-        }
-      }
-    } else {
-      taskManager.setActiveTask(taskId)
-      store.addStreamEntry({
-        type: 'system',
-        title: '🎯 ROUTED',
-        content: `Autonomic triage routed Event not${eventId} to Task #${taskId}`,
-      })
-      if (controller.refs) {
-        controller.refs.interruptedTurnNotificationId = null
-      }
-    }
-    requestRedraw()
-  })
-
-  client.on('backlogRouted', ({ eventId, action }) => {
-    const alert = notManager.getSuspended().find(a =>
-      a.seq === eventId ||
-      a.id === `not${eventId}` ||
-      a.refId === String(eventId) ||
-      a.id === eventId
-    )
-    if (!alert) return
-
-    if (action === BACKLOG_ACTION_ACK) {
-      notManager.ack(alert.id)
-      store.addStreamEntry({
-        type: 'system',
-        title: '🎯 AUTO-ACK',
-        content: `Autonomic probe resolved Task ${alert.id}: satisfied in prior response.`,
-      })
-      processNextBacklog()
-    } else if (action === BACKLOG_ACTION_RESUME) {
-      notManager.markServicing(alert.id)
-      if (controller.refs) controller.refs.activeTurnNotificationId = alert.id
-      const resumeNudge = formatBacklogResumeNudge(alert)
-      store.setGenerating(true)
-      client.sendInput(resumeNudge)
-    } else if (action === BACKLOG_ACTION_SNOOZE) {
-      notManager.snooze(alert.id)
-      store.addStreamEntry({
-        type: 'system',
-        title: '💤 DEFERRED',
-        content: `Autonomic probe deferred Task ${alert.id} to queue tail.`,
-      })
-      processNextBacklog(false)
-    }
-    requestRedraw()
-  })
-
-  client.on('readStreamStatus', ({ taskId, status, bytesRead, newOffset }) => {
-    const task = taskManager.getTask(taskId)
-    if (task) {
-      if (status === READ_STATUS_EOF) {
-        taskManager.closeReadStream(taskId)
-        store.addStreamEntry({
-          type: 'system',
-          title: '📖 READ COMPLETE',
-          content: `Push reading completed for Task #${taskId} (${newOffset} bytes read).`,
-        })
-      } else if (status === READ_STATUS_CHUNK) {
-        taskManager.updateReadStream(taskId, { offset: newOffset, bytesRead })
-      }
-    }
-    requestRedraw()
-  })
-
-  client.on('taskTitleResult', ({ taskId, title }) => {
-    if (title && taskManager.getTask(taskId)) {
-      taskManager.updateTask(taskId, { title })
-      store.addStreamEntry({
-        type: 'system',
-        title: '🏷 TASK TITLE',
-        content: `Task #${taskId} titled: "${title}"`,
-      })
-      requestRedraw()
-    }
   })
 
   client.on('drain', requestRedraw)
