@@ -212,7 +212,9 @@ const parseAutonomicResult = (payload) => {
   const entropy = payload.readFloatLE(6)
   const costMs = payload.readFloatLE(10)
   const textLen = payload.readUInt16LE(14)
-  const text = payload.length >= 16 + textLen ? payload.slice(16, 16 + textLen).toString('utf-8') : ''
+  const text = payload.length >= 16 + textLen
+    ? payload.slice(16, 16 + textLen).toString('utf-8').replaceAll('\u2581', ' ')
+    : ''
   return { winningIdx, confidence, entropy, costMs, text }
 }
 
@@ -221,7 +223,7 @@ const parseTaskTitleResult = (payload) => {
   const taskId = payload.readUInt32LE(0)
   const titleLen = payload.readUInt16LE(4)
   if (payload.length < 6 + titleLen) return null
-  const title = payload.slice(6, 6 + titleLen).toString('utf-8')
+  const title = payload.slice(6, 6 + titleLen).toString('utf-8').replaceAll('\u2581', ' ')
   return { taskId, title }
 }
 
