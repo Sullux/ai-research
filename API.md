@@ -71,6 +71,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | `0x000A` | **`OP_RESUME`** | Continue decoding from an elastic yield (`STOP_ELASTIC_YIELD`) without new turn prefill. |
 | `0x000E` | **`OP_PING`** | Keepalive / round-trip latency probe. |
 | `0x000F` | **`OP_SHUTDOWN`** | Gracefully flush stores, release GPU memory, and exit. |
+| `0x0012` | **`OP_PROBE_AUTONOMIC`** | Execute transient constrained logit probe or generative micro-decode with non-destructive clock rollback. |
 
 ---
 
@@ -85,6 +86,7 @@ Every message transmitted in either direction begins with a fixed **16-byte Head
 | `0x0105` | **`OP_MEM_RESPONSE`** | Results of an `OP_MEM_QUERY` returning injected episode counts, timestamps, and cursor. |
 | `0x0106` | **`OP_STATUS`** | Live engine telemetry (tok/s, active vs quiescent layer breakdown, ring slots, VRAM). |
 | `0x0107` | **`OP_SNAPSHOT_STATUS`** | Working state snapshot status (status code, clock, active slots, stream anchor ID). |
+| `0x010C` | **`OP_AUTONOMIC_RESULT`** | Autonomic probe result (winning index, confidence f32, entropy f32, cost ms f32, decoded text). |
 | `0x010E` | **`OP_PONG`** | Reply to `OP_PING`. |
 | `0x01FF` | **`OP_ERROR`** | Structured error notification. |
 
@@ -183,7 +185,7 @@ Emitted when generation halts at a turn boundary (`<turn|>`), max tokens, or aft
 ---
 
 ### 4.4. `OP_SET_CONFIG` (`0x0004`) — Inbound
-Sets per-turn decode parameters and thinking channel controls.
+Sets per-turn decode parameters, penalties, and autonomic thinking gate controls (41 bytes payload).
 
 ```
  0                   1                   2                   3
@@ -197,11 +199,32 @@ Sets per-turn decode parameters and thinking channel controls.
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                     Quiescence Threshold                      |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|     Top-K     |   Stop Count  |      Reserved (16-bit)        |
+|                          Max Tokens                           |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                     Stop Token IDs ([Count]u32)...            |
+|                            Min-P                              |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Repeat Penalty                         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Repeat Last N                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Frequency Penalty                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Presence Penalty                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| Thinking Gate |
++-+-+-+-+-+-+-+-+
 ```
+* **`Thinking Budget` (`u32`):** Max tokens permitted in the `<channel>thought` channel.
+* **`Temperature` (`f32`):** Sampler temperature (e.g. `1.0`).
+* **`Top-P` (`f32`):** Nucleus sampling threshold (e.g. `0.95`).
+* **`Quiescence Threshold` (`f32`):** Threshold for layer skipping.
+* **`Max Tokens` (`u32`):** Runaway safety ceiling per turn (e.g. `4096`).
+* **`Min-P` (`f32`):** Minimum token probability relative to top token (e.g. `0.05`).
+* **`Repeat Penalty` (`f32`):** Repetition penalty multiplier (e.g. `1.1`).
+* **`Repeat Last N` (`u32`):** Window size for repetition penalty (e.g. `64`).
+* **`Frequency Penalty` (`f32`):** Additive penalty proportional to token frequency (e.g. `0.1`).
+* **`Presence Penalty` (`f32`):** Additive penalty for token presence (e.g. `0.1`).
+* **`Thinking Gate` (`u8`):** Pre-turn 1-token reflex gate enable (`1 = enabled`, `0 = disabled`).
 
 ---
 
@@ -399,23 +422,95 @@ Resumes generation from a continuous streaming elastic yield (`STOP_ELASTIC_YIEL
 ---
 
 ### 4.14. `OP_STATUS` (`0x0106`) — Outbound Telemetry
-Periodic telemetry frame reporting engine performance and resource states.
+Periodic telemetry frame reporting engine performance, memory slots, and compute flags (20 bytes payload).
 
 ```
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    Status     |     Is GPU    |          Active Slots         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|        Archived Diffs         |             Flags             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                       Tokens Per Second                       |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|        Active Slots           |        Archived Diffs         |
+|                      Current Turn Tokens                      |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                   Active Layer Bitmask (0..31)                |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                   Active Layer Bitmask (32..63)               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                        GPU VRAM Used (MB)                     |
+|                     Total Generated Tokens                    |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
+* **`Status` (`u8`):** Engine execution state (`0 = STATUS_IDLE`, `1 = STATUS_ENCODING`, `2 = STATUS_GENERATING`, `3 = STATUS_MEMORY`, `4 = STATUS_CONSOLIDATING`).
+* **`Is GPU` (`u8`):** Compute backend (`1 = Vulkan GPU Async Compute`, `0 = CPU`).
+* **`Active Slots` (`u16`):** Number of active slots currently populated in the 4,096-slot KV ring buffer.
+* **`Archived Diffs` (`u16`):** Number of episodic diff slabs committed to long-term storage.
+* **`Flags` (`u16`):** Bitmask flags (`FLAG_GPU = 0x0001`, `FLAG_THINKING_GATE = 0x0002`, `STATUS_FLAG_SATURATED = 0x0001`).
+* **`Tokens Per Second` (`f32`):** Current instantaneous generation speed.
+* **`Current Turn Tokens` (`u32`):** Tokens decoded in the current turn.
+* **`Total Generated Tokens` (`u32`):** Lifetime tokens generated in this engine session.
+
+---
+
+### 4.15. `OP_PROBE_AUTONOMIC` (`0x0012`) — Inbound
+Executes a transient, constrained logit probe or generative micro-decode directly on the model's KV attention state with non-destructive $O(1)$ clock rollback.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Max Decode Tokens       |        Candidate Count        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Min Certainty                         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Prompt Length         |      Prompt String (UTF-8)... |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Candidate 0 Length      |   Candidate 0 String (UTF-8)...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Candidate N Length      |   Candidate N String (UTF-8)...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+* **`Max Decode Tokens` (`u16`):**
+  * `1`: Discrete reflex probe. Evaluates constrained candidate logits, computes softmax probabilities and entropy, and returns in $\sim 1.5\text{ ms}$.
+  * `> 1`: Generative micro-decode. Generates up to $N$ tokens (e.g. task title, note summary) before rolling back the KV clock.
+* **`Candidate Count` (`u16`):** Number of candidate token strings provided ($0 \le K \le 32$). For discrete probes ($N=1$), must be $\ge 1$.
+* **`Min Certainty` (`f32`):** Minimum winning softmax probability threshold (e.g. `0.60`).
+* **`Prompt Length` (`u16`):** Length in bytes of the probe prompt string.
+* **`Prompt String`:** UTF-8 bytes of the probe prompt. Automatically framed within canonical turn template boundaries if engine is between turns.
+* **`Candidate Entries` (`[Candidate Count]`):** Each candidate consists of a 2-byte length (`u16`) followed by its UTF-8 string slice (e.g. `"1"`, `"0"`, `"continue"`).
+
+---
+
+### 4.16. `OP_AUTONOMIC_RESULT` (`0x010C`) — Outbound
+Returns the outcome of an `OP_PROBE_AUTONOMIC` evaluation.
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Winning Index         |          Confidence           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                            Entropy                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                            Cost (ms)                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Text Length          |     Decoded Text (UTF-8)...   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+|                              (...)                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+* **`Winning Index` (`u16`):** 0-based index of the winning candidate in the candidate list.
+* **`Confidence` (`f32`):** Normalized candidate softmax probability $P(c^* \mid C) \in [0.0, 1.0]$.
+* **`Entropy` (`f32`):** Shannon entropy $H(C) = - \sum P \ln P$ measuring model ambivalence.
+* **`Cost (ms)` (`f32`):** Wall-clock evaluation time on GPU in milliseconds.
+* **`Text Length` (`u16`):** Decoded text slice byte count (for generative micro-decodes).
+* **`Decoded Text`:** UTF-8 bytes of generated text (with sentencepiece spaces normalized).
 
 ---
 
@@ -462,6 +557,16 @@ function onFrame(header: Header, payload: Buffer) {
 
     case OP_STATUS:
       updateTelemetry(payload);
+      break;
+
+    case OP_AUTONOMIC_RESULT:
+      const winningIdx = payload.readUInt16LE(0);
+      const confidence = payload.readFloatLE(2);
+      const entropy = payload.readFloatLE(6);
+      const costMs = payload.readFloatLE(10);
+      const textLen = payload.readUInt16LE(14);
+      const text = payload.subarray(16, 16 + textLen).toString('utf-8');
+      resolvePendingProbe({ winningIdx, confidence, entropy, costMs, text });
       break;
 
     case OP_ERROR:
