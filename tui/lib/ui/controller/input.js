@@ -1,9 +1,27 @@
+const fs = require('fs')
+const path = require('path')
+const yaml = require('js-yaml')
 const { refs } = require('./state')
 const {
   formatTurn1,
   formatUserTurn,
   formatUserDecisionTurn,
 } = require('../../template')
+const { Afsm } = require('../../afsm')
+
+let chatTemplate = null
+const getChatTemplate = () => {
+  if (!chatTemplate) {
+    try {
+      const raw = fs.readFileSync(
+        path.resolve(__dirname, '../../../templates/chat.yaml'),
+        'utf-8',
+      )
+      chatTemplate = yaml.load(raw)
+    } catch (_) {}
+  }
+  return chatTemplate
+}
 
 const onSubmitInput = (ctx, payload) => {
   const val = payload.value?.trim()
@@ -36,6 +54,15 @@ const onSubmitInput = (ctx, payload) => {
   let eventId = null
   if (refs.vfs) {
     savedMsg = refs.vfs.saveUserMessage(val)
+    refs.channelManager?.registerChannel({
+      id: 'chat/user',
+      path: savedMsg.relPath,
+      type: 'push',
+      cursor: 0,
+      isFocused: true,
+    })
+    const chunk = refs.channelManager?.readChunk('chat/user', refs.vfs, 512)
+    const readContent = chunk?.content || savedMsg.payload
 
     const notItem = refs.notManager?.notify(
       savedMsg.relPath,
@@ -52,23 +79,27 @@ const onSubmitInput = (ctx, payload) => {
     }
     eventId = notItem?.id || savedMsg.id
     turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
-    turnBody = savedMsg.payload
+    turnBody = readContent
 
-    // Autonomic task triage & titling via client.probe()
+    // Autonomic task triage & titling via Afsm (chat.yaml)
     const activeTasks = refs.taskManager?.getActiveTasks() || []
-    if (activeTasks.length > 0 && refs.client) {
+    const chatDef = getChatTemplate()
+    if (activeTasks.length > 0 && refs.client && chatDef) {
       const triageSeq = notItem ? notItem.seq : parseInt(savedMsg.id, 10)
       const candList = activeTasks
         .map((t, idx) => `${idx + 1}: ${t.title}`)
         .join('\n')
-      const candDigits = activeTasks
-        .map((_, idx) => String(idx + 1))
-        .concat(['0'])
-      const triagePrompt = `Classify whether the incoming user message is a constraint, follow-up, or steering for an active task, or a new independent task.\n\nActive tasks:\n${candList}\n0: New independent task\n\nIncoming message: "${val}"\n\nAnswer with only the index number:`
-      refs.client.probe(triagePrompt, candDigits, 1).then((res) => {
-        const winningIdx = res.winningIdx
-        const isNewTask = winningIdx >= activeTasks.length
-        if (isNewTask) {
+      const candidates = activeTasks
+        .map((t, idx) => ({
+          key: String(idx + 1),
+          op: 'steer_task',
+          target: 'responding',
+          task: t,
+        }))
+        .concat([{ key: '0', op: 'create_task', target: 'titling' }])
+
+      const ops = {
+        create_task: (fsmCtx) => {
           const firstLine = val.trim().split('\n')[0]
           const fallbackTitle =
             firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine
@@ -77,17 +108,6 @@ const onSubmitInput = (ctx, payload) => {
             type: 'system',
             title: '🎯 NEW TASK',
             content: `Autonomic triage assigned Event not${triageSeq} to new Task #${newTask.id}: "${fallbackTitle}"`,
-          })
-          const titlePrompt = `Provide a concise 2 to 5 word title for this user request:\n"${val.slice(0, 256)}"\nOutput only the title, nothing else.`
-          refs.client.probe(titlePrompt, [], 14).then((tRes) => {
-            if (tRes?.text) {
-              refs.taskManager.updateTask(newTask.id, { title: tRes.text })
-              refs.store?.addStreamEntry({
-                type: 'system',
-                title: '🏷 TASK TITLE',
-                content: `Task #${newTask.id} titled: "${tRes.text}"`,
-              })
-            }
           })
           const targetToSuspend =
             refs.interruptedTurnNotificationId ||
@@ -101,15 +121,47 @@ const onSubmitInput = (ctx, payload) => {
           if (refs.activeTurnNotificationId === targetToSuspend) {
             refs.activeTurnNotificationId = null
           }
-        } else {
-          const targetTask = activeTasks[winningIdx]
-          refs.taskManager.setActiveTask(targetTask.id)
-          refs.store?.addStreamEntry({
-            type: 'system',
-            title: '🎯 ROUTED',
-            content: `Autonomic triage routed Event not${triageSeq} to Task #${targetTask.id}`,
-          })
+          return { taskId: newTask.id, valSample: val.slice(0, 256) }
+        },
+        set_title: (fsmCtx, probeRes) => {
+          if (probeRes?.text && fsmCtx.taskId) {
+            refs.taskManager.updateTask(fsmCtx.taskId, { title: probeRes.text })
+            refs.store?.addStreamEntry({
+              type: 'system',
+              title: '🏷 TASK TITLE',
+              content: `Task #${fsmCtx.taskId} titled: "${probeRes.text}"`,
+            })
+          }
+        },
+        steer_task: (fsmCtx, probeRes) => {
+          const targetTask = activeTasks[probeRes.winningIdx]
+          if (targetTask) {
+            refs.taskManager.setActiveTask(targetTask.id)
+            refs.store?.addStreamEntry({
+              type: 'system',
+              title: '🎯 ROUTED',
+              content: `Autonomic triage routed Event not${triageSeq} to Task #${targetTask.id}`,
+            })
+          }
           refs.interruptedTurnNotificationId = null
+        },
+      }
+
+      const fsm = Afsm({
+        definition: { ...chatDef, initial: 'on_input' },
+        client: refs.client,
+        initialContext: {
+          val,
+          valSample: val.slice(0, 256),
+          candList,
+          candidates,
+        },
+        ops,
+      })
+
+      fsm.step().then((res) => {
+        if (res.to === 'titling') {
+          fsm.step()
         }
       })
     } else if (refs.taskManager) {
@@ -117,18 +169,29 @@ const onSubmitInput = (ctx, payload) => {
       const fallbackTitle =
         firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine
       const newTask = refs.taskManager.createTask(fallbackTitle)
-      if (refs.client) {
-        const titlePrompt = `Provide a concise 2 to 5 word title for this user request:\n"${val.slice(0, 256)}"\nOutput only the title, nothing else.`
-        refs.client.probe(titlePrompt, [], 14).then((tRes) => {
-          if (tRes?.text) {
-            refs.taskManager.updateTask(newTask.id, { title: tRes.text })
-            refs.store?.addStreamEntry({
-              type: 'system',
-              title: '🏷 TASK TITLE',
-              content: `Task #${newTask.id} titled: "${tRes.text}"`,
-            })
-          }
+      if (refs.client && chatDef) {
+        const ops = {
+          set_title: (fsmCtx, probeRes) => {
+            if (probeRes?.text && fsmCtx.taskId) {
+              refs.taskManager.updateTask(fsmCtx.taskId, { title: probeRes.text })
+              refs.store?.addStreamEntry({
+                type: 'system',
+                title: '🏷 TASK TITLE',
+                content: `Task #${fsmCtx.taskId} titled: "${probeRes.text}"`,
+              })
+            }
+          },
+        }
+        const fsm = Afsm({
+          definition: { ...chatDef, initial: 'titling' },
+          client: refs.client,
+          initialContext: {
+            taskId: newTask.id,
+            valSample: val.slice(0, 256),
+          },
+          ops,
         })
+        fsm.step()
       }
     }
 

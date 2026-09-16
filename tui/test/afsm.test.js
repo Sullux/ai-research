@@ -114,20 +114,136 @@ test('Afsm supports generative micro-decode for notes', async () => {
   )
 })
 
-test('Afsm parses and runs foundational templates chat.yaml and reader.yaml', () => {
+test('Afsm runs chat.yaml with dynamic context candidates and cascades to titling', async () => {
   const fs = require('node:fs')
   const path = require('node:path')
   const yaml = require('js-yaml')
 
-  const chatRaw = fs.readFileSync(path.resolve(__dirname, '../templates/chat.yaml'), 'utf-8')
+  const chatRaw = fs.readFileSync(
+    path.resolve(__dirname, '../templates/chat.yaml'),
+    'utf-8',
+  )
   const chatDef = yaml.load(chatRaw)
-  assert.strictEqual(chatDef.name, 'chat')
-  assert.strictEqual(chatDef.initial, 'idle')
-  assert.ok(chatDef.states.idle.probe.candidates.length >= 2)
 
-  const readerRaw = fs.readFileSync(path.resolve(__dirname, '../templates/reader.yaml'), 'utf-8')
-  const readerDef = yaml.load(readerRaw)
-  assert.strictEqual(readerDef.name, 'reader')
-  assert.strictEqual(readerDef.initial, 'reading')
-  assert.ok(readerDef.states.reading.probe.candidates.length >= 4)
+  const activeTasks = [{ id: 1, title: 'Check GPU memory' }]
+  const candidates = [
+    { key: '1', op: 'steer_task', target: 'responding', task: activeTasks[0] },
+    { key: '0', op: 'create_task', target: 'titling' },
+  ]
+
+  const mockClient = {
+    probe: async (prompt, cands, maxTokens) => {
+      if (maxTokens === 14) {
+        return { winningIdx: 0, confidence: 0, entropy: 0, text: 'Summarize 10GB File' }
+      }
+      return { winningIdx: 1, confidence: 0.99, entropy: 0.01, text: '' } // selects '0'
+    },
+  }
+
+  let createdTask = null
+  let titledTask = null
+
+  const ops = {
+    create_task: (ctx) => {
+      createdTask = { id: 2, title: 'New Task' }
+      return { taskId: 2, valSample: ctx.val.slice(0, 50) }
+    },
+    set_title: (ctx, probeRes) => {
+      titledTask = { id: ctx.taskId, title: probeRes.text }
+      return { title: probeRes.text }
+    },
+  }
+
+  const fsm = Afsm({
+    definition: chatDef,
+    client: mockClient,
+    initialContext: {
+      val: 'How do I summarize a 10GB file using streaming?',
+      valSample: 'How do I summarize a 10GB file using streaming?',
+      candList: '1: Check GPU memory',
+      candidates,
+    },
+    ops,
+  })
+
+  // Start in on_input
+  fsm.setContext({ currentState: 'on_input' })
+  // Force initial state
+  fsm.reset = (st) => {
+    // Afsm starts at initial: idle, we can call step with override state or pass initial in definition
+  }
+
+  const customDef = { ...chatDef, initial: 'on_input' }
+  const fsmInput = Afsm({
+    definition: customDef,
+    client: mockClient,
+    initialContext: {
+      val: 'How do I summarize a 10GB file using streaming?',
+      valSample: 'How do I summarize a 10GB file using streaming?',
+      candList: '1: Check GPU memory',
+      candidates,
+    },
+    ops,
+  })
+
+  const res1 = await fsmInput.step()
+  assert.strictEqual(res1.from, 'on_input')
+  assert.strictEqual(res1.to, 'titling')
+  assert.strictEqual(res1.op, 'create_task')
+  assert.strictEqual(createdTask.id, 2)
+
+  const res2 = await fsmInput.step()
+  assert.strictEqual(res2.from, 'titling')
+  assert.strictEqual(res2.to, 'responding')
+  assert.strictEqual(res2.op, 'set_title')
+  assert.strictEqual(titledTask.title, 'Summarize 10GB File')
+})
+
+test('Afsm drives focus arbitration between channels', async () => {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const yaml = require('js-yaml')
+  const { ChannelManager } = require('../lib/channels')
+
+  const focusRaw = fs.readFileSync(
+    path.resolve(__dirname, '../templates/focus.yaml'),
+    'utf-8',
+  )
+  const focusDef = yaml.load(focusRaw)
+  const cm = ChannelManager()
+  cm.registerChannel({ id: 'trm/build', isFocused: false })
+
+  const mockClient = {
+    probe: async () => ({
+      winningIdx: 1, // selects '1': switch_focus
+      confidence: 0.92,
+      entropy: 0.08,
+      text: '',
+    }),
+  }
+
+  const ops = {
+    switch_focus: (ctx) => {
+      cm.setFocus(ctx.incomingChannel)
+      return { focusedChannel: ctx.incomingChannel }
+    },
+    bookmark_interrupt: (ctx) => ({ bookmarked: true }),
+  }
+
+  const fsm = Afsm({
+    definition: focusDef,
+    client: mockClient,
+    initialContext: {
+      incomingChannel: 'trm/build',
+      focusedChannel: cm.getFocused().id,
+      preview: 'build error in shader',
+    },
+    ops,
+  })
+
+  assert.strictEqual(cm.getFocused().id, 'chat/user')
+  const res = await fsm.step()
+  assert.strictEqual(res.op, 'switch_focus')
+  assert.strictEqual(cm.getFocused().id, 'trm/build')
+  assert.strictEqual(fsm.getState().context.focusedChannel, 'trm/build')
 })

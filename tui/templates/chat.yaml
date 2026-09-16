@@ -29,13 +29,7 @@ states:
         Incoming message: "{{val}}"
 
         Answer with only the index number:
-      candidates:
-        - key: "0"
-          op: create_task
-          target: titling
-        - key: "1"
-          op: steer_task
-          target: responding
+      candidates: context
 
   titling:
     probe:

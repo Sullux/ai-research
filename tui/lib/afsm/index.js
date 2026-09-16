@@ -22,11 +22,21 @@ const afsmFactory =
 
       const rawPrompt = overridePrompt || probeDef.prompt
       const prompt =
-        typeof rawPrompt === 'function' ? rawPrompt(context) : rawPrompt
+        typeof rawPrompt === 'function'
+          ? rawPrompt(context)
+          : typeof rawPrompt === 'string'
+          ? rawPrompt.replace(/\{\{(\w+)\}\}/g, (_, k) => context[k] ?? '')
+          : rawPrompt
 
-      const candEntries = Array.isArray(probeDef.candidates)
-        ? probeDef.candidates.map((c) => [c.key || c.id || String(c), c])
-        : Object.entries(probeDef.candidates || {})
+      const resolvedCands =
+        typeof probeDef.candidates === 'function'
+          ? probeDef.candidates(context)
+          : probeDef.candidates === 'context' || probeDef.candidates === true
+          ? context.candidates || []
+          : probeDef.candidates || []
+      const candEntries = Array.isArray(resolvedCands)
+        ? resolvedCands.map((c) => [c.key || c.id || String(c), c])
+        : Object.entries(resolvedCands)
       const candidates = candEntries.map(([k]) => k)
       const maxDecodeTokens =
         probeDef.maxTokens || (candidates.length > 0 ? 1 : 14)

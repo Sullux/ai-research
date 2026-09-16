@@ -15,6 +15,7 @@ const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
 const { TaskManager, taskManagerFactory } = require('./lib/tasks')
+const { ChannelManager } = require('./lib/channels')
 const {
   STOP_END_OF_TURN,
   STOP_ELASTIC_YIELD,
@@ -259,10 +260,22 @@ const main = () => {
   }
 
   const taskManager = taskManagerFactory(Date.now)(initialTasks, persistTasks)
+  const channelManager = ChannelManager()
   const registry = ToolRegistry(vfs, cmdRunner, trmManager, notManager, client, orchestrator)
   const parser = ToolParser(registry, client, store)
 
-  controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager, taskManager)
+  controller.init(
+    store,
+    client,
+    session,
+    orchestrator,
+    timers,
+    systemPrompt,
+    vfs,
+    notManager,
+    taskManager,
+    channelManager,
+  )
   controller.refs.isEngineReady = false
 
   // Automatic Snapshot Checkpointing State
