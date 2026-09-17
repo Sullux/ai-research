@@ -55,6 +55,7 @@ If no prompt arguments are supplied on the command line, the engine enters an in
 | `--no-memory` | — | Enabled | Disables associative long-term memory ingestion and recall injection. |
 | `--quiescence` | — | Disabled | Enables hierarchical multi-scale temporal quiescence gating to skip upper transformer layers during low activation velocity. |
 | `--quiescence-threshold` | `<float>` | `0.001` | Sets the cosine similarity activation velocity threshold for quiescence skipping. |
+| `-h`, `--help` | — | — | Prints command-line usage instructions and available switches, then exits. |
 
 ---
 

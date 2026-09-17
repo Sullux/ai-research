@@ -127,39 +127,6 @@ pub fn probeAutonomic(
     return result;
 }
 
-pub fn shouldBypassThinking(
-    self: *Server,
-    msg_id: u16,
-    writer: anytype,
-) anyerror!bool {
-    if (!self.thinking_gate) return false;
-
-    var gate_toks: [2]u32 = undefined;
-    const tok_0 = try self.tok.encode(self.allocator, "0", false);
-    defer self.allocator.free(tok_0);
-    const tok_1 = try self.tok.encode(self.allocator, "1", false);
-    defer self.allocator.free(tok_1);
-
-    if (tok_0.len == 0 or tok_1.len == 0) return false;
-    gate_toks[0] = tok_0[0];
-    gate_toks[1] = tok_1[0];
-
-    var topk_backup: [64]sampler.TopKCandidate = undefined;
-    @memcpy(&topk_backup, self.scratch.topk_candidates[0..64]);
-
-    const cpu_logits_backup = try self.allocator.alloc(f32, self.config.vocab_size);
-    defer self.allocator.free(cpu_logits_backup);
-    @memcpy(cpu_logits_backup, self.scratch.logits[0..self.config.vocab_size]);
-
-    const probe_prompt = "Thinking Gate Evaluation\nIs deliberate multi-step reasoning essential for this request, or can it be answered immediately?\n0: Unnecessary (simple greeting, trivial fact, brief acknowledgment, or immediate direct response)\n1: Essential (coding, complex logical analysis, multi-step math, tool planning)\nDecision: ";
-    const probe_res = try self.probeAutonomic(msg_id, probe_prompt, &gate_toks, 1, writer);
-
-    @memcpy(self.scratch.topk_candidates[0..64], &topk_backup);
-    @memcpy(self.scratch.logits[0..self.config.vocab_size], cpu_logits_backup);
-
-    return (probe_res.winning_idx == 0 and probe_res.confidence >= 0.70);
-}
-
 pub fn handleProbeAutonomic(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
     if (p.len < 10) return;
     const max_decode_tokens = std.mem.readInt(u16, p[0..2][0..2], .little);

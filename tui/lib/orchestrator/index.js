@@ -158,21 +158,21 @@ const orchestratorFactory = (now) => (timers) => {
 
     if (type === 'USER_PROMPT') {
       if (waiting.length === 0) {
-        return `<|turn>model\n${satNotice}`
+        return satNotice
       }
       return `${formatUserDecisionTurn(meta.message || '', waiting)}${satNotice}`
     }
 
     if (type === 'STEP_TICK') {
       const active = meta.step || getActiveStep()
-      if (!active) return '<|turn>model\n<|channel>thought\nAll tasks complete.\n'
+      if (!active) return 'All tasks complete.\n'
       const parent = plans.find((p) => p.id === active.parentId)
       return `${formatStepTick(parent?.id, parent?.brief, active.id, active.brief)}${satNotice}`
     }
 
     if (type === 'RESUME_AFTER_INTERRUPT') {
       const active = meta.step || getActiveStep()
-      if (!active) return '<|turn>model\n<|channel>thought\nNo pending tasks to resume.\n'
+      if (!active) return 'No pending tasks to resume.\n'
       return formatResumeAfterInterrupt(active.id, active.brief)
     }
 
@@ -181,7 +181,7 @@ const orchestratorFactory = (now) => (timers) => {
       return formatTimerWake(active?.id, active?.deferReason)
     }
 
-    return '<|turn>model\n'
+    return ''
   }
 
   return {

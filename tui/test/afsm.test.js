@@ -114,102 +114,58 @@ test('Afsm supports generative micro-decode for notes', async () => {
   )
 })
 
-test('Afsm runs chat.yaml with dynamic context candidates and cascades to titling', async () => {
-  const fs = require('node:fs')
-  const path = require('node:path')
-  const yaml = require('js-yaml')
+test('ChatMachine evaluates thinking gate with confidence threshold', async () => {
+  const { ChatMachine } = require('../lib/afsm')
 
-  const chatRaw = fs.readFileSync(
-    path.resolve(__dirname, '../templates/chat.yaml'),
-    'utf-8',
-  )
-  const chatDef = yaml.load(chatRaw)
-
-  const activeTasks = [{ id: 1, title: 'Check GPU memory' }]
-  const candidates = [
-    { key: '1', op: 'steer_task', target: 'responding', task: activeTasks[0] },
-    { key: '0', op: 'create_task', target: 'titling' },
-  ]
-
-  const mockClient = {
-    probe: async (prompt, cands, maxTokens) => {
-      if (maxTokens === 14) {
-        return { winningIdx: 0, confidence: 0, entropy: 0, text: 'Summarize 10GB File' }
-      }
-      return { winningIdx: 1, confidence: 0.99, entropy: 0.01, text: '' } // selects '0'
-    },
+  // Case A: winningIdx 0 with high confidence (>= 0.80) -> direct_response
+  const mockClientDirect = {
+    probe: async () => ({
+      winningIdx: 0,
+      confidence: 0.95,
+      entropy: 0.05,
+      costMs: 1.5,
+      text: '',
+    }),
   }
 
-  let createdTask = null
-  let titledTask = null
-
-  const ops = {
-    create_task: (ctx) => {
-      createdTask = { id: 2, title: 'New Task' }
-      return { taskId: 2, valSample: ctx.val.slice(0, 50) }
-    },
-    set_title: (ctx, probeRes) => {
-      titledTask = { id: ctx.taskId, title: probeRes.text }
-      return { title: probeRes.text }
-    },
-  }
-
-  const fsm = Afsm({
-    definition: chatDef,
-    client: mockClient,
-    initialContext: {
-      val: 'How do I summarize a 10GB file using streaming?',
-      valSample: 'How do I summarize a 10GB file using streaming?',
-      candList: '1: Check GPU memory',
-      candidates,
-    },
-    ops,
+  const fsmDirect = Afsm({
+    machine: ChatMachine,
+    client: mockClientDirect,
+    initialContext: { val: 'Good morning, Hopper.' },
   })
 
-  // Start in on_input
-  fsm.setContext({ currentState: 'on_input' })
-  // Force initial state
-  fsm.reset = (st) => {
-    // Afsm starts at initial: idle, we can call step with override state or pass initial in definition
+  const resDirect = await fsmDirect.step()
+  assert.strictEqual(resDirect.op, 'direct_response')
+  assert.strictEqual(resDirect.transition?.meta?.isDirect, true)
+  assert.strictEqual(fsmDirect.getState().currentState, 'idle')
+
+  // Case B: winningIdx 0 but lower confidence (< 0.80) -> fall through to think
+  const mockClientThinkFallback = {
+    probe: async () => ({
+      winningIdx: 0,
+      confidence: 0.72,
+      entropy: 0.35,
+      costMs: 1.8,
+      text: '',
+    }),
   }
 
-  const customDef = { ...chatDef, initial: 'on_input' }
-  const fsmInput = Afsm({
-    definition: customDef,
-    client: mockClient,
-    initialContext: {
-      val: 'How do I summarize a 10GB file using streaming?',
-      valSample: 'How do I summarize a 10GB file using streaming?',
-      candList: '1: Check GPU memory',
-      candidates,
-    },
-    ops,
+  const fsmThink = Afsm({
+    machine: ChatMachine,
+    client: mockClientThinkFallback,
+    initialContext: { val: 'How would you summarize a 10GB file?' },
   })
 
-  const res1 = await fsmInput.step()
-  assert.strictEqual(res1.from, 'on_input')
-  assert.strictEqual(res1.to, 'titling')
-  assert.strictEqual(res1.op, 'create_task')
-  assert.strictEqual(createdTask.id, 2)
-
-  const res2 = await fsmInput.step()
-  assert.strictEqual(res2.from, 'titling')
-  assert.strictEqual(res2.to, 'responding')
-  assert.strictEqual(res2.op, 'set_title')
-  assert.strictEqual(titledTask.title, 'Summarize 10GB File')
+  const resThink = await fsmThink.step()
+  assert.strictEqual(resThink.op, 'think')
+  assert.strictEqual(resThink.transition?.meta?.isDirect, false)
+  assert.strictEqual(fsmThink.getState().currentState, 'idle')
 })
 
-test('Afsm drives focus arbitration between channels', async () => {
-  const fs = require('node:fs')
-  const path = require('node:path')
-  const yaml = require('js-yaml')
+test('FocusMachine drives focus arbitration between channels', async () => {
+  const { FocusMachine } = require('../lib/afsm')
   const { ChannelManager } = require('../lib/channels')
 
-  const focusRaw = fs.readFileSync(
-    path.resolve(__dirname, '../templates/focus.yaml'),
-    'utf-8',
-  )
-  const focusDef = yaml.load(focusRaw)
   const cm = ChannelManager()
   cm.registerChannel({ id: 'trm/build', isFocused: false })
 
@@ -218,6 +174,7 @@ test('Afsm drives focus arbitration between channels', async () => {
       winningIdx: 1, // selects '1': switch_focus
       confidence: 0.92,
       entropy: 0.08,
+      costMs: 1.2,
       text: '',
     }),
   }
@@ -227,11 +184,11 @@ test('Afsm drives focus arbitration between channels', async () => {
       cm.setFocus(ctx.incomingChannel)
       return { focusedChannel: ctx.incomingChannel }
     },
-    bookmark_interrupt: (ctx) => ({ bookmarked: true }),
+    bookmark_interrupt: () => ({ bookmarked: true }),
   }
 
   const fsm = Afsm({
-    definition: focusDef,
+    machine: FocusMachine,
     client: mockClient,
     initialContext: {
       incomingChannel: 'trm/build',

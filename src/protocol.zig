@@ -36,6 +36,11 @@ pub const MODE_RAW_IMAGE: u8 = 0x04;
 pub const MODE_ENCODED_IMAGE: u8 = 0x05;
 pub const MODE_VIDEO_FRAME: u8 = 0x06;
 
+pub const INPUT_FLAG_NONE: u8 = 0x00;
+pub const INPUT_FLAG_DIRECT: u8 = 0x01; // Direct response (bypass thinking)
+pub const INPUT_FLAG_REASON: u8 = 0x02; // Explicit thinking pass requested
+pub const INPUT_FLAG_RAW: u8 = 0x80;    // Raw stream (bypass server-side turn templating)
+
 pub const TOKEN_TYPE_TEXT: u8 = 0x00;
 pub const TOKEN_TYPE_AUDIO: u8 = 0x01;
 pub const TOKEN_TYPE_IMAGE: u8 = 0x02;

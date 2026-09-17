@@ -19,8 +19,42 @@ pub fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer
     self.is_aborted.store(false, .seq_cst);
     self.last_yield_token = null;
     self.ring.markBoundary(self.clock, .user, 1.0);
-    const tokens = try self.parseTokens(payload);
-    defer self.allocator.free(tokens);
+
+    const flags = payload[1];
+    const is_raw = (flags & protocol.INPUT_FLAG_RAW) != 0;
+    const is_direct = (flags & protocol.INPUT_FLAG_DIRECT) != 0;
+
+    var tokens: []u32 = undefined;
+    var allocated_tokens = false;
+
+    if (payload[0] == protocol.MODE_TEXT) {
+        const text = payload[8..];
+        if (is_raw or std.mem.startsWith(u8, text, "<|turn>")) {
+            tokens = try self.tok.encode(self.allocator, text, self.clock == 0);
+            allocated_tokens = true;
+        } else {
+            var framed = std.ArrayList(u8).init(self.allocator);
+            defer framed.deinit();
+            const w = framed.writer();
+
+            try w.writeAll("<|turn>user\n");
+            try w.writeAll(text);
+            try w.writeAll("\n<turn|>\n<|turn>model\n");
+            if (is_direct) {
+                try w.writeAll("<|channel>thought\n<channel|>");
+            }
+            tokens = try self.tok.encode(self.allocator, framed.items, self.clock == 0);
+            allocated_tokens = true;
+        }
+    } else {
+        const count = std.mem.readInt(u16, payload[2..4], .little);
+        const slice: []const u32 = @alignCast(std.mem.bytesAsSlice(u32, payload[8 .. 8 + count * 4]));
+        tokens = try self.allocator.alloc(u32, slice.len);
+        @memcpy(tokens, slice);
+        allocated_tokens = true;
+    }
+    defer if (allocated_tokens) self.allocator.free(tokens);
+
     if (self.clock == 0 and tokens.len > 0) {
         var sys_len: usize = 0;
         for (tokens, 0..) |t, i| {

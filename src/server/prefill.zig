@@ -120,11 +120,16 @@ pub fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: an
 
     if (!is_system_only and tokens.len > 0) {
         var in_thought = false;
+        var has_closed_thought = false;
         var t_idx: usize = tokens.len;
         while (t_idx > 0) {
             t_idx -= 1;
             const tok_id = tokens[t_idx];
-            if (tok_id == template_state.TOK_CHANNEL_CLOSE or tok_id == template_state.TOK_TURN_CLOSE) {
+            if (tok_id == template_state.TOK_CHANNEL_CLOSE) {
+                has_closed_thought = true;
+                break;
+            }
+            if (tok_id == template_state.TOK_TURN_CLOSE) {
                 break;
             }
             if (tok_id == template_state.TOK_CHANNEL_OPEN) {
@@ -132,36 +137,15 @@ pub fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: an
                 break;
             }
         }
-        self.in_thinking_channel = in_thought;
-        self.template_state = if (in_thought) .in_thinking_channel else .turn_open_model;
 
-        if (!in_thought and self.thinking_gate) {
-            const saved_topk = self.scratch.topk_candidates;
-            var saved_logits: ?[]f32 = null;
-            if (self.gpu_opt == null) {
-                saved_logits = try self.allocator.dupe(f32, self.scratch.logits);
-            }
-            defer if (saved_logits) |sl| self.allocator.free(sl);
-
-            const bypass_thinking = try self.shouldBypassThinking(msg_id, writer);
-            if (bypass_thinking) {
-                for (template_state.BYPASS_THOUGHT_TOKENS) |bt| {
-                    _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-                    self.clock += 1;
-                }
-                self.in_thinking_channel = false;
-                self.sampler.suppress_thinking = true;
-                self.template_state = .in_response_channel;
-            } else {
-                self.scratch.topk_candidates = saved_topk;
-                if (saved_logits) |sl| {
-                    @memcpy(self.scratch.logits[0..sl.len], sl);
-                }
-                self.sampler.suppress_thinking = false;
-                self.template_state = .turn_open_model;
-            }
+        if (has_closed_thought) {
+            self.in_thinking_channel = false;
+            self.sampler.suppress_thinking = true;
+            self.template_state = .in_response_channel;
         } else {
+            self.in_thinking_channel = in_thought;
             self.sampler.suppress_thinking = false;
+            self.template_state = if (in_thought) .in_thinking_channel else .turn_open_model;
         }
 
         cur = if (self.gpu_opt != null)

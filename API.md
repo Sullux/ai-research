@@ -114,13 +114,22 @@ Ingests text, tokens, soft vectors, audio PCM, images, or video frames into the 
 
 | `Mode` | Modality | `Sub-Format` | `Param 1` | `Param 2` | `Param 3` | Payload Structure |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `0x00` | **Text** | `0` | `0` | `0` | `0` | Raw UTF-8 bytes (engine tokenizes). |
+| `0x00` | **Text** | `Flags` (see below) | `0` | `0` | `0` | Raw UTF-8 bytes (engine applies model chat template). |
 | `0x01` | **Tokens** | `0` | Token Count (`u16`) | `0` | `0` | `[Token Count]u32` array. |
 | `0x02` | **Soft Vectors** | `0` | Vector Dim ($H$) | Vector Count | `0` | `[Count * Dim]f32` (SigLIP / Audio latents). |
 | `0x03` | **Audio PCM** | Format (`0`=S16LE, `1`=F32) | Channels (`1`/`2`) | Sample Rate ($Hz$) | `0` | Raw PCM audio samples. |
 | `0x04` | **Raw Image** | Format (`0`=RGB24, `1`=RGBA) | Width ($px$) | Height ($px$) | `0` | Raw pixel bitmap bytes. |
 | `0x05` | **Encoded Image**| Format (`0`=JPEG, `1`=PNG) | `0` | `0` | `0` | Compressed image file bytes. |
 | `0x06` | **Video Frame** | Format (`0`=RGB24, `1`=JPEG) | Width ($px$) | Height ($px$) | Frame Index | Raw or compressed frame payload. |
+
+#### Text Mode Flags (`Mode = 0x00`, Sub-Format Byte 1):
+
+| Flag Bit / Value | Name | Description |
+| :--- | :--- | :--- |
+| `0x00` | `INPUT_FLAG_NONE` | Standard conversational turn. The engine wraps the payload in the loaded model's chat template and permits reasoning by default. |
+| `0x01` | `INPUT_FLAG_DIRECT` | Direct response requested. The engine formats the turn with a closed reasoning channel (e.g. `<|channel>thought\n<channel|>`), bypassing reasoning delay. |
+| `0x02` | `INPUT_FLAG_REASON` | Explicit reasoning requested. The engine forces open reasoning, or injects synthetic reasoning for non-thinking models. |
+| `0x80` | `INPUT_FLAG_RAW` | Raw stream payload. The engine bypasses chat turn templating and tokenizes raw bytes directly into the KV cache. |
 
 ---
 

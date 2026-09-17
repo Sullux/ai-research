@@ -102,31 +102,51 @@ $$H(C) = - \sum_{i=1}^K P(c_i \mid C) \ln P(c_i \mid C)$$
 
 The A-FSM markup format is declarative and human-readable. It defines state topology, prompts, candidate action sets, and target operations.
 
-### 5.1 Avoiding the "YAML Programming Language" Anti-Pattern
-To prevent building an accidental, fragile DSL in YAML, the A-FSM enforces a **State Chart + Reducer** pattern:
-* **The YAML defines the Graph:** States, Transitions, Prompts, Probe Candidates, and target `op` names.
-* **The Context is a plain dictionary:** (`Record<string, any>`) managed by the Host.
-* **Operations are pure Host functions:** `(context, probeResult) => nextContext`.
+### 5.1 Pure JavaScript State Machine Factories over YAML DSLs
+To prevent building an accidental, fragile DSL in YAML (Greenspun's Tenth Rule) or splitting logic between markup and callback registries, the A-FSM is authored directly in **pure, functional JavaScript**:
+* **Direct Mathematical Expressiveness:** Evaluating confidence thresholds, entropy ceilings, or cost-adjusted probabilities (e.g. `res.winningIdx === 0 && res.confidence >= 0.80`) uses native JS operators and math without markup AST compilation.
+* **Native Template Literals:** Prompts use standard ES6 template strings with full syntax highlighting, refactoring support, and linting.
+* **Full Debuggability:** Standard debugging, breakpoints, and logging operate directly inside state transitions.
+* **The Context is a plain dictionary:** (`Record<string, any>`) managed functionally.
 
-### 5.2 Schema Definition
+### 5.2 Schema & Factory Pattern
 
-```yaml
-name: <fsm_name>
-initial: <initial_state>
+State machines are exported as functional factories located under `tui/lib/afsm/machines/`:
 
-states:
-  <state_name>:
-    probe:
-      prompt: <string | template>       # Prompt presented to the probe
-      candidates:                       # Discrete choices
-        "<token_label>":
-          op: <op_name>                 # Operation executed on selection
-          target: <next_state_name>     # Target state
-          [minCertainty: <float>]       # Optional threshold
-      # OR generative micro-decode:
-      # maxTokens: 14
-      # op: <op_name>
-      # target: <next_state_name>
+```javascript
+const chatMachineFactory = () => ({
+  name: 'chat',
+  initial: 'responding',
+  states: {
+    responding: async (ctx, { probe }) => {
+      const prompt = [
+        "Regarding the user's message:",
+        '0: I have an immediate answer',
+        '1: I need to think',
+        'Decision:',
+      ].join('\n')
+
+      const res = await probe(prompt, ['0', '1'], 1)
+      const isDirect = res.winningIdx === 0 && res.confidence >= 0.80
+
+      return {
+        op: isDirect ? 'direct_response' : 'think',
+        target: 'idle',
+        meta: {
+          winningIdx: res.winningIdx,
+          confidence: res.confidence,
+          cost: res.costMs,
+          entropy: res.entropy,
+          isDirect,
+        },
+      }
+    },
+    idle: async () => ({
+      op: 'yield',
+      target: 'idle',
+    }),
+  },
+})
 ```
 
 ---
@@ -140,45 +160,39 @@ Rather than slicing texts by arbitrary regex heuristics or dumping 10 GB into me
 
 At natural syntactic resting points (sentences, code blocks, paragraph ends), the engine triggers an elastic soft yield (`STOP_ELASTIC_YIELD`). The A-FSM immediately executes a 1-token reflex probe directly on the ambient attention state:
 
-```yaml
-name: progressive_reader
-initial: reading
+```javascript
+// tui/lib/afsm/machines/reader.js
+const readerMachineFactory = () => ({
+  name: 'reader',
+  initial: 'reading',
+  states: {
+    reading: async (ctx, { probe }) => {
+      const prompt = [
+        'Reading Check-In for active channel:',
+        '1: Continue reading next segment',
+        '2: Pause to make a distilled note of a key finding',
+        '3: Pause to ask the user a clarifying question',
+        '0: Reading complete, proceed to synthesis and response',
+        'Answer with only the index number:',
+      ].join('\n')
 
-states:
-  reading:
-    probe:
-      prompt: |
-        Reading Check-In:
-        Based on what I have read so far, what is my next action?
-        1: Continue reading next segment
-        2: Pause to make a distilled note
-        3: Pause to ask the user a clarifying question
-        4: Pause to emit a progress update
-        0: Reading complete, proceed to synthesis
-        Answer with only the index number:
-      candidates:
-        "1":
-          op: read_next_chunk
-          target: reading
-        "2":
-          op: take_micro_note
-          target: reflecting
-        "3":
-          op: ask_user
-          target: awaiting_user
-        "4":
-          op: emit_progress
-          target: reading
-        "0":
-          op: finalize_summary
-          target: synthesizing
-
-  reflecting:
-    probe:
-      prompt: "Distill the key takeaway from the recent section in 1 to 2 sentences:"
-      maxTokens: 32
-      op: save_note
-      target: reading
+      const res = await probe(prompt, ['1', '2', '3', '0'], 1)
+      const ops = {
+        0: { op: 'pull_next_chunk', target: 'reading' },
+        1: { op: 'prepare_note', target: 'reflecting' },
+        2: { op: 'ask_user', target: 'awaiting_user' },
+        3: { op: 'finalize_reading', target: 'synthesizing' },
+      }
+      return ops[res.winningIdx] || ops[0]
+    },
+    reflecting: async (ctx, { probe }) => {
+      const prompt = 'Distill the key takeaway from the recent reading segment in 1 to 2 sentences:'
+      const res = await probe(prompt, [], 32)
+      return { op: 'save_note', target: 'reading', note: res.text }
+    },
+    // ...
+  },
+})
 ```
 
 ### 6.2 The Note-Taking Hybrid Model
@@ -187,16 +201,15 @@ states:
 
 ---
 
-## 7. Dynamic Template Swapping
+## 7. Dynamic Machine Swapping
 
-Because compilation of the YAML state graph in JavaScript takes under 5 ms, templates can be swapped dynamically based on current user intent:
+State machines can be swapped dynamically based on current user intent:
 
-| Template | Trigger | Primary Operations |
+| Machine | Trigger | Primary Operations |
 |---|---|---|
-| `chat.yaml` | Default conversational turn | `yield`, `think_gate`, `respond`, `route_task` |
-| `reader.yaml` | Reading files or large logs | `read_next_chunk`, `take_micro_note`, `ask_user` |
-| `terminal.yaml`| Subshell / REPL execution | `poll_output`, `send_key`, `kill_subshell` |
-| `table.yaml`   | Structured data / spreadsheets| `select_cell`, `edit_cell`, `compute_formula` |
+| `chat.js` | Default conversational turn | `yield`, `direct_response`, `think` |
+| `reader.js` | Reading files or large logs | `pull_next_chunk`, `prepare_note`, `ask_user` |
+| `focus.js` | Inter-channel arbitration | `switch_focus`, `bookmark_interrupt` |
 
 ---
 

@@ -106,7 +106,7 @@ describe('UI Controller & Layout Tiering', () => {
     assert.strictEqual(controller.getPlanWidth(), '100%')
   })
 
-  it('injects system prompt on first turn input submit', () => {
+  it('submits user input as clean model-agnostic text without Jinja tokens', async () => {
     const store = StateStore()
     const orch = Orchestrator()
     let sentInput = ''
@@ -122,13 +122,17 @@ describe('UI Controller & Layout Tiering', () => {
     }
 
     controller.onSubmitInput(mockCtx, { value: 'Hello world', node: { value: 'Hello world', cursor: 11 } })
-    assert.ok(sentInput.includes('<|turn>system\n<|think|>\nTest System Prompt\n<turn|>'))
-    assert.ok(sentInput.includes('<|turn>user\nHello world\n<turn|>\n<|turn>model\n'))
+    // Allow async afsm.step() resolution
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(sentInput.includes('Hello world'))
+    assert.ok(!sentInput.includes('<|turn>'))
 
-    // Second turn should NOT repeat system prompt
+    // Second turn should NOT contain system prompt or model tokens
     controller.onSubmitInput(mockCtx, { value: 'Follow up', node: { value: 'Follow up', cursor: 9 } })
-    assert.ok(!sentInput.includes('<|turn>system'))
-    assert.ok(sentInput.includes('<|turn>user\nFollow up\n<turn|>\n<|turn>model\n'))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(!sentInput.includes('Test System Prompt'))
+    assert.ok(sentInput.includes('Follow up'))
+    assert.ok(!sentInput.includes('<|turn>'))
   })
 
   it('renders smart 4-line live stream cards with conditional expand hint', () => {

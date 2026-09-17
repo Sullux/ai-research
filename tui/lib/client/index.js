@@ -12,6 +12,9 @@ const {
   OP_PONG,
   OP_ERROR,
   STATUS_FLAG_SATURATED,
+  INPUT_FLAG_NONE,
+  INPUT_FLAG_DIRECT,
+  INPUT_FLAG_REASON,
 } = require('../protocol/constants')
 const {
   streamInputFrame,
@@ -99,9 +102,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     proc.on('error', (err) => emitter.emit('error', { error: err.message }))
   }
 
-  const sendInput = (text) => {
+  const sendInput = (text, opts = {}) => {
     const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(streamInputFrame(text, id))
+    const flags = typeof opts === 'number'
+      ? opts
+      : opts.flags ?? (opts.direct ? INPUT_FLAG_DIRECT : (opts.reason ? INPUT_FLAG_REASON : INPUT_FLAG_NONE))
+    if (proc?.stdin?.writable) proc.stdin.write(streamInputFrame(text, flags, id))
     return id
   }
 

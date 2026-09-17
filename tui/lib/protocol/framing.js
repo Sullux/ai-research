@@ -28,10 +28,24 @@ const headerBuffer = (opcode, msgId, payloadLen) => {
   return buf
 }
 
-const streamInputFrame = (text, msgId = 1) => {
+const streamInputFrame = (text, flagsOrMsgId = 0, maybeMsgId = null) => {
   const textBytes = Buffer.from(text, 'utf-8')
   const payload = Buffer.alloc(8 + textBytes.length)
   payload.writeUInt8(MODE_TEXT, 0)
+
+  let flags = 0
+  let msgId = 1
+  if (maybeMsgId !== null) {
+    flags = flagsOrMsgId || 0
+    msgId = maybeMsgId
+  } else if (flagsOrMsgId > 0 && (flagsOrMsgId === 1 || flagsOrMsgId === 2 || flagsOrMsgId === 0x80)) {
+    flags = flagsOrMsgId
+    msgId = 1
+  } else {
+    msgId = flagsOrMsgId || 1
+  }
+
+  payload.writeUInt8(flags, 1)
   textBytes.copy(payload, 8)
   const hdr = headerBuffer(OP_STREAM_INPUT, msgId, payload.length)
   return Buffer.concat([hdr, payload])

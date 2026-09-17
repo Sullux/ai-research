@@ -4,6 +4,7 @@ const {
   formatUserTurn,
   formatUserDecisionTurn,
 } = require('../../template')
+const { Afsm, chatMachineFactory } = require('../../afsm')
 
 const onSubmitInput = (ctx, payload) => {
   const val = payload.value?.trim()
@@ -78,21 +79,59 @@ const onSubmitInput = (ctx, payload) => {
   ctx.setFocus?.(null)
 
   const alertsRollup = refs.notManager?.formatTurnAlerts?.() || ''
-  let payloadText = ''
-  if (!refs.hasSentFirstTurn && refs.systemPrompt) {
-    refs.hasSentFirstTurn = true
-    payloadText = formatTurn1(refs.systemPrompt, `${alertsRollup}${turnContent}`)
-  } else {
-    const waiting = refs.orchestrator?.getWaitingForUserTasks?.() || []
-    payloadText = waiting.length > 0
-      ? formatUserDecisionTurn(`${alertsRollup}${turnContent}`, waiting)
-      : formatUserTurn(`${alertsRollup}${turnContent}`)
-  }
+  const waiting = refs.orchestrator?.getWaitingForUserTasks?.() || []
+  const payloadText = waiting.length > 0
+    ? formatUserDecisionTurn(`${alertsRollup}${turnContent}`, waiting)
+    : formatUserTurn(`${alertsRollup}${turnContent}`)
 
   refs.store?.setGenerating(true)
-  if (!refs.isEngineReady) refs.pendingInputTurn = payloadText
-  else if (!isGenerating || !refs.notManager) refs.client.sendInput(payloadText)
-  ctx.redraw()
+  if (!refs.isEngineReady) {
+    refs.pendingInputTurn = payloadText
+    ctx.redraw()
+    return
+  }
+
+  let dispatchPromise = null
+  if (!isGenerating || !refs.notManager) {
+    if (typeof refs.client?.probe === 'function') {
+      const afsm = Afsm({
+        machine: chatMachineFactory(),
+        client: refs.client,
+        initialContext: { val },
+      })
+
+      dispatchPromise = afsm.step()
+        .then((stepResult) => {
+          const isDirect = stepResult?.op === 'direct_response'
+          const meta = stepResult?.transition?.meta || {}
+          const confPct = meta.confidence != null ? (meta.confidence * 100).toFixed(1) : '?'
+          if (isDirect) {
+            refs.store?.addStreamEntry({
+              type: 'notice',
+              title: '⚡ THINKING GATE',
+              content: `Immediate response chosen (${confPct}% confidence >= 80%). Bypassing reasoning.`,
+            })
+          } else {
+            const reason = meta.winningIdx === 1 ? 'essential reasoning' : `confidence ${confPct}% < 80% threshold`
+            refs.store?.addStreamEntry({
+              type: 'notice',
+              title: '🧠 THINKING GATE',
+              content: `Deliberate reasoning engaged (${reason}).`,
+            })
+          }
+          refs.client.sendInput(payloadText, { direct: isDirect })
+          ctx.redraw?.()
+        })
+        .catch((_) => {
+          refs.client.sendInput(payloadText, { direct: false })
+          ctx.redraw?.()
+        })
+    } else {
+      refs.client.sendInput(payloadText, { direct: false })
+    }
+  }
+  ctx.redraw?.()
+  return dispatchPromise
 }
 
 module.exports = {

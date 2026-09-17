@@ -1,8 +1,6 @@
-const formatTurn1 = (systemPrompt, userText) =>
-  `<|turn>system\n<|think|>\n${systemPrompt}\n<turn|>\n<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
+const formatUserTurn = (userText) => userText
 
-const formatUserTurn = (userText) =>
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
+const formatTurn1 = (_systemPrompt, userText) => userText
 
 const formatUserDecisionTurn = (userText, waitingTasks = []) => {
   const waitingLines = waitingTasks
@@ -10,7 +8,6 @@ const formatUserDecisionTurn = (userText, waitingTasks = []) => {
     .join('\n')
 
   return [
-    `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n<|channel>thought\n`,
     `User message received: "${userText}"`,
     '',
     'Tasks currently awaiting user intervention:',
@@ -25,8 +22,6 @@ const formatUserDecisionTurn = (userText, waitingTasks = []) => {
 }
 
 const formatStepTick = (planId, planBrief, stepId, stepBrief) => [
-  '<|turn>model',
-  '<|channel>thought',
   `Focus: Plan ${planId || ''} - ${planBrief || ''}`,
   `Active Step ${stepId}: ${stepBrief}`,
   'Status: In progress.',
@@ -34,15 +29,11 @@ const formatStepTick = (planId, planBrief, stepId, stepBrief) => [
 ].join('\n') + '\n'
 
 const formatTimerWake = (stepId, reason) => [
-  '<|turn>model',
-  '<|channel>thought',
   `Timer expired for Step ${stepId || ''} (${reason || 'timer'}). Checking state for updates.`,
   'Next action:',
 ].join('\n') + '\n'
 
 const formatResumeAfterInterrupt = (stepId, brief) => [
-  '<|turn>model',
-  '<|channel>thought',
   `Interruption handled. Automatically resuming Step ${stepId}: ${brief}.`,
   'Previous context remains active in episodic memory.',
   'Next action:',
@@ -51,21 +42,20 @@ const formatResumeAfterInterrupt = (stepId, brief) => [
 const formatBacklogResumeNudge = (notItem) => {
   const text = notItem.extra?.payload || notItem.preview || ''
   if (notItem.source?.startsWith('msg/user/')) {
-    return `<|turn>user\n[Resume: ${notItem.id} | Source: ${notItem.source}] ${text}\nPlease continue addressing this task.\n<turn|>\n<|turn>model\n`
+    return `[Resume: ${notItem.id} | Source: ${notItem.source}] ${text}\nPlease continue addressing this task.`
   }
-  return `<|turn>user\n[Resume Event: ${notItem.id} | Source: ${notItem.source}] ${text}\nPlease continue addressing this item.\n<turn|>\n<|turn>model\n`
+  return `[Resume Event: ${notItem.id} | Source: ${notItem.source}] ${text}\nPlease continue addressing this item.`
 }
 
 const formatNotificationInterrupt = (notItem) => {
   const text = notItem.extra?.payload || notItem.preview || ''
   if (notItem.source?.startsWith('msg/user/')) {
-    return `<|turn>user\n${text}\n<turn|>\n<|turn>model\n`
+    return text
   }
-  return `<|turn>user\n[Event: ${notItem.id} | Source: ${notItem.source}]\n${text}\n<turn|>\n<|turn>model\n`
+  return `[Event: ${notItem.id} | Source: ${notItem.source}]\n${text}`
 }
 
-const formatTruncatedTurn = (userText) =>
-  `<|turn>user\n${userText}\n<turn|>\n<|turn>model\n`
+const formatTruncatedTurn = (userText) => userText
 
 module.exports = {
   formatTurn1,
