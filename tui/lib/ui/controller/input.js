@@ -62,19 +62,26 @@ const onSubmitInput = (ctx, payload) => {
   const turnContent = `${turnHeader}${turnBody}`
   refs.store?.pushHistory(val)
 
-  if (isGeneratingResponse) {
-    refs.store?.setPendingInterjection({ sender: 'User', text: val, time: Date.now() })
-  } else if (!refs.isEngineReady) {
-    refs.store?.addConversationMessage({ sender: 'User', text: val, waitingEngine: true })
-  } else {
-    refs.store?.addConversationMessage({ sender: 'User', text: val })
-  }
-  refs.store?.addStreamEntry({
+  const userStreamEntry = {
     type: 'user',
     title: '👤 USER',
     content: turnContent,
     rawText: val,
-  })
+    time: Date.now(),
+  }
+
+  if (isGeneratingResponse) {
+    refs.store?.setPendingInterjection(
+      { sender: 'User', text: val, time: Date.now() },
+      userStreamEntry,
+    )
+  } else if (!refs.isEngineReady) {
+    refs.store?.addConversationMessage({ sender: 'User', text: val, waitingEngine: true })
+    refs.store?.addStreamEntry(userStreamEntry)
+  } else {
+    refs.store?.addConversationMessage({ sender: 'User', text: val })
+    refs.store?.addStreamEntry(userStreamEntry)
+  }
   refs.store?.setEditMode(false)
   ctx.setFocus?.(null)
 

@@ -585,12 +585,12 @@ const main = () => {
             const isSufficient = res.winningIdx === 0 && res.confidence >= 0.80
             const confPct = res.confidence != null ? (res.confidence * 100).toFixed(1) : '?'
             if (isSufficient) {
+              store.flushActiveThought()
               store.addStreamEntry({
                 type: 'notice',
                 title: '⚡ THINKING CAPPED',
                 content: `Sufficient reasoning reached (${confPct}% confidence >= 80%). Transitioning to response.`,
               })
-              store.flushActiveThought()
               isThinking = false
               store.setGenerating(true)
               client.sendResume({ closeThought: true })

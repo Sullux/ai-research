@@ -48,7 +48,15 @@ const stateStoreFactory = () => (onStreamItem) => {
       time: msg.time || Date.now(),
       ...msg,
     }
-    state.conversation.push(item)
+    if (state.conversation.length === 0 || item.time >= (state.conversation[state.conversation.length - 1].time || 0)) {
+      state.conversation.push(item)
+    } else {
+      let idx = state.conversation.length - 1
+      while (idx >= 0 && (state.conversation[idx].time || 0) > item.time) {
+        idx--
+      }
+      state.conversation.splice(idx + 1, 0, item)
+    }
     if (state.conversation.length > MAX_CONVERSATION_ITEMS) {
       state.conversation.shift()
     }
@@ -64,7 +72,15 @@ const stateStoreFactory = () => (onStreamItem) => {
       expanded: false,
       ...entry,
     }
-    state.stream.push(item)
+    if (state.stream.length === 0 || item.time >= (state.stream[state.stream.length - 1].time || 0)) {
+      state.stream.push(item)
+    } else {
+      let idx = state.stream.length - 1
+      while (idx >= 0 && (state.stream[idx].time || 0) > item.time) {
+        idx--
+      }
+      state.stream.splice(idx + 1, 0, item)
+    }
     if (state.stream.length > MAX_STREAM_ITEMS) {
       state.stream.shift()
     }
@@ -81,14 +97,13 @@ const stateStoreFactory = () => (onStreamItem) => {
     state.conversation = []
     state.stream = []
 
-    for (const item of items) {
+    const sortedItems = [...items].sort((a, b) => (a.time || 0) - (b.time || 0))
+    for (const item of sortedItems) {
       addStreamEntry(item, false)
     }
 
     // Populate conversation sorted by timestamp to preserve causal in-flight order
-    const convItems = items.filter(it => ['user', 'response', 'ask_user'].includes(it.type))
-    convItems.sort((a, b) => (a.time || 0) - (b.time || 0))
-
+    const convItems = sortedItems.filter(it => ['user', 'response', 'ask_user'].includes(it.type))
     for (const item of convItems) {
       if (item.type === 'user') {
         const userText = item.rawText || (item.content ? item.content.replace(/^\[Event: [^\]]+ \| Source: [^\]]+\]\r?\n/, '') : '')
@@ -151,15 +166,19 @@ const stateStoreFactory = () => (onStreamItem) => {
     }
   }
 
-  const setPendingInterjection = (msg) => {
-    state.pendingInterjection = msg
+  const setPendingInterjection = (msg, streamEntry) => {
+    state.pendingInterjection = {
+      ...msg,
+      streamEntry,
+    }
   }
 
   const flushPendingInterjection = () => {
     if (!state.pendingInterjection) return
-    const msg = state.pendingInterjection
+    const { streamEntry, ...msg } = state.pendingInterjection
     state.pendingInterjection = null
     addConversationMessage(msg)
+    if (streamEntry) addStreamEntry(streamEntry)
   }
 
   const clearActiveResponse = () => {
