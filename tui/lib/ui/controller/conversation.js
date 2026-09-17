@@ -23,37 +23,30 @@ const getConversationNodes = () => {
     const isSelected = isChatFocused && selectedIdx.chat === idx
     const timeStr = formatTimestamp(msg.time)
 
-    let bg = isUser ? '#162b4d' : '#132133'
-    let headerFg = isUser ? '#7aa2f7' : '#7dcfff'
-    let headerPrefix = isUser ? '👤 ' : '🤖 '
+    const itemClass = msg.waitingEngine ? 'waitingEngineCard'
+      : msg.waitingUser ? 'waitingUserCard'
+      : isUser ? 'userCard'
+      : 'assistantCard'
 
-    if (msg.waitingEngine) {
-      bg = '#1a2333'
-      headerFg = '#e0af68'
-      headerPrefix = '⏳ '
-    } else if (msg.waitingUser) {
-      bg = '#2b2314'
-      headerFg = '#e0af68'
-      headerPrefix = '⏳ '
-    }
+    const headerClass = msg.waitingEngine || msg.waitingUser ? 'waitingHeader'
+      : isUser ? 'userHeader'
+      : 'assistantHeader'
+
+    const headerPrefix = msg.waitingEngine || msg.waitingUser ? '⏳ '
+      : isUser ? '👤 '
+      : '🤖 '
 
     const senderText = msg.waitingEngine ? 'User (staging for engine ready)' : msg.sender
 
     return {
-      type: 'layout',
-      direction: 'vertical',
-      bg,
-      margin: { top: 0, bottom: 1 },
-      padding: isUser ? { top: 0, bottom: 0, left: 2, right: 1 } : { top: 0, bottom: 0, left: 1, right: 2 },
-      inner: [{
-        type: 'rich',
-        inner: [
-          { type: 'text', text: isSelected ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
-          { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
-          { type: 'text', text: `${headerPrefix}${senderText}: `, bold: true, fg: headerFg },
-          { type: 'text', text: msg.text, fg: msg.waitingEngine ? '#94a3b8' : (isUser ? '#e2e8f0' : '#c0caf5') },
-        ],
-      }],
+      type: 'conversationCard',
+      itemClass,
+      selectorClass: isSelected ? 'selectorActive' : 'selectorInactive',
+      selector: isSelected ? '▶ ' : '  ',
+      timestamp: `[${timeStr}] `,
+      headerClass,
+      header: `${headerPrefix}${senderText}: `,
+      text: msg.text || '',
     }
   })
 
@@ -61,41 +54,28 @@ const getConversationNodes = () => {
     const isSelected = isChatFocused && selectedIdx.chat === conversation.length
     const timeStr = formatTimestamp(refs.store.state.activeResponseTime || Date.now())
     nodes.push({
-      type: 'layout',
-      direction: 'vertical',
-      bg: '#132133',
-      margin: { top: 0, bottom: 1 },
-      padding: { top: 0, bottom: 0, left: 1, right: 2 },
-      inner: [{
-        type: 'rich',
-        inner: [
-          { type: 'text', text: isSelected ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
-          { type: 'text', text: `[${timeStr}] `, fg: '#565f89' },
-          { type: 'text', text: '🤖 Assistant: ', bold: true, fg: '#7dcfff' },
-          { type: 'text', text: activeResponse, fg: '#c0caf5' },
-          { type: 'text', text: ' ▍', fg: '#7aa2f7', bold: true },
-        ],
-      }],
+      type: 'conversationCard',
+      itemClass: 'assistantCard',
+      selectorClass: isSelected ? 'selectorActive' : 'selectorInactive',
+      selector: isSelected ? '▶ ' : '  ',
+      timestamp: `[${timeStr}] `,
+      headerClass: 'assistantHeader',
+      header: '🤖 Assistant: ',
+      text: `${activeResponse} ▍`,
     })
   }
 
   if (pendingInterjection) {
     const timeStr = formatTimestamp(pendingInterjection.time || Date.now())
     nodes.push({
-      type: 'layout',
-      direction: 'vertical',
-      bg: '#1a2333',
-      margin: { top: 0, bottom: 1 },
-      padding: { top: 0, bottom: 0, left: 2, right: 1 },
-      inner: [{
-        type: 'rich',
-        inner: [
-          { type: 'text', text: '  ', bold: true },
-          { type: 'text', text: `[${timeStr}] `, fg: '#475569' },
-          { type: 'text', text: '👤 User (in-flight): ', bold: true, fg: '#64748b' },
-          { type: 'text', text: pendingInterjection.text, fg: '#94a3b8' },
-        ],
-      }],
+      type: 'conversationCard',
+      itemClass: 'inFlightCard',
+      selectorClass: 'selectorInactive',
+      selector: '  ',
+      timestamp: `[${timeStr}] `,
+      headerClass: 'inFlightHeader',
+      header: '👤 User (in-flight): ',
+      text: pendingInterjection.text || '',
     })
   }
 

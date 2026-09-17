@@ -3,54 +3,34 @@ const { refs } = require('./state')
 const { getLayoutTier } = require('./layout')
 const { copyToClipboard, getSelectedText } = require('./clipboard')
 
+const getCount = (store) => {
+  const s = store?.state
+  if (s.mode === 'chat') return (s.conversation?.length || 0) + (s.activeResponse ? 1 : 0)
+  if (s.mode === 'stream') return (s.stream?.length || 0) + (s.activeThought ? 1 : 0) + (s.activeResponse ? 1 : 0)
+  return s.plan?.length || 0
+}
+
 const scrollList = (store, delta) => {
-  const mode = store?.state.mode
-  const selKey = mode === 'chat' ? 'chat' : 'stream'
-  let totalCount = 0
-  if (mode === 'chat') {
-    totalCount = (store?.state.conversation?.length || 0) + (store?.state.activeResponse ? 1 : 0)
-  } else if (mode === 'stream') {
-    totalCount = (store?.state.stream?.length || 0) + (store?.state.activeThought ? 1 : 0) + (store?.state.activeResponse ? 1 : 0)
-  } else {
-    totalCount = store?.state.plan?.length || 0
-  }
+  const selKey = store?.state.mode === 'chat' ? 'chat' : 'stream'
+  const total = getCount(store)
   const next = (store?.state.selectedIdx[selKey] || 0) + delta
-  if (next >= 0 && next < totalCount) {
+  if (next >= 0 && next < total) {
     store.state.selectedIdx[selKey] = next
-    if (delta < 0) store.state.stickyScroll[selKey] = false
-    else if (next === totalCount - 1) store.state.stickyScroll[selKey] = true
+    store.state.stickyScroll[selKey] = delta >= 0 && next === total - 1
   }
+}
+
+const toggleMode = (ctx, e, target, fallback) => {
+  e.stopPropagation()
+  refs.store?.setMode(refs.store?.state.mode === target ? fallback : target)
+  ctx.redraw()
 }
 
 const normalModeRouter = KeyHandler({
   'ctrl+q': () => process.exit(0),
-  a: (ctx, e) => {
-    e.stopPropagation()
-    refs.store?.setMode('chat')
-    ctx.redraw()
-  },
-  s: (ctx, e) => {
-    e.stopPropagation()
-    const curMode = refs.store?.state.mode
-    const tier = getLayoutTier()
-    if (tier === 3 && curMode === 'stream') {
-      refs.store?.setMode('chat')
-    } else {
-      refs.store?.setMode('stream')
-    }
-    ctx.redraw()
-  },
-  d: (ctx, e) => {
-    e.stopPropagation()
-    const curMode = refs.store?.state.mode
-    const tier = getLayoutTier()
-    if (tier >= 2 && curMode === 'plan') {
-      refs.store?.setMode('chat')
-    } else {
-      refs.store?.setMode('plan')
-    }
-    ctx.redraw()
-  },
+  a: (ctx, e) => { e.stopPropagation(); refs.store?.setMode('chat'); ctx.redraw() },
+  s: (ctx, e) => toggleMode(ctx, e, 'stream', getLayoutTier() === 3 ? 'chat' : 'stream'),
+  d: (ctx, e) => toggleMode(ctx, e, 'plan', getLayoutTier() >= 2 ? 'chat' : 'plan'),
   enter: (ctx, e) => {
     e.stopPropagation()
     refs.store?.setEditMode(true)
@@ -60,9 +40,7 @@ const normalModeRouter = KeyHandler({
   },
   escape: (ctx, e) => {
     e.stopPropagation()
-    const curMode = refs.store?.state.mode
-    const tier = getLayoutTier()
-    if (tier >= 2 && curMode !== 'chat') {
+    if (getLayoutTier() >= 2 && refs.store?.state.mode !== 'chat') {
       refs.store?.setMode('chat')
     } else {
       const p = !refs.store?.state.isPaused
@@ -97,27 +75,17 @@ const normalModeRouter = KeyHandler({
 })
 
 const onGlobalKey = (ctx, event) => {
-  if ((event.ctrl && event.key === 'q') || event.stroke === 'ctrl+q') {
-    process.exit(0)
-  }
-
+  if ((event.ctrl && event.key === 'q') || event.stroke === 'ctrl+q') process.exit(0)
   if (refs.store?.state.isEditMode) {
     if (event.key === 'escape') {
       event.stopPropagation()
       refs.store.setEditMode(false)
       ctx.setFocus?.(null)
       ctx.redraw()
-      return
     }
-    // When editing in the input box, do not intercept ctrl+c so the input control
-    // can handle it natively (clearing the input box / resetting cursor).
     return
   }
-
-  if ((event.ctrl && event.key === 'c') || event.stroke === 'ctrl+c') {
-    process.exit(0)
-  }
-
+  if ((event.ctrl && event.key === 'c') || event.stroke === 'ctrl+c') process.exit(0)
   normalModeRouter(ctx, event)
   event.stopPropagation()
 }

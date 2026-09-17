@@ -28,6 +28,7 @@ const {
 } = require('./lib/protocol/constants')
 const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
+const { MarkdownControl } = require('./lib/ui/markdown')
 
 const STATUS_NAMES = [
   'Idle',
@@ -427,7 +428,7 @@ const main = () => {
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
-    modules: { controller },
+    modules: { controller, markdown: { MarkdownControl } },
     autoFocus: false,
     truecolor: true,
   })

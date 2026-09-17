@@ -150,22 +150,19 @@ describe('UI Controller & Layout Tiering', () => {
     store.setMode('chat')
     let nodes = controller.getStreamNodes()
     assert.strictEqual(nodes.length, 2)
-    const longSpansUnselected = nodes[1].inner[0].inner
-    assert(longSpansUnselected.some((s) => s.text.includes('(↑ 2 more)')))
-    assert(!longSpansUnselected.some((s) => s.text.includes('(x to expand)')))
+    assert.ok(nodes[1].hint.includes('(↑ 2 more)'))
+    assert.ok(!nodes[1].hintAction.includes('(x to expand)'))
 
     // Selected state (mode = stream, selectedIdx = 1)
     store.setMode('stream')
     store.state.selectedIdx.stream = 1
     nodes = controller.getStreamNodes()
-    const longSpansSelected = nodes[1].inner[0].inner
-    assert(longSpansSelected.some((s) => s.text.includes('(x to expand)')))
+    assert.ok(nodes[1].hintAction.includes('(x to expand)'))
 
     // Expanded state
     store.toggleExpandStreamItem(1)
     nodes = controller.getStreamNodes()
-    const longSpansExpanded = nodes[1].inner[0].inner
-    assert(longSpansExpanded.some((s) => s.text.includes('(x to collapse)')))
+    assert.ok(nodes[1].hintAction.includes('(x to collapse)'))
   })
 
   it('copies selected conversation or stream item on c key', () => {

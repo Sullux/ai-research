@@ -1,135 +1,98 @@
 const { refs, formatTimestamp } = require('./state')
-const { getLayoutTier } = require('./layout')
 
-const getItemColors = (t) => {
-  if (t === 'thought') return { titleFg: '#bb9af7', contentFg: '#7a88cf', bg: '#14141e' }
-  if (t === 'tool_call') return { titleFg: '#e0af68', contentFg: '#ff9e64', bg: '#1f1a16' }
-  if (t === 'tool_result') return { titleFg: '#9ece6a', contentFg: '#73daca', bg: '#141e18' }
-  if (t === 'user') return { titleFg: '#7aa2f7', contentFg: '#e2e8f0', bg: '#162b4d' }
-  return { titleFg: '#9aa5ce', contentFg: '#c0caf5', bg: '#151521' }
+const getItemClasses = (type) => {
+  if (type === 'thought') return { itemClass: 'streamThought', headerClass: 'streamThoughtHeader' }
+  if (type === 'tool_call') return { itemClass: 'streamToolCall', headerClass: 'streamToolCallHeader' }
+  if (type === 'tool_result') return { itemClass: 'streamToolResult', headerClass: 'streamToolResultHeader' }
+  if (type === 'user') return { itemClass: 'streamUser', headerClass: 'streamUserHeader' }
+  if (type === 'notice') return { itemClass: 'streamNotice', headerClass: 'streamNoticeHeader' }
+  return { itemClass: 'streamDefault', headerClass: 'streamDefaultHeader' }
 }
 
-const getPanelWidth = () => {
-  const cols = refs.store?.state?.dimensions?.cols || 100
-  const ratio = getLayoutTier(cols) === 1 ? 0.3 : (getLayoutTier(cols) === 2 ? 0.4 : 0.95)
-  return Math.max(30, Math.floor(cols * ratio) - 4)
-}
-
-const wrapLines = (text, maxWidth) => {
-  if (!text) return []
-  const maxW = Math.max(20, maxWidth || 60)
-  const lines = []
-  for (const para of text.split('\n')) {
-    if (!para) { lines.push(''); continue }
-    let cur = ''
-    for (const w of para.split(/\s+/)) {
-      if (!cur) cur = w
-      else if (cur.length + 1 + w.length <= maxW) cur += ' ' + w
-      else { lines.push(cur); cur = w }
-    }
-    if (cur) lines.push(cur)
-  }
-  return lines
-}
-
-const getCardHeight = (item, width) => {
-  const lines = wrapLines(item.content, width)
-  if (lines.length <= 3) {
-    return Math.max(1, lines.length) + 1
-  }
-  if (!item.expanded) {
-    return 4 + 1
-  }
-  return 1 + lines.length + 1
+const getCardHeight = (item) => {
+  const lines = (item.content || '').split('\n')
+  return (!item.expanded && lines.length > 3) ? 5 : Math.max(2, lines.length + 1)
 }
 
 const getStreamScroll = () => {
   if (!refs.store) return 0
   if (refs.store.state.stickyScroll.stream) return Infinity
   const selIdx = refs.store.state.selectedIdx.stream
-  const width = getPanelWidth()
   let offset = 0
   for (let i = 0; i < selIdx && i < refs.store.state.stream.length; i++) {
-    offset += getCardHeight(refs.store.state.stream[i], width)
+    offset += getCardHeight(refs.store.state.stream[i])
   }
   return offset
 }
 
-const buildCardSpans = (item, isSel, width) => {
-  const { titleFg, contentFg } = getItemColors(item.type)
-  const lines = wrapLines(item.content, width)
-  const spans = [
-    { type: 'text', text: isSel ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
-    { type: 'text', text: `[${formatTimestamp(item.time)}] `, fg: '#565f89' },
-    { type: 'text', text: `${item.title}`, bold: true, fg: titleFg },
-  ]
-  if (lines.length <= 3) {
-    spans.push({ type: 'text', text: `: ${lines[0] || ''}`, fg: contentFg })
-    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: ` ${lines[i]}`, fg: contentFg })
-    return spans
-  }
-  if (!item.expanded) {
-    spans.push({ type: 'text', text: `  (↑ ${lines.length - 3} more)`, fg: '#565f89', italic: true })
-    if (isSel) spans.push({ type: 'text', text: '  (x to expand)', fg: '#e0af68', bold: true })
-    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: ` ${l}`, fg: contentFg })
-  } else {
-    if (isSel) spans.push({ type: 'text', text: '  (x to collapse)', fg: '#e0af68', bold: true })
-    for (const l of lines) spans.push({ type: 'text', text: ` ${l}`, fg: contentFg })
-  }
-  return spans
-}
-
-const liveNode = (title, text, fg, bg, width, time, isSel, expanded) => {
-  const lines = wrapLines(text, width)
-  const spans = [
-    { type: 'text', text: isSel ? '▶ ' : '  ', bold: true, fg: '#f7768e' },
-    { type: 'text', text: `[${formatTimestamp(time || Date.now())}] `, fg: '#565f89' },
-    { type: 'text', text: `${title}`, bold: true, fg },
-  ]
-  if (lines.length <= 3) {
-    spans.push({ type: 'text', text: `: ${lines[0] || ''}`, fg })
-    for (let i = 1; i < lines.length; i++) spans.push({ type: 'text', text: ` ${lines[i]}`, fg })
-  } else if (!expanded) {
-    spans.push({ type: 'text', text: `  (↑ ${lines.length - 3} more)`, fg: '#565f89', italic: true })
-    if (isSel) spans.push({ type: 'text', text: '  (x to expand)', fg: '#e0af68', bold: true })
-    for (const l of lines.slice(-3)) spans.push({ type: 'text', text: ` ${l}`, fg })
-  } else {
-    if (isSel) spans.push({ type: 'text', text: '  (x to collapse)', fg: '#e0af68', bold: true })
-    for (const l of lines) spans.push({ type: 'text', text: ` ${l}`, fg })
-  }
-  spans.push({ type: 'text', text: ' ▍', fg, bold: true })
+const buildCardItem = (item, isSel) => {
+  const { itemClass, headerClass } = getItemClasses(item.type)
+  const lines = (item.content || '').split('\n')
+  const isMulti = lines.length > 3
+  const isExpanded = Boolean(item.expanded)
+  const hint = isMulti && !isExpanded ? `  (↑ ${lines.length - 3} more)` : ''
+  const hintAction = isSel && isMulti ? (isExpanded ? '  (x to collapse)' : '  (x to expand)') : ''
+  const content = isMulti && !isExpanded ? lines.slice(-3).join('\n') : (item.content || '')
 
   return {
-    type: 'layout',
-    direction: 'vertical',
-    bg,
-    margin: { top: 0, bottom: 1 },
-    padding: { top: 0, bottom: 0, left: 1, right: 1 },
-    inner: [{ type: 'rich', inner: spans }],
+    type: 'streamCard',
+    itemClass,
+    selectorClass: isSel ? 'selectorActive' : 'selectorInactive',
+    selector: isSel ? '▶ ' : '  ',
+    timestamp: `[${formatTimestamp(item.time)}] `,
+    headerClass,
+    title: item.title,
+    hint,
+    hintAction,
+    content,
   }
 }
 
-const cleanThought = (raw) => (raw || '').trim().replace(/^thought\s*/, '')
+const buildLiveCard = (title, type, content, isSel, isExp, time) => {
+  const { itemClass, headerClass } = getItemClasses(type)
+  return {
+    type: 'streamCard',
+    itemClass,
+    selectorClass: isSel ? 'selectorActive' : 'selectorInactive',
+    selector: isSel ? '▶ ' : '  ',
+    timestamp: `[${formatTimestamp(time || Date.now())}] `,
+    headerClass,
+    title,
+    hint: '',
+    hintAction: isSel ? (isExp ? '  (x to collapse)' : '  (x to expand)') : '',
+    content,
+  }
+}
 
 const getStreamNodes = () => {
   if (!refs.store) return []
-  const width = getPanelWidth()
-  const selIdx = refs.store.state.mode === 'stream' ? refs.store.state.selectedIdx.stream : -1
-  const nodes = refs.store.state.stream.map((item, idx) => ({
-    type: 'layout', direction: 'vertical', bg: getItemColors(item.type).bg, margin: { top: 0, bottom: 1 }, padding: { top: 0, bottom: 0, left: 1, right: 1 },
-    inner: [{ type: 'rich', inner: buildCardSpans(item, idx === selIdx, width) }],
-  }))
-  let curIdx = refs.store.state.stream.length
-  const th = cleanThought(refs.store.state.activeThought)
-  if (th) {
-    nodes.push(liveNode('💭 THOUGHT', th, '#bb9af7', '#14141e', width, refs.store.state.activeThoughtTime, curIdx === selIdx, !!refs.store.state.activeThoughtExpanded))
+  const { stream, mode, isEditMode, selectedIdx, activeThought, activeResponse } = refs.store.state
+  const isStreamFocused = mode === 'stream' && !isEditMode
+  const selIdx = selectedIdx.stream
+
+  const nodes = stream.map((item, idx) =>
+    buildCardItem(item, isStreamFocused && selIdx === idx),
+  )
+
+  let curIdx = stream.length
+  if (activeThought) {
+    const isSel = isStreamFocused && curIdx === selIdx
+    const { activeThoughtTime, activeThoughtExpanded } = refs.store.state
+    nodes.push(buildLiveCard('💭 THOUGHT', 'thought', activeThought, isSel, activeThoughtExpanded, activeThoughtTime))
     curIdx++
   }
-  if (refs.store.state.activeResponse) {
-    nodes.push(liveNode('🤖 ASSISTANT', refs.store.state.activeResponse, '#7dcfff', '#132133', width, refs.store.state.activeResponseTime, curIdx === selIdx, !!refs.store.state.activeResponseExpanded))
-    curIdx++
+
+  if (activeResponse) {
+    const isSel = isStreamFocused && curIdx === selIdx
+    const { activeResponseTime, activeResponseExpanded } = refs.store.state
+    nodes.push(buildLiveCard('🤖 ASSISTANT', 'response', activeResponse, isSel, activeResponseExpanded, activeResponseTime))
   }
+
   return nodes
 }
 
-module.exports = { getStreamScroll, getStreamNodes }
+module.exports = {
+  getStreamScroll,
+  getStreamNodes,
+  getItemClasses,
+}

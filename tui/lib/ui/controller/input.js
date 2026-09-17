@@ -1,147 +1,80 @@
 const { refs } = require('./state')
-const {
-  formatTurn1,
-  formatUserTurn,
-  formatUserDecisionTurn,
-} = require('../../template')
-const { Afsm, chatMachineFactory } = require('../../afsm')
+const { formatUserTurn, formatUserDecisionTurn } = require('../../template')
+const { sendTurnWithGate } = require('./dispatch')
+
+const stageUserEvent = (val, isGenerating) => {
+  if (!refs.vfs) return { turnHeader: '', turnBody: val }
+  const saved = refs.vfs.saveUserMessage(val)
+  refs.channelManager?.registerChannel({
+    id: 'chat/user',
+    path: saved.relPath,
+    type: 'push',
+    cursor: 0,
+    isFocused: true,
+  })
+  const chunk = refs.channelManager?.readChunk('chat/user', refs.vfs, 512)
+  const notItem = refs.notManager?.notify(
+    saved.relPath,
+    saved.preview,
+    saved.id,
+    { isTurnContext: true, payload: saved.payload },
+  )
+  if (isGenerating && refs.activeTurnNotificationId) {
+    refs.notManager?.suspend(refs.activeTurnNotificationId)
+    refs.activeTurnNotificationId = null
+  } else if (!isGenerating && notItem) {
+    refs.notManager?.markServicing(notItem.id)
+    refs.activeTurnNotificationId = notItem.id
+  }
+  return {
+    turnHeader: `[Event: ${notItem?.id || saved.id} | Source: ${saved.relPath}]\n`,
+    turnBody: chunk?.content || saved.payload,
+  }
+}
 
 const onSubmitInput = (ctx, payload) => {
   const val = payload.value?.trim()
-  if (payload.node) {
-    payload.node.value = ''
-    payload.node.cursor = 0
-  }
+  if (payload.node) { payload.node.value = ''; payload.node.cursor = 0 }
   if (!val || !refs.client) return
 
-  // Flush in-flight thought before recording barge-in user turn.
-  if (refs.store?.state?.activeThought) {
-    refs.store.flushActiveThought()
-  }
+  if (refs.store?.state?.activeThought) refs.store.flushActiveThought()
 
-  // If currently generating an assistant response, stage this message as pendingInterjection
-  // so the conversation view preserves causal sequence (Response 1 -> Interjection -> Response 2).
-  const isGeneratingResponse = Boolean(refs.store?.state?.activeResponse)
-  const isGenerating = Boolean(
-    refs.store?.state?.isGenerating ||
-    refs.store?.state?.activeResponse ||
-    refs.store?.state?.activeThought,
-  )
+  const isGenResp = Boolean(refs.store?.state?.activeResponse)
+  const isGen = Boolean(refs.store?.state?.isGenerating || refs.store?.state?.activeResponse || refs.store?.state?.activeThought)
 
-  let turnHeader = '', turnBody = val, savedMsg = null, eventId = null
-  if (refs.vfs) {
-    savedMsg = refs.vfs.saveUserMessage(val)
-    refs.channelManager?.registerChannel({
-      id: 'chat/user',
-      path: savedMsg.relPath,
-      type: 'push',
-      cursor: 0,
-      isFocused: true,
-    })
-    const chunk = refs.channelManager?.readChunk('chat/user', refs.vfs, 512)
-    const readContent = chunk?.content || savedMsg.payload
-
-    const notItem = refs.notManager?.notify(
-      savedMsg.relPath,
-      savedMsg.preview,
-      savedMsg.id,
-      { isTurnContext: true, payload: savedMsg.payload },
-    )
-    if (isGenerating && refs.activeTurnNotificationId) {
-      refs.notManager?.suspend(refs.activeTurnNotificationId)
-      refs.activeTurnNotificationId = null
-    } else if (!isGenerating && notItem) {
-      refs.notManager?.markServicing(notItem.id)
-      refs.activeTurnNotificationId = notItem.id
-    }
-    eventId = notItem?.id || savedMsg.id
-    turnHeader = `[Event: ${eventId} | Source: ${savedMsg.relPath}]\n`
-    turnBody = readContent
-  }
-
+  const { turnHeader, turnBody } = stageUserEvent(val, isGen)
   const turnContent = `${turnHeader}${turnBody}`
   refs.store?.pushHistory(val)
 
-  const userStreamEntry = {
-    type: 'user',
-    title: '👤 USER',
-    content: turnContent,
-    rawText: val,
-    time: Date.now(),
-  }
-
-  if (isGeneratingResponse) {
-    refs.store?.setPendingInterjection(
-      { sender: 'User', text: val, time: Date.now() },
-      userStreamEntry,
-    )
-  } else if (!refs.isEngineReady) {
-    refs.store?.addConversationMessage({ sender: 'User', text: val, waitingEngine: true })
-    refs.store?.addStreamEntry(userStreamEntry)
+  const entry = { type: 'user', title: '👤 USER', content: turnContent, rawText: val, time: Date.now() }
+  if (isGenResp) {
+    refs.store?.setPendingInterjection({ sender: 'User', text: val, time: Date.now() }, entry)
   } else {
-    refs.store?.addConversationMessage({ sender: 'User', text: val })
-    refs.store?.addStreamEntry(userStreamEntry)
+    refs.store?.addConversationMessage({ sender: 'User', text: val, waitingEngine: !refs.isEngineReady || undefined })
+    refs.store?.addStreamEntry(entry)
   }
   refs.store?.setEditMode(false)
   ctx.setFocus?.(null)
 
-  const alertsRollup = refs.notManager?.formatTurnAlerts?.() || ''
+  const alerts = refs.notManager?.formatTurnAlerts?.() || ''
   const waiting = refs.orchestrator?.getWaitingForUserTasks?.() || []
-  const payloadText = waiting.length > 0
-    ? formatUserDecisionTurn(`${alertsRollup}${turnContent}`, waiting)
-    : formatUserTurn(`${alertsRollup}${turnContent}`)
+  const text = waiting.length > 0
+    ? formatUserDecisionTurn(`${alerts}${turnContent}`, waiting)
+    : formatUserTurn(`${alerts}${turnContent}`)
 
   refs.store?.setGenerating(true)
   if (!refs.isEngineReady) {
-    refs.pendingInputTurn = payloadText
+    refs.pendingInputTurn = text
     ctx.redraw()
     return
   }
 
-  let dispatchPromise = null
-  if (!isGenerating || !refs.notManager) {
-    if (typeof refs.client?.probe === 'function') {
-      const afsm = Afsm({
-        machine: chatMachineFactory(),
-        client: refs.client,
-        initialContext: { val },
-      })
-
-      dispatchPromise = afsm.step()
-        .then((stepResult) => {
-          const isDirect = stepResult?.op === 'direct_response'
-          const meta = stepResult?.transition?.meta || {}
-          const confPct = meta.confidence != null ? (meta.confidence * 100).toFixed(1) : '?'
-          if (isDirect) {
-            refs.store?.addStreamEntry({
-              type: 'notice',
-              title: '⚡ THINKING GATE',
-              content: `Immediate response chosen (${confPct}% confidence >= 80%). Bypassing reasoning.`,
-            })
-            refs.client.sendInput(payloadText, { direct: true })
-          } else {
-            const reason = meta.winningIdx === 1 ? 'essential reasoning' : `confidence ${confPct}% < 80% threshold`
-            refs.store?.addStreamEntry({
-              type: 'notice',
-              title: '🧠 THINKING GATE',
-              content: `Deliberate reasoning engaged (${reason}).`,
-            })
-            refs.client.sendInput(payloadText, { reason: true })
-          }
-          ctx.redraw?.()
-        })
-        .catch((_) => {
-          refs.client.sendInput(payloadText, { reason: true })
-          ctx.redraw?.()
-        })
-    } else {
-      refs.client.sendInput(payloadText, { reason: true })
-    }
+  let promise = null
+  if (!isGen || !refs.notManager) {
+    promise = sendTurnWithGate(refs, text, val, ctx)
   }
   ctx.redraw?.()
-  return dispatchPromise
+  return promise
 }
 
-module.exports = {
-  onSubmitInput,
-}
+module.exports = { onSubmitInput }
