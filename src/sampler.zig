@@ -65,6 +65,7 @@ pub const Sampler = struct {
     temp: f32 = 1.0,
     suppress_thinking: bool = false,
     suppress_critique: bool = false,
+    suppress_channel_close: bool = false,
 
     pub fn init(seed: u64, temp: f32, top_p: f32) Sampler {
         return .{
@@ -78,6 +79,7 @@ pub const Sampler = struct {
             .min_p = 0.05,
             .suppress_thinking = false,
             .suppress_critique = false,
+            .suppress_channel_close = false,
         };
     }
 
@@ -87,6 +89,7 @@ pub const Sampler = struct {
             if (sup < logits.len) logits[sup] = -1e9;
         }
         if (self.suppress_thinking and 100 < logits.len) logits[100] = -1e9;
+        if (self.suppress_channel_close and 101 < logits.len) logits[101] = -1e9;
         if (self.suppress_critique) {
             const critique_tokens = [_]u32{
                 20470, 29202, 12429, 4491, 83675, 213110,
@@ -207,13 +210,14 @@ pub const Sampler = struct {
     pub fn sampleTopK(self: *Sampler, candidates: []const TopKCandidate, recent_tokens: ?[]const u32) u32 {
         if (candidates.len == 0) return 0;
         const has_penalties = (self.repeat_penalty > 1.0 or self.frequency_penalty > 0.0 or self.presence_penalty > 0.0);
-        if (self.temp <= 0.0 and (!has_penalties or recent_tokens == null) and !self.suppress_thinking and !self.suppress_critique) return candidates[0].id;
+        if (self.temp <= 0.0 and (!has_penalties or recent_tokens == null) and !self.suppress_thinking and !self.suppress_critique and !self.suppress_channel_close) return candidates[0].id;
 
         var items: [64]TopKCandidate = undefined;
         var K: usize = 0;
         for (candidates) |cand| {
             if (cand.id == 0 or cand.id == 258882 or cand.id == 258883 or cand.id == 255999 or cand.id == 256000 or cand.id == 256001 or cand.id == 255995 or cand.id == 255996 or cand.id == 255997 or cand.id == 255998) continue;
             if (self.suppress_thinking and cand.id == 100) continue;
+            if (self.suppress_channel_close and cand.id == 101) continue;
             if (self.suppress_critique and isCritiqueToken(cand.id)) continue;
             items[K] = cand;
             K += 1;
@@ -477,6 +481,19 @@ test "sampler.sampleTopK suppresses token 100 when suppress_thinking is active" 
 
     const chosen = sampler.sampleTopK(&candidates, null);
     try std.testing.expectEqual(@as(u32, 236777), chosen);
+}
+
+test "sampler.sampleTopK suppresses token 101 when suppress_channel_close is active" {
+    var sampler = Sampler.init(42, 0.0, 0.95);
+    sampler.suppress_channel_close = true;
+
+    const candidates = [_]TopKCandidate{
+        .{ .id = 101, .val = 25.0 }, // <channel|>
+        .{ .id = 120474, .val = 20.0 }, // "Thinking"
+    };
+
+    const chosen = sampler.sampleTopK(&candidates, null);
+    try std.testing.expectEqual(@as(u32, 120474), chosen);
 }
 
 test "sampler.sampleTopK suppresses critique tokens when suppress_critique is active" {

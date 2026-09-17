@@ -84,7 +84,9 @@ pub fn decodeResponse(self: *Server, msg_id: u16, first_token: u32, writer: anyt
             var chan_tok = self.advanceToken(cur, window_tokens);
             while (chan_tok != template_state.TOK_CHANNEL_CLOSE and chan_tok != self.tok.eos_token_id) {
                 if (chan_tok == template_state.TOK_NEWLINE or chan_tok == template_state.TOK_TOOL_CALL) {
+                    self.sampler.suppress_channel_close = true;
                     cur = self.advanceToken(chan_tok, window_tokens);
+                    self.sampler.suppress_channel_close = false;
                     break;
                 }
                 chan_tok = self.advanceToken(chan_tok, window_tokens);
@@ -112,7 +114,9 @@ pub fn decodeResponse(self: *Server, msg_id: u16, first_token: u32, writer: anyt
                 thinking_count = 0;
                 var next_c = self.advanceToken(peek_tok, window_tokens);
                 while (next_c == template_state.TOK_NEWLINE or next_c == template_state.TOK_TOOL_CALL) {
+                    self.sampler.suppress_channel_close = true;
                     next_c = self.advanceToken(next_c, window_tokens);
+                    self.sampler.suppress_channel_close = false;
                 }
                 cur = next_c;
                 continue;

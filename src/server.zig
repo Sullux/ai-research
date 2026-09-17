@@ -52,6 +52,7 @@ pub const Server = struct {
     out_queue: ?*server_queue.OutboundQueue = null,
     is_saving_snapshot: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     thinking_gate: bool = false,
+    force_reasoning: bool = false,
 
     pub const prefillTokens = prefill.prefillTokens;
     pub const handleSetSystem = prefill.handleSetSystem;
@@ -109,6 +110,7 @@ pub const Server = struct {
             .last_yield_token = null,
             .turn_open = false,
             .thinking_gate = false,
+            .force_reasoning = false,
             .template_state = .idle_between_turns,
         };
     }

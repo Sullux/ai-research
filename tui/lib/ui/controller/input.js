@@ -111,6 +111,7 @@ const onSubmitInput = (ctx, payload) => {
               title: '⚡ THINKING GATE',
               content: `Immediate response chosen (${confPct}% confidence >= 80%). Bypassing reasoning.`,
             })
+            refs.client.sendInput(payloadText, { direct: true })
           } else {
             const reason = meta.winningIdx === 1 ? 'essential reasoning' : `confidence ${confPct}% < 80% threshold`
             refs.store?.addStreamEntry({
@@ -118,16 +119,16 @@ const onSubmitInput = (ctx, payload) => {
               title: '🧠 THINKING GATE',
               content: `Deliberate reasoning engaged (${reason}).`,
             })
+            refs.client.sendInput(payloadText, { reason: true })
           }
-          refs.client.sendInput(payloadText, { direct: isDirect })
           ctx.redraw?.()
         })
         .catch((_) => {
-          refs.client.sendInput(payloadText, { direct: false })
+          refs.client.sendInput(payloadText, { reason: true })
           ctx.redraw?.()
         })
     } else {
-      refs.client.sendInput(payloadText, { direct: false })
+      refs.client.sendInput(payloadText, { reason: true })
     }
   }
   ctx.redraw?.()

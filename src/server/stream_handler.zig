@@ -23,6 +23,8 @@ pub fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer
     const flags = payload[1];
     const is_raw = (flags & protocol.INPUT_FLAG_RAW) != 0;
     const is_direct = (flags & protocol.INPUT_FLAG_DIRECT) != 0;
+    const is_reason = (flags & protocol.INPUT_FLAG_REASON) != 0;
+    self.force_reasoning = is_reason;
 
     var tokens: []u32 = undefined;
     var allocated_tokens = false;
