@@ -143,8 +143,8 @@ pub fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: an
             }
             defer if (saved_logits) |sl| self.allocator.free(sl);
 
-            const needs_thinking = try self.probeThinkingGate(msg_id, writer);
-            if (!needs_thinking) {
+            const bypass_thinking = try self.shouldBypassThinking(msg_id, writer);
+            if (bypass_thinking) {
                 for (template_state.BYPASS_THOUGHT_TOKENS) |bt| {
                     _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
                     self.clock += 1;

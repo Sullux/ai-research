@@ -588,6 +588,9 @@ const main = () => {
         notManager.ack(activeTurnId)
         if (controller.refs) controller.refs.activeTurnNotificationId = null
       }
+      for (const item of notManager.getSuspended()) {
+        if (item.extra?.isTurnContext) notManager.ack(item.id)
+      }
 
       // Check for remaining unserviced interrupts in LIFO order
       const remainingUnserviced = notManager.getUnserviced().filter(a => a.id !== activeTurnId)

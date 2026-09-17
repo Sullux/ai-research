@@ -60,3 +60,6 @@ This document records the strategic order of operations for completing the Strea
 - [ ] Track recurrent memory activation diffs ($\sum \text{Working Memory Tax} > \text{Plasticity Risk Tax}$).
 - [ ] Implement fast online micro-LoRA / Hebbian weight updates ($\Delta W$) into MLP projection layers.
 - [ ] Verify permanent retention of consolidated facts with zero context slot consumption and zero retrieval latency.
+
+## 7. Miscellaneous
+- [ ] Add real time TTS using [Chatterbox Turbo](https://huggingface.co/ResembleAI/chatterbox-turbo).

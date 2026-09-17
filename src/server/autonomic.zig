@@ -127,7 +127,7 @@ pub fn probeAutonomic(
     return result;
 }
 
-pub fn probeThinkingGate(
+pub fn shouldBypassThinking(
     self: *Server,
     msg_id: u16,
     writer: anytype,
