@@ -65,4 +65,36 @@ describe('MarkdownControl', () => {
     const firstLine = grid[0].map((c) => c.char).join('')
     assert.ok(firstLine.includes('Test Header'))
   })
+
+  it('indents nested sub-lists at 2, 4, and 6 spaces without blank lines between items', () => {
+    const md = [
+      '* Item 1',
+      '  * Sub-item 1.1',
+      '    * Sub-sub-item 1.1.1',
+      '* Item 2',
+    ].join('\n')
+
+    const ast = parse(md)
+    const spans = mapBlocks(ast.blocks, {})
+    const bulletTexts = spans.map((s) => s.text).filter((t) => t !== '\n')
+    assert.strictEqual(bulletTexts[0], '  • ')
+    assert.strictEqual(bulletTexts[1], 'Item 1')
+    assert.strictEqual(bulletTexts[2], '    • ')
+    assert.strictEqual(bulletTexts[3], 'Sub-item 1.1')
+    assert.strictEqual(bulletTexts[4], '      • ')
+    assert.strictEqual(bulletTexts[5], 'Sub-sub-item 1.1.1')
+    assert.strictEqual(bulletTexts[6], '  • ')
+    assert.strictEqual(bulletTexts[7], 'Item 2')
+
+    const node = { type: 'markdown', text: md }
+    const size = MarkdownControl.onMeasure(node, { maxWidth: 80, maxHeight: 100 })
+    assert.strictEqual(size.height, 4)
+  })
+
+  it('preserves single blank line between paragraphs and headings', () => {
+    const md = '# Title\n\nParagraph 1\n\nParagraph 2'
+    const node = { type: 'markdown', text: md }
+    const size = MarkdownControl.onMeasure(node, { maxWidth: 80, maxHeight: 100 })
+    assert.strictEqual(size.height, 5)
+  })
 })

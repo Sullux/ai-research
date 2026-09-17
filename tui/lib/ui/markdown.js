@@ -15,25 +15,31 @@ const mapInlines = (children = [], style = {}, node = {}) =>
 const mapBlocks = (blocks = [], node = {}) => {
   const base = { fg: node.fg, bg: node.bg }
   return blocks.flatMap((b, idx) => {
-    const postNl = idx === blocks.length - 1 ? '' : '\n'
+    const isLast = idx === blocks.length - 1
+    const endBreak = isLast ? [{ text: '\n' }] : [{ text: '\n\n' }]
+
     if (b.type === 'header') {
       const hStyle = b.level === 1 ? (node.h1 || { bold: true, underline: true })
         : b.level === 2 ? (node.h2 || { bold: true })
         : (node.h3 || { bold: true, italic: true })
-      return [...mapInlines(b.children, { ...base, ...hStyle }, node), { text: `\n${postNl}` }]
+      return [...mapInlines(b.children, { ...base, ...hStyle }, node), ...endBreak]
     }
     if (b.type === 'paragraph') {
-      return [...mapInlines(b.children, base, node), { text: `\n${postNl}` }]
+      return [...mapInlines(b.children, base, node), ...endBreak]
     }
     if (b.type === 'bulletList' || b.type === 'orderedList') {
       const isOrd = b.type === 'orderedList'
       const bulletStyle = { ...base, ...(node.bullet || { bold: true }) }
-      const items = (b.items || []).flatMap((kids, i) => [
-        { ...bulletStyle, text: isOrd ? `  ${i + 1}. ` : '  • ' },
-        ...mapInlines(kids, base, node),
-        { text: '\n' },
-      ])
-      return [...items, { text: postNl }]
+      const items = (b.items || []).flatMap((kids, i) => {
+        const indent = ' '.repeat(2 + (kids.depth || 0) * 2)
+        const prefix = isOrd ? `${indent}${i + 1}. ` : `${indent}• `
+        return [
+          { ...bulletStyle, text: prefix },
+          ...mapInlines(kids, base, node),
+          { text: '\n' },
+        ]
+      })
+      return [...items, ...(isLast ? [] : [{ text: '\n' }])]
     }
     if (b.type === 'codeBlock') {
       const langText = b.language ? `\`\`\` ${b.language}\n` : '```\n'
@@ -41,7 +47,8 @@ const mapBlocks = (blocks = [], node = {}) => {
       return [
         { ...base, italic: true, text: langText },
         { ...codeStyle, text: `${b.value || ''}\n` },
-        { ...base, italic: true, text: `\`\`\`\n${postNl}` },
+        { ...base, italic: true, text: `\`\`\`\n` },
+        ...(isLast ? [] : [{ text: '\n' }]),
       ]
     }
     if (b.type === 'blockquote') {
@@ -49,9 +56,9 @@ const mapBlocks = (blocks = [], node = {}) => {
       const inner = (b.children || []).flatMap((c) =>
         c.type === 'paragraph' ? mapInlines(c.children, qStyle, node) : [],
       )
-      return [{ ...base, text: '│ ' }, ...inner, { text: `\n${postNl}` }]
+      return [{ ...base, text: '│ ' }, ...inner, { text: '\n' }, ...(isLast ? [] : [{ text: '\n' }])]
     }
-    return b.type === 'hr' ? [{ ...base, text: `───\n${postNl}` }] : []
+    return b.type === 'hr' ? [{ ...base, text: '───\n' }, ...(isLast ? [] : [{ text: '\n' }])] : []
   })
 }
 
