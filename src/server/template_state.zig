@@ -38,12 +38,23 @@ pub fn formatProbeFrame(
         return allocator.dupe(u8, prompt);
     }
 
-    if (state == .idle_between_turns or state == .soft_yielded) {
+    if (state == .idle_between_turns) {
         var buf = std.ArrayList(u8).init(allocator);
         errdefer buf.deinit();
         const w = buf.writer();
 
         try w.writeAll("<|turn>user\n");
+        try w.writeAll(prompt);
+        try w.writeAll("<turn|>\n<|turn>model\n<|channel>thought\n<channel|>");
+        return buf.toOwnedSlice();
+    }
+
+    if (state == .soft_yielded or state == .in_thinking_channel) {
+        var buf = std.ArrayList(u8).init(allocator);
+        errdefer buf.deinit();
+        const w = buf.writer();
+
+        try w.writeAll("<channel|>\n<turn|>\n<|turn>user\n");
         try w.writeAll(prompt);
         try w.writeAll("<turn|>\n<|turn>model\n<|channel>thought\n<channel|>");
         return buf.toOwnedSlice();

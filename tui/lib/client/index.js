@@ -15,6 +15,8 @@ const {
   INPUT_FLAG_NONE,
   INPUT_FLAG_DIRECT,
   INPUT_FLAG_REASON,
+  RESUME_ACTION_CONTINUE,
+  RESUME_ACTION_CLOSE_THOUGHT,
 } = require('../protocol/constants')
 const {
   streamInputFrame,
@@ -123,9 +125,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     return id
   }
 
-  const sendResume = () => {
+  const sendResume = (opts = {}) => {
     const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(resumeFrame(id))
+    const action = typeof opts === 'number'
+      ? opts
+      : (opts?.closeThought ? RESUME_ACTION_CLOSE_THOUGHT : RESUME_ACTION_CONTINUE)
+    if (proc?.stdin?.writable) proc.stdin.write(resumeFrame(id, action))
     return id
   }
 

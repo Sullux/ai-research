@@ -22,7 +22,6 @@ pub fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer
 
     const flags = payload[1];
     const is_raw = (flags & protocol.INPUT_FLAG_RAW) != 0;
-    const is_direct = (flags & protocol.INPUT_FLAG_DIRECT) != 0;
     const is_reason = (flags & protocol.INPUT_FLAG_REASON) != 0;
     self.force_reasoning = is_reason;
 
@@ -42,7 +41,7 @@ pub fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer
             try w.writeAll("<|turn>user\n");
             try w.writeAll(text);
             try w.writeAll("\n<turn|>\n<|turn>model\n");
-            if (is_direct) {
+            if (!is_reason) {
                 try w.writeAll("<|channel>thought\n<channel|>");
             }
             tokens = try self.tok.encode(self.allocator, framed.items, self.clock == 0);
@@ -80,11 +79,11 @@ pub fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer
 
     const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
     const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-    self.sampler.suppress_thinking = false;
+    self.sampler.suppress_thinking = !self.force_reasoning;
     try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
 }
 
-pub fn handleResume(self: *Server, msg_id: u16, writer: anytype) !void {
+pub fn handleResume(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
     self.is_aborted.store(false, .seq_cst);
     const last_token = self.last_yield_token orelse {
         try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_END_OF_TURN);
@@ -95,8 +94,22 @@ pub fn handleResume(self: *Server, msg_id: u16, writer: anytype) !void {
         return;
     };
     self.last_yield_token = null;
-    self.sampler.suppress_thinking = !self.in_thinking_channel;
 
+    const close_thought = (payload.len > 0 and payload[0] == protocol.RESUME_ACTION_CLOSE_THOUGHT);
+    if (close_thought and self.in_thinking_channel) {
+        self.in_thinking_channel = false;
+        self.sampler.suppress_thinking = true;
+        self.sampler.suppress_critique = false;
+        self.template_state = .in_response_channel;
+        self.ring.markBoundary(self.clock, .response_sentence, 1.0);
+        const cur = self.advanceToken(template_state.TOK_CHANNEL_CLOSE, &.{});
+        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
+        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+        try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
+        return;
+    }
+
+    self.sampler.suppress_thinking = !self.in_thinking_channel;
     const cur = self.advanceToken(last_token, &.{});
     const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
     const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;

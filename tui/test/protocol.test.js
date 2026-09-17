@@ -27,6 +27,7 @@ const {
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
   OP_RESUME,
+  RESUME_ACTION_CLOSE_THOUGHT,
   OP_TASK_TRIAGE,
   OP_READ_STREAM_OPEN,
   OP_READ_STREAM_CLOSE,
@@ -113,6 +114,15 @@ test('resumeFrame serializes properly with zero-length payload', () => {
   assert.strictEqual(parsed.header.msgId, 8)
   assert.strictEqual(parsed.header.payloadLen, 0)
   assert.strictEqual(parsed.payload.length, 0)
+})
+
+test('resumeFrame serializes properly with action payload', () => {
+  const frame = resumeFrame(9, RESUME_ACTION_CLOSE_THOUGHT)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_RESUME)
+  assert.strictEqual(parsed.header.msgId, 9)
+  assert.strictEqual(parsed.header.payloadLen, 1)
+  assert.strictEqual(parsed.payload[0], RESUME_ACTION_CLOSE_THOUGHT)
 })
 
 test('toolReturnFrame serializes properly', () => {

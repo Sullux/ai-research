@@ -262,7 +262,7 @@ pub const Server = struct {
             defer if (p.len > 0) self.allocator.free(p);
             switch (hdr.opcode) {
                 protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
-                protocol.OP_RESUME => try self.handleResume(hdr.msg_id, &async_writer),
+                protocol.OP_RESUME => try self.handleResume(hdr.msg_id, p, &async_writer),
                 protocol.OP_TOOL_RETURN => try self.handleToolReturn(hdr.msg_id, p, &async_writer),
                 protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
                 protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),

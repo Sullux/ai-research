@@ -572,6 +572,39 @@ const main = () => {
         const interruptNudge = formatNotificationInterrupt(topInterrupt)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
+      } else if (isThinking && typeof client.probe === 'function') {
+        const prompt = [
+          'Autonomic Reasoning Assessment',
+          'Evaluate whether the thoughts generated so far are sufficient to deliver the response to the user, or if further reasoning is needed:',
+          '0: Reasoning sufficient, deliver response now',
+          '1: Further reasoning needed',
+          'Decision:',
+        ].join('\n')
+        client.probe(prompt, ['0', '1'], 1)
+          .then((res) => {
+            const isSufficient = res.winningIdx === 0 && res.confidence >= 0.80
+            const confPct = res.confidence != null ? (res.confidence * 100).toFixed(1) : '?'
+            if (isSufficient) {
+              store.addStreamEntry({
+                type: 'notice',
+                title: '⚡ THINKING CAPPED',
+                content: `Sufficient reasoning reached (${confPct}% confidence >= 80%). Transitioning to response.`,
+              })
+              store.flushActiveThought()
+              isThinking = false
+              store.setGenerating(true)
+              client.sendResume({ closeThought: true })
+            } else {
+              store.setGenerating(true)
+              client.sendResume()
+            }
+            requestRedraw()
+          })
+          .catch((_) => {
+            store.setGenerating(true)
+            client.sendResume()
+            requestRedraw()
+          })
       } else {
         // No new unserviced interruption: seamless autonomous continuation via binary protocol
         store.setGenerating(true)

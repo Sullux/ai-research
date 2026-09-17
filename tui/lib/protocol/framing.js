@@ -125,7 +125,13 @@ const snapshotLoadFrame = (snapPath, msgId = 1) => {
   return Buffer.concat([hdr, pathBytes])
 }
 
-const resumeFrame = (msgId = 1) => headerBuffer(OP_RESUME, msgId, 0)
+const resumeFrame = (msgId = 1, action = 0) => {
+  if (!action) return headerBuffer(OP_RESUME, msgId, 0)
+  const buf = Buffer.alloc(17)
+  headerBuffer(OP_RESUME, msgId, 1).copy(buf, 0)
+  buf[16] = action
+  return buf
+}
 
 const probeAutonomicFrame = (
   prompt,

@@ -41,6 +41,9 @@ pub const INPUT_FLAG_DIRECT: u8 = 0x01; // Direct response (bypass thinking)
 pub const INPUT_FLAG_REASON: u8 = 0x02; // Explicit thinking pass requested
 pub const INPUT_FLAG_RAW: u8 = 0x80;    // Raw stream (bypass server-side turn templating)
 
+pub const RESUME_ACTION_CONTINUE: u8 = 0x00;
+pub const RESUME_ACTION_CLOSE_THOUGHT: u8 = 0x01;
+
 pub const TOKEN_TYPE_TEXT: u8 = 0x00;
 pub const TOKEN_TYPE_AUDIO: u8 = 0x01;
 pub const TOKEN_TYPE_IMAGE: u8 = 0x02;
