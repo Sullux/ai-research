@@ -2,8 +2,10 @@
 # yarn lockfile v1
 
 
-"@sullux/markdown-compiler@file:../../markdown/packages/markdown-compiler":
-  version "1.0.0"
+"@sullux/markdown-compiler@^1.0.1":
+  version "1.0.1"
+  resolved "https://registry.yarnpkg.com/@sullux/markdown-compiler/-/markdown-compiler-1.0.1.tgz#2f7f9ba3f901a017c3b1b9a7ad7bc9fe582a0817"
+  integrity sha512-ytpdd7V7cchvq2phom7BEwkq3zoW/WUc4X1Iz1fJ0YE0YOrzoip5Jnvs7NExiH8cxfpf42op73c15nvWovl55A==
 
 "@sullux/tui@file:../../tui":
   version "1.0.2"

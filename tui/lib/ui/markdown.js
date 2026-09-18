@@ -32,7 +32,9 @@ const mapBlocks = (blocks = [], node = {}) => {
       const bulletStyle = { ...base, ...(node.bullet || { bold: true }) }
       const items = (b.items || []).flatMap((kids, i) => {
         const indent = ' '.repeat(2 + (kids.depth || 0) * 2)
-        const prefix = isOrd ? `${indent}${i + 1}. ` : `${indent}• `
+        const isItemOrd = kids.listType ? kids.listType === 'ordered' : isOrd
+        const itemNum = kids.order != null ? kids.order : (i + 1)
+        const prefix = isItemOrd ? `${indent}${itemNum}. ` : `${indent}• `
         return [
           { ...bulletStyle, text: prefix },
           ...mapInlines(kids, base, node),
