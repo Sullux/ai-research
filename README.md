@@ -1,3 +1,9 @@
+**WE HAVE MOVED**
+
+This repo will no longer be maintained. The new repo is at [github.com/sullux/channel](https://github.com/sullux/channel).
+
+Official documentation at [sullux.com/projects/channel](https://sullux.com/projects/channel).
+
 # Channel Inference Engine
 
 A high-performance continuous streaming inference engine with autonomic reflexes, written in pure Zig for Google's Gemma 4 models (`gemma-4-E2B` and `gemma-4-12B-it`).
