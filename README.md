@@ -10,6 +10,8 @@ A high-performance continuous streaming inference engine with autonomic reflexes
 
 Full architectural specifications, foundations, and API references are organized in the [`docs/`](docs/) directory:
 
+* **[Quick Start Guide](docs/quick-start.md)**: Fast track installation, prerequisites, and running the reference TUI or CLI in minutes.
+
 ### Foundations
 * **[The Problem Space](docs/foundations/problem.md)**: Four fundamental bottlenecks of modern LLMs (streaming, learning, memory, and the multi-second tool-use tax).
 * **[Model Selection](docs/foundations/model-selection.md)**: Comparative analysis of Gemma 4 variants and why 12B Unified was selected.
@@ -22,12 +24,14 @@ Full architectural specifications, foundations, and API references are organized
 * **[Physical KV Ring Buffer](docs/architecture/ring-buffer.md)**: Fixed 4,096-slot geometry, Tier 1 anchors, sliding FIFO ring, and micro-turn semantic boundaries.
 * **[Streaming Transduction](docs/architecture/streaming.md)**: Continuous 512-byte pull-streams, elastic syntactic unit gating (`STOP_ELASTIC_YIELD`), and in-flight barge-in recovery.
 * **[Zero-Copy Snapshots](docs/architecture/snapshots.md)**: Compacted working state snapshots, non-blocking 1MB buffered I/O, and warm boot recovery.
-* **[Client & Agent Runtime](docs/architecture/clients.md)**: Unix-style Virtual File Subsystem (VFS), async detached `cmd` subshells, persistent `trm` PTY sessions, and LIFO interrupt queue.
+* **[Reference TUI Architecture](docs/architecture/tui.md)**: Production-grade reference agent implementation showcasing zero-markup YAML controllers, Markdown AST rendering, VFS storage, and LIFO interrupts.
 
-### API & Reference
+### API & Client Integration
+* **[Command Line Interface (CLI)](docs/api/cli.md)**: Comprehensive CLI reference, operational modes, and runtime flags.
 * **[Binary Wire Protocol](docs/api/binary-protocol.md)**: 16-byte fixed framing, opcodes `0x0001`–`0x010C`, UMA sync, and full-duplex communication over STDIN/STDOUT.
-* **[Engineering Log](docs/reference/engineering.md)**: Authoritative record of system invariants, GPU kernel guidelines, and historical post-mortems.
-* **[Research Milestones](docs/reference/next.md)**: Strategic roadmap and forward-looking research milestones.
+* **[Client Implementation Guide](docs/api/client-guide.md)**: Architectural guide for building custom clients (robotics, cloud microservices, voice agents) on Channel.
+
+### Reference
 
 ---
 

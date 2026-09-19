@@ -1,6 +1,7 @@
 # Table of Contents
 
 * [Introduction](README.md)
+* [Quick Start](quick-start.md)
 
 ## Foundations
 
@@ -10,19 +11,21 @@
 
 ## Architecture
 
-* [Overview](architecture/README.md)
+* [Overview & Dual-Plane Hub](architecture/README.md)
 * [Autonomic Reflex Plane](architecture/autonomic.md)
 * [Episodic Memory & Recall](architecture/memory.md)
 * [Physical KV Ring Buffer](architecture/ring-buffer.md)
 * [Streaming Transduction](architecture/streaming.md)
-* [Zero-Copy Snapshots](architecture/snapshots.md)
-* [Client & Agent Runtime](architecture/clients.md)
+* [Zero-Copy Working Snapshots](architecture/snapshots.md)
+* [Reference TUI Architecture](architecture/tui.md)
 
-## API Reference
+## API & Client Integration
 
+* [Command Line Interface (CLI)](api/cli.md)
 * [Binary Wire Protocol](api/binary-protocol.md)
+* [Client Implementation Guide](api/client-guide.md)
 
 ## Reference
 
-* [Engineering Invariants](reference/engineering.md)
-* [Research Milestones](reference/next.md)
+* [Engineering Log & Invariants](reference/engineering.md)
+* [Milestones & Research Horizons](reference/next.md)

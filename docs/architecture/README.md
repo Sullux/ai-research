@@ -45,8 +45,11 @@ Replaces turn-based batch prefill and decode with continuous, pull-stream ingest
 ### 5. [Zero-Copy Working State Snapshots](snapshots.md)
 Enables instantaneous session pause, resume, and checkpointing. Active KV cache slots are compacted into a single contiguous binary slab alongside logical clock and anchor metadata, writing to disk asynchronously in a background thread with 1MB buffered I/O, completing checkpoints in ~5ms without blocking active decode.
 
-### 6. [Client Runtime & Agent Integration](clients.md)
-Details how host runtimes, interactive TUIs, and agent loops consume Channel. Covers the Unix-style Virtual File Subsystem (VFS), bounded 512-character reading slices, asynchronous subshell execution (`cmd`) with inline vs detached spillover, persistent multi-terminal sessions (`trm`), and the LIFO interrupt queue.
+### 6. [Reference TUI Architecture](tui.md)
+A production-grade reference implementation showing how to construct an autonomous, multi-channel agent on Channel. Demonstrates zero-markup declarative UI patterns, Markdown AST rendering via `@sullux/markdown-compiler`, a Unix-style Virtual File Subsystem (VFS) with `chmod 0444` user turn sealing, bounded 512-character reading slices, asynchronous subshell execution (`cmd`), persistent terminal sessions (`trm`), and a LIFO interrupt controller.
 
-### 7. [Binary Wire Protocol](../api/binary-protocol.md)
-The model-agnostic binary communication layer between the Cognitive Mind and Tensor Brainstem. Operates over a fixed 16-byte header with big-endian opcodes, decoupling all model-specific tokens (`<|turn>`, `<|channel>`) from the client runtime.
+### 7. [Client Implementation Guide](../api/client-guide.md)
+Architectural guide for building any host harness or agent runtime (robotics, cloud microservices, voice agents) that drives Channel over its binary wire protocol.
+
+### 8. [Binary Wire Protocol](../api/binary-protocol.md)
+The model-agnostic binary communication layer between host applications and the Tensor Brainstem. Operates over a fixed 16-byte header with big-endian opcodes, decoupling all model-specific tokens (`<|turn>`, `<|channel>`) from the client runtime.

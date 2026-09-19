@@ -41,9 +41,14 @@ Unlike traditional turn-based inference servers (e.g. Ollama, llama.cpp, vLLM) t
 
 ## Documentation Roadmap
 
+* **[Quick Start Guide](quick-start.md)**: Fast track installation, prerequisites, and running the reference TUI or CLI in minutes.
 * **[Foundations](foundations/problem.md)**: Explore the motivation behind Channel—context window saturation, prefill latency, and the LLM tool-calling tax.
 * **[Model Selection](foundations/model-selection.md)**: Why Gemma 4 (E2B and 12B-it) was chosen as the architectural baseline.
 * **[Philosophy & Approach](foundations/approach.md)**: Core design principles—local-first, minimal dependencies, and hardware parity.
 * **[Architecture Hub](architecture/README.md)**: Deep dive into the Dual-Plane system, memory topology, and streaming pipelines.
+* **[Reference TUI Architecture](architecture/tui.md)**: Production-grade reference agent implementation showcasing zero-markup YAML controllers, Markdown AST rendering, VFS storage, and LIFO interrupts.
+* **[Command Line Interface (CLI)](api/cli.md)**: Exhaustive reference for command-line arguments, operational modes, and environment variables.
 * **[Binary Wire Protocol](api/binary-protocol.md)**: Complete byte-level reference for the 16-byte framing protocol and opcodes.
+* **[Client Implementation Guide](api/client-guide.md)**: Architectural guide for building custom clients (robotics, cloud microservices, voice agents) on Channel.
 * **[Engineering Log](reference/engineering.md)**: Authoritative record of system invariants, architectural decisions, and historical post-mortems.
+* **[Research Milestones](reference/next.md)**: Strategic implementation roadmap and future research horizons.
