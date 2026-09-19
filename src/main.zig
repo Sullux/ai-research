@@ -46,7 +46,31 @@ pub fn main() !void {
     var arg_idx: usize = 1;
     while (arg_idx < args.len) : (arg_idx += 1) {
         const arg = args[arg_idx];
-        if ((std.mem.eql(u8, arg, "--model") or std.mem.eql(u8, arg, "-m")) and arg_idx + 1 < args.len) { model_dir = args[arg_idx + 1]; arg_idx += 1;
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            try stdout.print(
+                \\Usage: infer [OPTIONS] [PROMPT...]
+                \\Options:
+                \\  -m, --model <path>             Model directory (default: ../gemma-4-E2B)
+                \\  -n, --max-tokens <N>           Max tokens to generate (default: 128)
+                \\      --gpu                      Enable Vulkan GPU compute (BF16)
+                \\      --q4, --mixed              Enable GPU Q4_0 acceleration
+                \\      --q8                       Enable GPU Q8_0 acceleration
+                \\      --quant <q4|q8|none>       Select quantization mode
+                \\      --serve                    Run wire-protocol server on STDIN/STDOUT
+                \\      --bench                    Run GPU throughput benchmark
+                \\      --anchors <N>              Immutable anchor slots (default: 32)
+                \\      --window <N>               Sliding window slots (default: 512)
+                \\      --recall <N>               Dynamic recall slots (default: 96)
+                \\      --memory [<path>]          Enable episodic store (default: .episodic.mem)
+                \\      --mem-capacity <N>         Episodic memory capacity (default: 64)
+                \\      --no-memory                Disable episodic memory
+                \\      --quiescence               Enable quiescence gating
+                \\      --quiescence-threshold <F> Set quiescence threshold (default: 0.001)
+                \\  -h, --help                     Show this help and exit
+                \\
+            , .{});
+            return;
+        } else if ((std.mem.eql(u8, arg, "--model") or std.mem.eql(u8, arg, "-m")) and arg_idx + 1 < args.len) { model_dir = args[arg_idx + 1]; arg_idx += 1;
         } else if ((std.mem.eql(u8, arg, "--max-tokens") or std.mem.eql(u8, arg, "-n")) and arg_idx + 1 < args.len) { max_tokens = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 128; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--anchors") and arg_idx + 1 < args.len) { num_anchors = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 32; arg_idx += 1;
         } else if (std.mem.eql(u8, arg, "--window") and arg_idx + 1 < args.len) { window_size = std.fmt.parseInt(usize, args[arg_idx + 1], 10) catch 512; arg_idx += 1;

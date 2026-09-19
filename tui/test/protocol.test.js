@@ -11,15 +11,8 @@ const {
   snapshotLoadFrame,
   resumeFrame,
   toolReturnFrame,
-  taskTriageFrame,
-  readStreamOpenFrame,
-  readStreamCloseFrame,
-  backlogTriageFrame,
-  taskTitleFrame,
-  parseEventRouted,
-  parseReadStreamStatus,
-  parseBacklogRouted,
-  parseTaskTitleResult,
+  probeAutonomicFrame,
+  parseAutonomicResult,
   pingFrame,
   parsedFrame,
 } = require('../lib/protocol/framing')
@@ -34,13 +27,16 @@ const {
   OP_SNAPSHOT_SAVE,
   OP_SNAPSHOT_LOAD,
   OP_RESUME,
+  RESUME_ACTION_CLOSE_THOUGHT,
   OP_TASK_TRIAGE,
   OP_READ_STREAM_OPEN,
   OP_READ_STREAM_CLOSE,
   OP_BACKLOG_TRIAGE,
   OP_TASK_TITLE,
+  OP_PROBE_AUTONOMIC,
   OP_BACKLOG_ROUTED,
   OP_TASK_TITLE_RESULT,
+  OP_AUTONOMIC_RESULT,
   BACKLOG_ACTION_ACK,
   READ_STATUS_CHUNK,
   OP_PING,
@@ -86,15 +82,16 @@ test('memCommitFrame serializes commit opcode properly', () => {
 })
 
 test('configFrame serializes penalty and runtime options properly', () => {
-  const frame = configFrame(512, 0.7, 0.95, 0.001, 256, 0.05, 1.15, 64, 0.2, 0.3, 11)
+  const frame = configFrame(512, 0.7, 0.95, 0.001, 256, 0.05, 1.15, 64, 0.2, 0.3, true, 11)
   const parsed = parsedFrame(frame)
   assert.notStrictEqual(parsed, null)
   assert.strictEqual(parsed.header.msgId, 11)
   assert.strictEqual(parsed.header.opcode, OP_SET_CONFIG)
-  assert.strictEqual(parsed.payload.length, 40)
+  assert.strictEqual(parsed.payload.length, 41)
   assert.strictEqual(parsed.payload.readUInt32LE(0), 512)
   assert.strictEqual(parsed.payload.readUInt32LE(16), 256)
   assert.strictEqual(parsed.payload.readUInt32LE(28), 64)
+  assert.strictEqual(parsed.payload.readUInt8(40), 1)
 })
 
 test('snapshotSaveFrame and snapshotLoadFrame serialize properly', () => {
@@ -119,6 +116,15 @@ test('resumeFrame serializes properly with zero-length payload', () => {
   assert.strictEqual(parsed.payload.length, 0)
 })
 
+test('resumeFrame serializes properly with action payload', () => {
+  const frame = resumeFrame(9, RESUME_ACTION_CLOSE_THOUGHT)
+  const parsed = parsedFrame(frame)
+  assert.strictEqual(parsed.header.opcode, OP_RESUME)
+  assert.strictEqual(parsed.header.msgId, 9)
+  assert.strictEqual(parsed.header.payloadLen, 1)
+  assert.strictEqual(parsed.payload[0], RESUME_ACTION_CLOSE_THOUGHT)
+})
+
 test('toolReturnFrame serializes properly', () => {
   const frame = toolReturnFrame('ack', { status: 'ok' }, 7, 0, 12)
   const parsed = parsedFrame(frame)
@@ -137,89 +143,27 @@ test('parsedFrame handles incomplete buffers gracefully', () => {
   assert.strictEqual(parsedFrame(partial), null)
 })
 
-test('taskTriageFrame serializes candidate tasks and event text', () => {
-  const tasks = [
-    { id: 1, title: 'Refactor parser' },
-    { id: 2, title: 'Analyze memory dump' },
-  ]
-  const frame = taskTriageFrame(105, tasks, 'No Python please', 14)
+test('probeAutonomicFrame and parseAutonomicResult serialize and unpack properly', () => {
+  const frame = probeAutonomicFrame('I should', ['wait', 'read'], 1, 0.75, 22)
   const parsed = parsedFrame(frame)
-  assert.strictEqual(parsed.header.opcode, OP_TASK_TRIAGE)
-  assert.strictEqual(parsed.header.msgId, 14)
-  assert.strictEqual(parsed.payload.readUInt16LE(0), 105) // eventId
-  assert.strictEqual(parsed.payload.readUInt16LE(2), 2) // numTasks
-})
+  assert.strictEqual(parsed.header.opcode, OP_PROBE_AUTONOMIC)
+  assert.strictEqual(parsed.header.msgId, 22)
+  assert.strictEqual(parsed.payload.readUInt16LE(0), 1) // maxDecodeTokens
+  assert.strictEqual(parsed.payload.readUInt16LE(2), 2) // candidateCount
+  assert.ok(Math.abs(parsed.payload.readFloatLE(4) - 0.75) < 0.001) // minCertainty
 
-test('readStreamOpenFrame and readStreamCloseFrame serialize properly', () => {
-  const openBuf = readStreamOpenFrame(3, 1024n, 'src/main.zig', 15)
-  const parsedOpen = parsedFrame(openBuf)
-  assert.strictEqual(parsedOpen.header.opcode, OP_READ_STREAM_OPEN)
-  assert.strictEqual(parsedOpen.header.msgId, 15)
-  assert.strictEqual(parsedOpen.payload.readUInt16LE(0), 3) // taskId
-  assert.strictEqual(parsedOpen.payload.readBigUInt64LE(2), 1024n) // offset
-  const pathLen = parsedOpen.payload.readUInt16LE(10)
-  assert.strictEqual(parsedOpen.payload.subarray(12, 12 + pathLen).toString('utf-8'), 'src/main.zig')
+  const resultBuf = Buffer.alloc(16 + 8)
+  resultBuf.writeUInt16LE(1, 0) // winningIdx
+  resultBuf.writeFloatLE(0.88, 2) // confidence
+  resultBuf.writeFloatLE(0.25, 6) // entropy
+  resultBuf.writeFloatLE(15.4, 10) // costMs
+  resultBuf.writeUInt16LE(8, 14) // textLen
+  Buffer.from('finished', 'utf-8').copy(resultBuf, 16)
 
-  const closeBuf = readStreamCloseFrame(3, 16)
-  const parsedClose = parsedFrame(closeBuf)
-  assert.strictEqual(parsedClose.header.opcode, OP_READ_STREAM_CLOSE)
-  assert.strictEqual(parsedClose.header.msgId, 16)
-  assert.strictEqual(parsedClose.payload.readUInt16LE(0), 3)
-})
-
-test('parseEventRouted and parseReadStreamStatus unpack binary payloads', () => {
-  const routedBuf = Buffer.alloc(6)
-  routedBuf.writeUInt16LE(105, 0)
-  routedBuf.writeUInt16LE(2, 2)
-  routedBuf.writeUInt8(0, 4) // isNewTask = false
-  const routed = parseEventRouted(routedBuf)
-  assert.strictEqual(routed.eventId, 105)
-  assert.strictEqual(routed.taskId, 2)
-  assert.strictEqual(routed.isNewTask, false)
-
-  const statusBuf = Buffer.alloc(16)
-  statusBuf.writeUInt16LE(4, 0) // taskId
-  statusBuf.writeUInt8(READ_STATUS_CHUNK, 2) // status
-  statusBuf.writeUInt32LE(512, 4) // bytesRead
-  statusBuf.writeBigUInt64LE(2048n, 8) // newOffset
-  const status = parseReadStreamStatus(statusBuf)
-  assert.strictEqual(status.taskId, 4)
-  assert.strictEqual(status.status, READ_STATUS_CHUNK)
-  assert.strictEqual(status.bytesRead, 512)
-  assert.strictEqual(status.newOffset, 2048n)
-})
-
-test('backlogTriageFrame and parseBacklogRouted serialize and unpack properly', () => {
-  const frame = backlogTriageFrame(102, 'Summarize large file', 17)
-  const parsed = parsedFrame(frame)
-  assert.strictEqual(parsed.header.opcode, OP_BACKLOG_TRIAGE)
-  assert.strictEqual(parsed.header.msgId, 17)
-  assert.strictEqual(parsed.payload.readUInt16LE(0), 102) // eventId
-  const titleLen = parsed.payload.readUInt16LE(2)
-  assert.strictEqual(parsed.payload.subarray(4, 4 + titleLen).toString('utf-8'), 'Summarize large file')
-
-  const routedBuf = Buffer.alloc(4)
-  routedBuf.writeUInt16LE(102, 0)
-  routedBuf.writeUInt8(BACKLOG_ACTION_ACK, 2)
-  const routed = parseBacklogRouted(routedBuf)
-  assert.strictEqual(routed.eventId, 102)
-  assert.strictEqual(routed.action, BACKLOG_ACTION_ACK)
-})
-
-test('taskTitleFrame and parseTaskTitleResult serialize and unpack properly', () => {
-  const frame = taskTitleFrame(42, 'Summarize large text file', 18)
-  const parsed = parsedFrame(frame)
-  assert.strictEqual(parsed.header.opcode, OP_TASK_TITLE)
-  assert.strictEqual(parsed.header.msgId, 18)
-  assert.strictEqual(parsed.payload.readUInt32LE(0), 42)
-  const promptLen = parsed.payload.readUInt16LE(4)
-  assert.strictEqual(parsed.payload.subarray(6, 6 + promptLen).toString('utf-8'), 'Summarize large text file')
-
-  const resultBuf = Buffer.alloc(6 + 25)
-  resultBuf.writeUInt32LE(42, 0)
-  resultBuf.writeUInt16LE(25, 4)
-  Buffer.from('Summarize large text file', 'utf-8').copy(resultBuf, 6)
-  const result = parseTaskTitleResult(resultBuf)
-  assert.strictEqual(result.taskId, 42)
-  assert.strictEqual(result.title, 'Summarize large text file')
+  const res = parseAutonomicResult(resultBuf)
+  assert.strictEqual(res.winningIdx, 1)
+  assert.ok(Math.abs(res.confidence - 0.88) < 0.001)
+  assert.ok(Math.abs(res.entropy - 0.25) < 0.001)
+  assert.ok(Math.abs(res.costMs - 15.4) < 0.001)
+  assert.strictEqual(res.text, 'finished')
 })

@@ -8,10 +8,9 @@ const getPlanNodes = () => {
   if (plans.length === 0) {
     return [
       {
-        type: 'text',
+        type: 'planItem',
+        itemClass: 'planEmpty',
         text: '  (No active plans. Model idle.)',
-        fg: '#565f89',
-        italic: true,
       },
     ]
   }
@@ -21,39 +20,38 @@ const getPlanNodes = () => {
     const isPlanDone = p.status === 'DONE'
     const planIcon = isPlanDone ? '✅ ' : '📋 '
     nodes.push({
-      type: 'text',
-      text: `${planIcon}Plan ${p.id}: ${p.brief}\n`,
-      bold: true,
-      fg: isPlanDone ? '#9ece6a' : '#7aa2f7',
+      type: 'planItem',
+      itemClass: isPlanDone ? 'planDone' : 'planActive',
       margin: { top: 1, bottom: 0 },
+      text: `${planIcon}Plan ${p.id}: ${p.brief}`,
     })
 
     for (const s of p.steps) {
       let icon = '⬜ '
-      let fg = '#9aa5ce'
+      let itemClass = 'planStepDefault'
       let tag = ''
 
       if (s.status === 'DONE') {
         icon = '✅ '
-        fg = '#73daca'
+        itemClass = 'planStepDone'
       } else if (s.status === 'IN_PROGRESS') {
         icon = '▶ '
-        fg = '#e0af68'
+        itemClass = 'planStepActive'
         tag = ' [ACTIVE]'
       } else if (s.status === 'WAITING_FOR_USER') {
         icon = '⏳ '
-        fg = '#f7768e'
+        itemClass = 'planStepWaiting'
         tag = ' [WAITING]'
       } else if (s.status === 'DEFERRED') {
         icon = '⏱️ '
-        fg = '#bb9af7'
+        itemClass = 'planStepDeferred'
         tag = ` [${s.deferReason || 'timer'}]`
       }
 
       nodes.push({
-        type: 'text',
-        text: `   ${icon}${s.id}: ${s.brief}${tag}\n`,
-        fg,
+        type: 'planItem',
+        itemClass,
+        text: `   ${icon}${s.id}: ${s.brief}${tag}`,
       })
     }
   }

@@ -16,11 +16,23 @@ const refs = {
   vfs: null,
   notManager: null,
   taskManager: null,
+  channelManager: null,
   isEngineReady: true,
   pendingInputTurn: null,
 }
 
-const init = (s, c, sess, orch, tmrs, sysPrompt = '', vfs = null, notManager = null, taskManager = null) => {
+const init = (
+  s,
+  c,
+  sess,
+  orch,
+  tmrs,
+  sysPrompt = '',
+  vfs = null,
+  notManager = null,
+  taskManager = null,
+  channelManager = null,
+) => {
   refs.store = s
   refs.client = c
   refs.session = sess
@@ -31,6 +43,7 @@ const init = (s, c, sess, orch, tmrs, sysPrompt = '', vfs = null, notManager = n
   refs.vfs = vfs
   refs.notManager = notManager
   refs.taskManager = taskManager
+  refs.channelManager = channelManager
   refs.isEngineReady = true
   refs.pendingInputTurn = null
 }

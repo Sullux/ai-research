@@ -1,14 +1,38 @@
 const { spawn } = require('child_process')
 const { EventEmitter } = require('events')
 const {
-  OP_STREAM_CONTENT, OP_STREAM_THOUGHT, OP_TURN_COMPLETE,
+  OP_STREAM_CONTENT,
+  OP_STREAM_THOUGHT,
+  OP_TURN_COMPLETE,
   OP_TOOL_CALL,
-  OP_MEM_RESPONSE, OP_STATUS, OP_SNAPSHOT_STATUS, OP_EVENT_ROUTED, OP_READ_STREAM_STATUS, OP_BACKLOG_ROUTED, OP_TASK_TITLE_RESULT, OP_PONG, OP_ERROR, STATUS_FLAG_SATURATED,
+  OP_MEM_RESPONSE,
+  OP_STATUS,
+  OP_SNAPSHOT_STATUS,
+  OP_AUTONOMIC_RESULT,
+  OP_PONG,
+  OP_ERROR,
+  STATUS_FLAG_SATURATED,
+  INPUT_FLAG_NONE,
+  INPUT_FLAG_DIRECT,
+  INPUT_FLAG_REASON,
+  RESUME_ACTION_CONTINUE,
+  RESUME_ACTION_CLOSE_THOUGHT,
 } = require('../protocol/constants')
 const {
-  streamInputFrame, resumeFrame, abortFrame, memQueryFrame, memCommitFrame, configFrame, shutdownFrame, setSystemFrame,
-  snapshotSaveFrame, snapshotLoadFrame, toolReturnFrame, taskTriageFrame, readStreamOpenFrame, readStreamCloseFrame,
-  backlogTriageFrame, taskTitleFrame, parseEventRouted, parseReadStreamStatus, parseBacklogRouted, parseTaskTitleResult, parsedFrame,
+  streamInputFrame,
+  resumeFrame,
+  abortFrame,
+  memQueryFrame,
+  memCommitFrame,
+  configFrame,
+  shutdownFrame,
+  setSystemFrame,
+  snapshotSaveFrame,
+  snapshotLoadFrame,
+  toolReturnFrame,
+  probeAutonomicFrame,
+  parseAutonomicResult,
+  parsedFrame,
 } = require('../protocol/framing')
 
 const clientFactory = (spawnProc, EmitterClass) => (opts) => {
@@ -17,6 +41,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
   let proc = null
   let rxBuf = Buffer.alloc(0)
   let nextMsgId = 1
+  const pendingProbes = new Map()
 
   const handleFrame = (h, p) => {
     const text = () => p.subarray(24).toString('utf-8').replace(/\u2581/g, ' ')
@@ -45,21 +70,16 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
       const streamId = p.subarray(14, 14 + idLen).toString('utf-8')
       emitter.emit('snapshotStatus', { status, activeSlots, clock, streamId, msgId: h.msgId })
     }
-    else if (h.opcode === OP_EVENT_ROUTED) {
-      const routed = parseEventRouted(p)
-      emitter.emit('eventRouted', { ...routed, msgId: h.msgId })
-    }
-    else if (h.opcode === OP_READ_STREAM_STATUS) {
-      const streamStatus = parseReadStreamStatus(p)
-      emitter.emit('readStreamStatus', { ...streamStatus, msgId: h.msgId })
-    }
-    else if (h.opcode === OP_BACKLOG_ROUTED) {
-      const backlogRouted = parseBacklogRouted(p)
-      emitter.emit('backlogRouted', { ...backlogRouted, msgId: h.msgId })
-    }
-    else if (h.opcode === OP_TASK_TITLE_RESULT) {
-      const titleResult = parseTaskTitleResult(p)
-      if (titleResult) emitter.emit('taskTitleResult', { ...titleResult, msgId: h.msgId })
+    else if (h.opcode === OP_AUTONOMIC_RESULT) {
+      const autonomicResult = parseAutonomicResult(p)
+      if (autonomicResult) {
+        emitter.emit('autonomicResult', { ...autonomicResult, msgId: h.msgId })
+        if (pendingProbes.has(h.msgId)) {
+          const resolver = pendingProbes.get(h.msgId)
+          pendingProbes.delete(h.msgId)
+          resolver(autonomicResult)
+        }
+      }
     }
     else if (h.opcode === OP_MEM_RESPONSE) emitter.emit('memResponse', { count: p.readUInt16LE(0), status: p.readUInt8(2), msgId: h.msgId })
     else if (h.opcode === OP_PONG) emitter.emit('pong', { msgId: h.msgId })
@@ -84,9 +104,12 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     proc.on('error', (err) => emitter.emit('error', { error: err.message }))
   }
 
-  const sendInput = (text) => {
+  const sendInput = (text, opts = {}) => {
     const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(streamInputFrame(text, id))
+    const flags = typeof opts === 'number'
+      ? opts
+      : opts.flags ?? (opts.direct ? INPUT_FLAG_DIRECT : (opts.reason ? INPUT_FLAG_REASON : INPUT_FLAG_NONE))
+    if (proc?.stdin?.writable) proc.stdin.write(streamInputFrame(text, flags, id))
     return id
   }
 
@@ -102,40 +125,26 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     return id
   }
 
-  const sendResume = () => {
+  const sendResume = (opts = {}) => {
     const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(resumeFrame(id))
+    const action = typeof opts === 'number'
+      ? opts
+      : (opts?.closeThought ? RESUME_ACTION_CLOSE_THOUGHT : RESUME_ACTION_CONTINUE)
+    if (proc?.stdin?.writable) proc.stdin.write(resumeFrame(id, action))
     return id
   }
 
-  const sendTaskTriage = (eventId, tasks, eventText) => {
+  const sendProbeAutonomic = (prompt, candidates = [], maxDecodeTokens = 1, minCertainty = 0.6) => {
     const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(taskTriageFrame(eventId, tasks, eventText, id))
+    if (proc?.stdin?.writable) proc.stdin.write(probeAutonomicFrame(prompt, candidates, maxDecodeTokens, minCertainty, id))
     return id
   }
 
-  const sendReadStreamOpen = (taskId, offset, path) => {
-    const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(readStreamOpenFrame(taskId, offset, path, id))
-    return id
-  }
-
-  const sendReadStreamClose = (taskId) => {
-    const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(readStreamCloseFrame(taskId, id))
-    return id
-  }
-
-  const sendBacklogTriage = (eventId, title) => {
-    const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(backlogTriageFrame(eventId, title, id))
-    return id
-  }
-
-  const sendTaskTitle = (taskId, text) => {
-    const id = nextMsgId++
-    if (proc?.stdin?.writable) proc.stdin.write(taskTitleFrame(taskId, text, id))
-    return id
+  const probe = (prompt, candidates = [], maxDecodeTokens = 1, minCertainty = 0.6) => {
+    return new Promise((resolve) => {
+      const id = sendProbeAutonomic(prompt, candidates, maxDecodeTokens, minCertainty)
+      pendingProbes.set(id, resolve)
+    })
   }
 
   const sendAbort = () => {
@@ -181,6 +190,7 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
           o.repeatLastN ?? 64,
           o.frequencyPenalty ?? 0.1,
           o.presencePenalty ?? 0.1,
+          Boolean(o.thinkingGate),
           nextMsgId++,
         ),
       )
@@ -209,11 +219,8 @@ const clientFactory = (spawnProc, EmitterClass) => (opts) => {
     start,
     sendInput,
     sendResume,
-    sendTaskTriage,
-    sendReadStreamOpen,
-    sendReadStreamClose,
-    sendBacklogTriage,
-    sendTaskTitle,
+    sendProbeAutonomic,
+    probe,
     sendSystem,
     sendToolReturn,
     sendSnapshotSave,

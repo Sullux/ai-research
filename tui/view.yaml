@@ -1,6 +1,57 @@
 classes:
   '@theme.yaml:classes': '*'
 
+layouts:
+  markdown: '@markdown:MarkdownControl'
+
+templates:
+  conversationCard:
+    type: layout
+    direction: vertical
+    class: ':itemClass'
+    margin: { top: 0, bottom: 1 }
+    inner:
+      - type: rich
+        inner:
+          - class: ':selectorClass'
+            text: ':selector'
+          - class: 'timestamp'
+            text: ':timestamp'
+          - class: ':headerClass'
+            text: ':header'
+      - type: markdown
+        class: 'markdownBody'
+        text: ':text'
+
+  streamCard:
+    type: layout
+    direction: vertical
+    class: ':itemClass'
+    margin: { top: 0, bottom: 1 }
+    padding: { top: 0, bottom: 0, left: 1, right: 1 }
+    inner:
+      - type: rich
+        inner:
+          - class: ':selectorClass'
+            text: ':selector'
+          - class: 'timestamp'
+            text: ':timestamp'
+          - class: ':headerClass'
+            text: ':title'
+          - class: 'expandHint'
+            text: ':hint'
+          - class: 'expandAction'
+            text: ':hintAction'
+      - type: markdown
+        class: 'markdownBody'
+        text: ':content'
+
+  planItem:
+    type: text
+    class: ':itemClass'
+    margin: ':margin'
+    text: ':text'
+
 type: layout
 direction: vertical
 width: fill

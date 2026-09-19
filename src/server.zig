@@ -5,112 +5,125 @@ const ring_buffer = @import("ring_buffer.zig");
 const tokenizer = @import("tokenizer.zig");
 const memory = @import("memory.zig");
 const storage = @import("storage.zig");
-const snapshot = @import("snapshot.zig");
 const quiescence = @import("quiescence.zig");
 const hippocampus = @import("hippocampus.zig");
 const server_queue = @import("server_queue.zig");
 const gpu = @import("gpu.zig");
 const sampler = @import("sampler.zig");
 
-const PrefillProgress = struct {
-    w: *server_queue.AsyncWriter, msg_id: u16, slots: u16, diff_count: u16, base_tok: u32, chunk_tok: u32, total_tok: u32, is_gpu: u8, flags: u16, start_time: i64,
-    fn cb(layer_idx: usize, total_layers: usize, ctx_ptr: ?*anyopaque) void {
-        const ptr: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
-        const el = @max(1, std.time.milliTimestamp() - ptr.start_time);
-        const chunk_prog: u32 = @intCast((layer_idx * ptr.chunk_tok) / total_layers);
-        const tok_prog: u32 = @min(ptr.total_tok, ptr.base_tok + chunk_prog);
-        const tok_sec = (@as(f32, @floatFromInt(tok_prog)) / @as(f32, @floatFromInt(el))) * 1000.0;
-        protocol.writeStatus(ptr.w, ptr.msg_id, protocol.STATUS_ENCODING, tok_sec, ptr.slots, ptr.diff_count, tok_prog, ptr.total_tok, ptr.is_gpu, ptr.flags) catch {};
-        ptr.w.flush();
-    }
-};
-
-const SyntaxTracker = struct {
-    in_code_fence: bool = false,
-    in_inline_code: bool = false,
-    in_double_quote: bool = false,
-    paren_depth: u32 = 0,
-    brace_depth: u32 = 0,
-    bracket_depth: u32 = 0,
-
-    pub fn reset(self: *SyntaxTracker) void {
-        self.in_code_fence = false;
-        self.in_inline_code = false;
-        self.in_double_quote = false;
-        self.paren_depth = 0;
-        self.brace_depth = 0;
-        self.bracket_depth = 0;
-    }
-
-    pub fn ingestChunk(self: *SyntaxTracker, chunk: []const u8) void {
-        var i: usize = 0;
-        while (i < chunk.len) {
-            const ch = chunk[i];
-            if (i + 3 <= chunk.len and std.mem.eql(u8, chunk[i .. i + 3], "```")) {
-                self.in_code_fence = !self.in_code_fence;
-                i += 3;
-                continue;
-            }
-            if (ch == '`' and !self.in_code_fence) {
-                self.in_inline_code = !self.in_inline_code;
-                i += 1;
-                continue;
-            }
-            if (self.in_code_fence or self.in_inline_code) {
-                i += 1;
-                continue;
-            }
-
-            if (ch == '"') {
-                self.in_double_quote = !self.in_double_quote;
-            } else if (ch == '(') {
-                self.paren_depth += 1;
-            } else if (ch == ')' and self.paren_depth > 0) {
-                self.paren_depth -= 1;
-            } else if (ch == '{') {
-                self.brace_depth += 1;
-            } else if (ch == '}' and self.brace_depth > 0) {
-                self.brace_depth -= 1;
-            } else if (ch == '[') {
-                self.bracket_depth += 1;
-            } else if (ch == ']' and self.bracket_depth > 0) {
-                self.bracket_depth -= 1;
-            }
-            i += 1;
-        }
-    }
-
-    pub fn isAtRest(self: *const SyntaxTracker) bool {
-        return !self.in_code_fence and
-            !self.in_inline_code and
-            !self.in_double_quote and
-            self.paren_depth == 0 and
-            self.brace_depth == 0 and
-            self.bracket_depth == 0;
-    }
-};
+pub const template_state = @import("server/template_state.zig");
+pub const TemplateState = template_state.TemplateState;
+pub const syntax_tracker = @import("server/syntax_tracker.zig");
+pub const SyntaxTracker = syntax_tracker.SyntaxTracker;
+pub const tool_format = @import("server/tool_format.zig");
+pub const snapshot_handler = @import("server/snapshot_handler.zig");
+pub const autonomic = @import("server/autonomic.zig");
+pub const AutonomicProbeResult = autonomic.AutonomicProbeResult;
+pub const prefill = @import("server/prefill.zig");
+pub const decode = @import("server/decode.zig");
+pub const stream_handler = @import("server/stream_handler.zig");
 
 pub const Server = struct {
-    allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, thread_pool: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, thinking_budget: usize = 512, top_p: f32 = 0.95, temp: f32 = 0.7, repeat_last_n: usize = 64, sampler: sampler.Sampler, q_tracker: quiescence.QuiescenceTracker, hippo: ?hippocampus.Hippocampus = null, clock: usize = 0, is_aborted: std.atomic.Value(bool), in_thinking_channel: bool = false, gpu_opt: ?*gpu.model_gpu.GpuModelContext, last_snapshot_clock: ?usize = null, last_yield_token: ?u32 = null, turn_open: bool = false, out_queue: ?*server_queue.OutboundQueue = null, is_saving_snapshot: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    allocator: std.mem.Allocator,
+    m: *const model.Model,
+    ring: *ring_buffer.DynamicRingBuffer,
+    tok: *const tokenizer.Tokenizer,
+    archive: ?*memory.DiffArchive,
+    store: ?*storage.PersistentDiffStore,
+    scratch: *model.ForwardScratch,
+    thread_pool: ?*std.Thread.Pool,
+    config: model.ModelConfig,
+    max_tokens: usize,
+    thinking_budget: usize = 512,
+    top_p: f32 = 0.95,
+    temp: f32 = 0.7,
+    repeat_last_n: usize = 64,
+    sampler: sampler.Sampler,
+    q_tracker: quiescence.QuiescenceTracker,
+    hippo: ?hippocampus.Hippocampus = null,
+    clock: usize = 0,
+    is_aborted: std.atomic.Value(bool),
+    in_thinking_channel: bool = false,
+    gpu_opt: ?*gpu.model_gpu.GpuModelContext,
+    last_snapshot_clock: ?usize = null,
+    last_yield_token: ?u32 = null,
+    turn_open: bool = false,
+    template_state: TemplateState = .idle_between_turns,
+    out_queue: ?*server_queue.OutboundQueue = null,
+    is_saving_snapshot: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    thinking_gate: bool = false,
+    force_reasoning: bool = false,
+
+    pub const prefillTokens = prefill.prefillTokens;
+    pub const handleSetSystem = prefill.handleSetSystem;
+    pub const decodeResponse = decode.decodeResponse;
+    pub const advanceToken = decode.advanceToken;
+    pub const probeAutonomic = autonomic.probeAutonomic;
+    pub const shouldBypassThinking = autonomic.shouldBypassThinking;
+    pub const handleProbeAutonomic = autonomic.handleProbeAutonomic;
+    pub const handleSnapshotSave = snapshot_handler.handleSnapshotSave;
+    pub const handleSnapshotLoad = snapshot_handler.handleSnapshotLoad;
+    pub const handleStreamInput = stream_handler.handleStreamInput;
+    pub const handleResume = stream_handler.handleResume;
+    pub const handleToolReturn = stream_handler.handleToolReturn;
+    pub const parseTokens = stream_handler.parseTokens;
 
     pub fn init(allocator: std.mem.Allocator, m: *const model.Model, ring: *ring_buffer.DynamicRingBuffer, tok: *const tokenizer.Tokenizer, archive: ?*memory.DiffArchive, store: ?*storage.PersistentDiffStore, scratch: *model.ForwardScratch, tp: ?*std.Thread.Pool, config: model.ModelConfig, max_tokens: usize, q_thresh: f32, gpu_opt: ?*gpu.model_gpu.GpuModelContext) !Server {
-        @memset(scratch.x, 0.0); @memset(scratch.logits, 0.0); @memset(ring.k, 0.0); @memset(ring.v, 0.0);
+        @memset(scratch.x, 0.0);
+        @memset(scratch.logits, 0.0);
+        @memset(ring.k, 0.0);
+        @memset(ring.v, 0.0);
         if (gpu_opt) |g| {
-            @memset(g.buf_logits.asSlice(f32), 0.0); @memset(g.buf_x.asSlice(f32), 0.0);
-            if (g.batch_prefill_ctx) |bp| { @memset(bp.buf_x.asSlice(f32), 0.0); @memset(bp.buf_normed_x.asSlice(f32), 0.0); }
+            @memset(g.buf_logits.asSlice(f32), 0.0);
+            @memset(g.buf_x.asSlice(f32), 0.0);
+            if (g.batch_prefill_ctx) |bp| {
+                @memset(bp.buf_x.asSlice(f32), 0.0);
+                @memset(bp.buf_normed_x.asSlice(f32), 0.0);
+            }
         }
         var hippo_inst: ?hippocampus.Hippocampus = null;
         if (archive != null or store != null) {
             const kv_dim = @max(config.head_dim, config.global_head_dim) * @max(config.num_key_value_heads, config.num_global_key_value_heads);
             hippo_inst = try hippocampus.Hippocampus.init(allocator, config.hidden_size, 64, 6000, config.num_hidden_layers, kv_dim);
         }
-        return .{ .allocator = allocator, .m = m, .ring = ring, .tok = tok, .archive = archive, .store = store, .scratch = scratch, .thread_pool = tp, .config = config, .max_tokens = max_tokens, .thinking_budget = 512, .temp = 0.7, .top_p = 0.95, .repeat_last_n = 64, .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95), .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers), .hippo = hippo_inst, .is_aborted = std.atomic.Value(bool).init(false), .gpu_opt = gpu_opt, .last_snapshot_clock = null, .last_yield_token = null, .turn_open = false };
+        return .{
+            .allocator = allocator,
+            .m = m,
+            .ring = ring,
+            .tok = tok,
+            .archive = archive,
+            .store = store,
+            .scratch = scratch,
+            .thread_pool = tp,
+            .config = config,
+            .max_tokens = max_tokens,
+            .thinking_budget = 512,
+            .temp = 0.7,
+            .top_p = 0.95,
+            .repeat_last_n = 64,
+            .sampler = sampler.Sampler.init(@intCast(@max(1, std.time.nanoTimestamp())), 0.7, 0.95),
+            .q_tracker = quiescence.QuiescenceTracker.init(.{ .enabled = q_thresh > 0.0, .threshold = q_thresh }, config.num_hidden_layers),
+            .hippo = hippo_inst,
+            .is_aborted = std.atomic.Value(bool).init(false),
+            .gpu_opt = gpu_opt,
+            .last_snapshot_clock = null,
+            .last_yield_token = null,
+            .turn_open = false,
+            .thinking_gate = false,
+            .force_reasoning = false,
+            .template_state = .idle_between_turns,
+        };
     }
+
     pub fn deinit(self: *Server) void {
         if (self.hippo) |*h| h.deinit();
     }
-    inline fn slots(self: *Server) u16 { return @intCast(self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots)); }
-    inline fn statusFlags(self: *Server) u16 {
+
+    pub inline fn slots(self: *Server) u16 {
+        return @intCast(self.ring.getActiveSlots(0, self.clock, self.scratch.active_slots));
+    }
+
+    pub inline fn statusFlags(self: *Server) u16 {
         var flags: u16 = 0;
         if (self.ring.isWorkingSetSaturated(0.85, 0.35)) {
             flags |= protocol.STATUS_FLAG_SATURATED;
@@ -118,80 +131,11 @@ pub const Server = struct {
         return flags;
     }
 
-    pub fn run(self: *Server, reader: anytype, writer: anytype) !void {
-        var in_queue = server_queue.MessageQueue.init(self.allocator); defer in_queue.deinit();
-        var out_queue = try server_queue.OutboundQueue.init(self.allocator); defer out_queue.deinit();
-
-        const WriterThread = struct {
-            fn run(q: *server_queue.OutboundQueue, w: @TypeOf(writer)) void {
-                var chunk_buf: [16384]u8 = undefined;
-                while (true) {
-                    const n = q.readChunk(&chunk_buf);
-                    if (n == 0) break;
-                    w.writeAll(chunk_buf[0..n]) catch break;
-                }
-            }
-        };
-        var w_thread = try std.Thread.spawn(.{}, WriterThread.run, .{ &out_queue, writer });
-        defer { out_queue.close(); w_thread.join(); }
-
-        var async_writer = server_queue.AsyncWriter.init(&out_queue, self.allocator);
-        defer async_writer.deinit();
-
-        self.out_queue = &out_queue;
-        defer {
-            while (self.is_saving_snapshot.load(.monotonic)) std.time.sleep(10 * std.time.ns_per_ms);
-            self.out_queue = null;
-        }
-
-        try protocol.writeStatus(&async_writer, 0, protocol.STATUS_IDLE, 0.0, 0, 0, 0, 0, if (self.gpu_opt != null) 1 else 0, 0);
-        async_writer.flush();
-
-        const ReaderThread = struct {
-            fn run(q: *server_queue.MessageQueue, r: @TypeOf(reader), aborted: *std.atomic.Value(bool)) void {
-                defer q.close();
-                while (true) {
-                    const hdr = protocol.readHeader(r) catch break;
-                    if (hdr.opcode == protocol.OP_ABORT) { aborted.store(true, .seq_cst); continue; }
-                    var p: []u8 = &.{};
-                    if (hdr.payload_len > 0) {
-                        p = q.allocator.alloc(u8, hdr.payload_len) catch break;
-                        r.readNoEof(p) catch { q.allocator.free(p); break; };
-                    }
-                    q.push(.{ .hdr = hdr, .payload = p });
-                    if (hdr.opcode == protocol.OP_SHUTDOWN) break;
-                }
-            }
-        };
-        var r_thread = try std.Thread.spawn(.{}, ReaderThread.run, .{ &in_queue, reader, &self.is_aborted });
-        defer r_thread.join();
-
-        while (true) {
-            const frame = in_queue.pop() orelse break;
-            const hdr, const p = .{ frame.hdr, frame.payload }; defer if (p.len > 0) self.allocator.free(p);
-            switch (hdr.opcode) {
-                protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
-                protocol.OP_RESUME => try self.handleResume(hdr.msg_id, &async_writer),
-                protocol.OP_TOOL_RETURN => try self.handleToolReturn(hdr.msg_id, p, &async_writer),
-                protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
-                protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
-                protocol.OP_SNAPSHOT_LOAD => try self.handleSnapshotLoad(hdr.msg_id, p, &async_writer),
-                protocol.OP_TASK_TRIAGE => try self.handleTaskTriage(hdr.msg_id, p, &async_writer),
-                protocol.OP_TASK_TITLE => try self.handleTaskTitle(hdr.msg_id, p, &async_writer),
-                protocol.OP_BACKLOG_TRIAGE => try self.handleBacklogTriage(hdr.msg_id, p, &async_writer),
-                protocol.OP_READ_STREAM_OPEN => try self.handleReadStreamOpen(hdr.msg_id, p, &async_writer),
-                protocol.OP_READ_STREAM_CLOSE => self.handleReadStreamClose(p),
-                protocol.OP_SET_CONFIG => self.handleSetConfig(p),
-                protocol.OP_MEM_QUERY => try self.handleMemQuery(hdr.msg_id, p, &async_writer),
-                protocol.OP_MEM_COMMIT => self.handleMemCommit(),
-                protocol.OP_PING => { try protocol.writePong(&async_writer, hdr.msg_id); async_writer.flush(); },
-                protocol.OP_SHUTDOWN => break,
-                else => {},
-            }
-        }
+    pub fn formatGemmaToolResponse(self: *Server, tool_name: []const u8, result_json: []const u8) ![]u8 {
+        return tool_format.formatGemmaToolResponse(self.allocator, tool_name, result_json);
     }
 
-    fn handleSetConfig(self: *Server, p: []const u8) void {
+    pub fn handleSetConfig(self: *Server, p: []const u8) void {
         if (p.len < 20) return;
         self.thinking_budget = std.mem.readInt(u32, p[0..4], .little);
         self.temp = @bitCast(std.mem.readInt(u32, p[4..8], .little));
@@ -211,33 +155,34 @@ pub const Server = struct {
             self.sampler.frequency_penalty = @bitCast(std.mem.readInt(u32, p[32..36], .little));
             self.sampler.presence_penalty = @bitCast(std.mem.readInt(u32, p[36..40], .little));
         }
+        if (p.len >= 41) {
+            self.thinking_gate = (p[40] != 0);
+        }
     }
 
-    fn handleMemQuery(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
+    pub fn handleMemQuery(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
         if (self.archive == null or p.len < 4) {
-            try protocol.writeMemResponse(writer, msg_id, 0, 0x01, 0, 0, &.{}); writer.flush(); return;
+            try protocol.writeMemResponse(writer, msg_id, 0, 0x01, 0, 0, &.{});
+            writer.flush();
+            return;
         }
         const top_k = std.mem.readInt(u16, p[0..2], .little);
-        const q_tokens = try self.tok.encode(self.allocator, p[4..], false); defer self.allocator.free(q_tokens);
-        const q_vec = try self.allocator.alloc(f32, self.config.hidden_size); defer self.allocator.free(q_vec);
+        const q_tokens = try self.tok.encode(self.allocator, p[4..], false);
+        defer self.allocator.free(q_tokens);
+        const q_vec = try self.allocator.alloc(f32, self.config.hidden_size);
+        defer self.allocator.free(q_vec);
         if (!model.memory_inject.computeKeywordQueryVector(self.m, q_tokens, q_vec)) {
-            try protocol.writeMemResponse(writer, msg_id, 0, 0x01, 0, 0, &.{}); writer.flush(); return;
+            try protocol.writeMemResponse(writer, msg_id, 0, 0x01, 0, 0, &.{});
+            writer.flush();
+            return;
         }
         var indices: [16]usize = undefined;
         const count = self.archive.?.scan(q_vec, @intCast(self.clock), &indices, @min(top_k, 16));
         const rot_dim: usize = if (self.m.layers.len > 0) self.m.layers[0].rotary_dim else self.config.head_dim;
         _ = model.memory_inject.primeSubconsciousMemory(
-            self.archive.?,
-            self.ring,
-            self.scratch,
-            q_vec,
-            @intCast(self.clock),
-            self.gpu_opt,
-            self.clock,
-            self.config.rope_theta,
-            self.config.head_dim,
-            rot_dim,
-            self.config.num_key_value_heads,
+            self.archive.?, self.ring, self.scratch, q_vec, @intCast(self.clock),
+            self.gpu_opt, self.clock, self.config.rope_theta, self.config.head_dim,
+            rot_dim, self.config.num_key_value_heads,
         );
         var timestamps: [16]u64 = undefined;
         for (0..count) |i| timestamps[i] = self.archive.?.metas[indices[i]].timestamp;
@@ -245,1119 +190,94 @@ pub const Server = struct {
         writer.flush();
     }
 
-    fn prefillTokens(self: *Server, msg_id: u16, tokens: []const u32, writer: anytype, is_system_only: bool) !u32 {
-        const total_prefill: u32 = @intCast(tokens.len);
-        const prefill_start = std.time.milliTimestamp();
-        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
+    pub fn handleMemCommit(self: *Server) void {
+        if (self.hippo) |*h| {
+            const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
+            _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
+        }
+    }
 
-        if (self.archive) |a| {
-            if (model.memory_inject.computeKeywordQueryVector(self.m, tokens, self.scratch.normed_x)) {
-                const rot_dim: usize = if (self.m.layers.len > 0) self.m.layers[0].rotary_dim else self.config.head_dim;
-                _ = model.memory_inject.primeSubconsciousMemory(
-                    a,
-                    self.ring,
-                    self.scratch,
-                    self.scratch.normed_x,
-                    @intCast(self.clock),
-                    self.gpu_opt,
-                    self.clock,
-                    self.config.rope_theta,
-                    self.config.head_dim,
-                    rot_dim,
-                    self.config.num_key_value_heads,
-                );
+    pub fn run(self: *Server, reader: anytype, writer: anytype) !void {
+        var in_queue = server_queue.MessageQueue.init(self.allocator);
+        defer in_queue.deinit();
+        var out_queue = try server_queue.OutboundQueue.init(self.allocator);
+        defer out_queue.deinit();
+
+        const WriterThread = struct {
+            fn run(q: *server_queue.OutboundQueue, w: @TypeOf(writer)) void {
+                var chunk_buf: [16384]u8 = undefined;
+                while (true) {
+                    const n = q.readChunk(&chunk_buf);
+                    if (n == 0) break;
+                    w.writeAll(chunk_buf[0..n]) catch break;
+                }
             }
+        };
+        var w_thread = try std.Thread.spawn(.{}, WriterThread.run, .{ &out_queue, writer });
+        defer {
+            out_queue.close();
+            w_thread.join();
         }
 
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, 0.0, self.slots(), diff_count, 0, total_prefill, is_gpu, self.statusFlags());
-        writer.flush();
+        var async_writer = server_queue.AsyncWriter.init(&out_queue, self.allocator);
+        defer async_writer.deinit();
 
-        var cur: u32 = 0;
-        if (tokens.len > 1 and self.gpu_opt != null and self.gpu_opt.?.batch_prefill_ctx != null) {
-            const gmc, const bp = .{ self.gpu_opt.?, self.gpu_opt.?.batch_prefill_ctx.? };
-            var off: usize = 0;
-            while (off < tokens.len) {
-                if (self.is_aborted.load(.monotonic)) break;
-                const chunk = tokens[off..@min(tokens.len, off + bp.max_tokens)];
-                const is_last = (off + chunk.len == tokens.len);
-                const prev_count = self.ring.getPrefillPrevSlots(0, self.clock, chunk.len, self.scratch.active_slots);
-                var c_slots = try self.allocator.alloc(u32, prev_count + chunk.len); defer self.allocator.free(c_slots);
-                for (self.scratch.active_slots[0..prev_count], 0..) |s, j| c_slots[j] = @intCast(s);
-                for (chunk, 0..) |_, i| {
-                    const c = self.clock + i; c_slots[prev_count + i] = @intCast(self.ring.getSlotIndex(c));
-                    for (0..self.config.num_hidden_layers) |l| _ = self.ring.activateSlot(l, c);
-                }
-                const l_dst = if (is_last and !is_system_only) self.scratch.logits else self.scratch.logits[0..0];
-                var p_prog = PrefillProgress{ .w = writer, .msg_id = msg_id, .slots = self.slots(), .diff_count = diff_count, .base_tok = @intCast(off), .chunk_tok = @intCast(chunk.len), .total_tok = total_prefill, .is_gpu = is_gpu, .flags = self.statusFlags(), .start_time = prefill_start };
-                try gpu.batch_dispatch.gpuDispatchPrefillBatch(bp, gmc, &self.config, self.m.layers, chunk, self.m.embed_tokens, c_slots, self.clock, prev_count, l_dst, PrefillProgress.cb, &p_prog);
-                if (is_last and !is_system_only) {
-                    const ids = gmc.buf_topk_ids.asSlice(u32)[0..64];
-                    const vals = gmc.buf_topk_vals.asSlice(f32)[0..64];
-                    for (&self.scratch.topk_candidates, ids, vals) |*dst, id, v| {
-                        dst.* = .{ .id = id, .val = v };
+        self.out_queue = &out_queue;
+        defer {
+            while (self.is_saving_snapshot.load(.monotonic)) std.time.sleep(10 * std.time.ns_per_ms);
+            self.out_queue = null;
+        }
+
+        try protocol.writeStatus(&async_writer, 0, protocol.STATUS_IDLE, 0.0, 0, 0, 0, 0, if (self.gpu_opt != null) 1 else 0, 0);
+        async_writer.flush();
+
+        const ReaderThread = struct {
+            fn run(q: *server_queue.MessageQueue, r: @TypeOf(reader), aborted: *std.atomic.Value(bool)) void {
+                defer q.close();
+                while (true) {
+                    const hdr = protocol.readHeader(r) catch break;
+                    if (hdr.opcode == protocol.OP_ABORT) {
+                        aborted.store(true, .seq_cst);
+                        continue;
                     }
-                }
-                self.clock += chunk.len; off += chunk.len;
-            }
-        } else {
-            for (tokens, 0..) |t, i| {
-                if (self.is_aborted.load(.monotonic)) break;
-                cur = self.m.forwardToken(self.ring, self.scratch, t, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, !is_system_only and (i == tokens.len - 1));
-                self.clock += 1;
-                if ((i + 1) % 16 == 0 or i == tokens.len - 1) {
-                    const el = @max(1, std.time.milliTimestamp() - prefill_start);
-                    try protocol.writeStatus(writer, msg_id, protocol.STATUS_ENCODING, (@as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, @intCast(i + 1), total_prefill, is_gpu, self.statusFlags());
-                    writer.flush();
-                }
-            }
-        }
-
-        if (self.is_aborted.load(.monotonic)) {
-            try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_ABORTED);
-            try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
-            writer.flush();
-            return 0;
-        }
-
-        if (!is_system_only and tokens.len > 0) {
-            self.sampler.suppress_thinking = false;
-            cur = if (self.gpu_opt != null) self.sampler.sampleTopK(&self.scratch.topk_candidates, null) else self.sampler.sample(self.scratch.logits, null);
-            // If the prompt ended inside a thinking channel (<|channel>thought\n), preserve in_thinking_channel
-            var in_thought = false;
-            var t_idx: usize = tokens.len;
-            while (t_idx > 0) {
-                t_idx -= 1;
-                const tok_id = tokens[t_idx];
-                if (tok_id == 101 or tok_id == 106) {
-                    break;
-                }
-                if (tok_id == 100) {
-                    in_thought = true;
-                    break;
-                }
-            }
-            self.in_thinking_channel = in_thought;
-        }
-        return cur;
-    }
-
-    fn handleSetSystem(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
-        if (payload.len == 0) return;
-        self.is_aborted.store(false, .seq_cst);
-        self.ring.markBoundary(self.clock, .system, 1.0);
-
-        // Parse JSON payload or raw text
-        var formatted_system: []const u8 = payload;
-        var parsed_json: ?std.json.Parsed(std.json.Value) = null;
-        defer if (parsed_json) |*p| p.deinit();
-
-        parsed_json = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch null;
-        var dyn_buf = std.ArrayList(u8).init(self.allocator);
-        defer dyn_buf.deinit();
-
-        if (parsed_json) |p| {
-            if (p.value == .object) {
-                const root = p.value.object;
-                try dyn_buf.appendSlice("<|turn>system\n<|think|>\n");
-                if (root.get("instructions")) |inst| {
-                    if (inst == .string) {
-                        try dyn_buf.appendSlice(inst.string);
-                        try dyn_buf.appendSlice("\n");
+                    var p: []u8 = &.{};
+                    if (hdr.payload_len > 0) {
+                        p = q.allocator.alloc(u8, hdr.payload_len) catch break;
+                        r.readNoEof(p) catch {
+                            q.allocator.free(p);
+                            break;
+                        };
                     }
+                    q.push(.{ .hdr = hdr, .payload = p });
+                    if (hdr.opcode == protocol.OP_SHUTDOWN) break;
                 }
-                if (root.get("tools")) |tools_val| {
-                    if (tools_val == .array) {
-                        for (tools_val.array.items) |tool_item| {
-                            if (tool_item != .object) continue;
-                            const t_obj = tool_item.object;
-                            const t_name = if (t_obj.get("name")) |n| (if (n == .string) n.string else "") else "";
-                            const t_desc = if (t_obj.get("description")) |d| (if (d == .string) d.string else "") else "";
-                            try dyn_buf.appendSlice("<|tool>declaration:");
-                            try dyn_buf.appendSlice(t_name);
-                            try dyn_buf.appendSlice("{description:<|\"|>");
-                            try dyn_buf.appendSlice(t_desc);
-                            try dyn_buf.appendSlice("<|\"|>");
-                            if (t_obj.get("parameters")) |param_val| {
-                                if (param_val == .object) {
-                                    const p_obj = param_val.object;
-                                    try dyn_buf.appendSlice(",parameters:{");
-                                    if (p_obj.get("properties")) |props_val| {
-                                        if (props_val == .object) {
-                                            try dyn_buf.appendSlice("properties:{");
-                                            var f_first = false;
-                                            // Collect keys and sort them to match Jinja dictsort
-                                            var key_list = std.ArrayList([]const u8).init(self.allocator);
-                                            defer key_list.deinit();
-                                            var it = props_val.object.iterator();
-                                            while (it.next()) |entry| try key_list.append(entry.key_ptr.*);
-                                            std.mem.sort([]const u8, key_list.items, {}, struct {
-                                                fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                                                    return std.mem.order(u8, a, b) == .lt;
-                                                }
-                                            }.lessThan);
-
-                                            for (key_list.items) |k| {
-                                                const v = props_val.object.get(k).?;
-                                                if (f_first) try dyn_buf.appendSlice(",");
-                                                f_first = true;
-                                                try dyn_buf.appendSlice(k);
-                                                try dyn_buf.appendSlice(":{");
-                                                if (v == .object) {
-                                                    const sub = v.object;
-                                                    if (sub.get("description")) |sd| {
-                                                        if (sd == .string) {
-                                                            try dyn_buf.appendSlice("description:<|\"|>");
-                                                            try dyn_buf.appendSlice(sd.string);
-                                                            try dyn_buf.appendSlice("<|\"|>,");
-                                                        }
-                                                    }
-                                                    const st = if (sub.get("type")) |st_val| (if (st_val == .string) st_val.string else "STRING") else "STRING";
-                                                    if (std.ascii.eqlIgnoreCase(st, "array")) {
-                                                        try dyn_buf.appendSlice("items:{type:<|\"|>STRING<|\"|>},");
-                                                    }
-                                                    try dyn_buf.appendSlice("type:<|\"|>");
-                                                    var st_up: [32]u8 = undefined;
-                                                    const up_len = @min(st.len, st_up.len);
-                                                    for (0..up_len) |ui| st_up[ui] = std.ascii.toUpper(st[ui]);
-                                                    try dyn_buf.appendSlice(st_up[0..up_len]);
-                                                    try dyn_buf.appendSlice("<|\"|>}");
-                                                } else {
-                                                    try dyn_buf.appendSlice("type:<|\"|>STRING<|\"|>}");
-                                                }
-                                            }
-                                            try dyn_buf.appendSlice("},");
-                                        }
-                                    }
-                                    if (p_obj.get("required")) |req_val| {
-                                        if (req_val == .array and req_val.array.items.len > 0) {
-                                            try dyn_buf.appendSlice("required:[");
-                                            for (req_val.array.items, 0..) |ri, r_idx| {
-                                                if (r_idx > 0) try dyn_buf.appendSlice(",");
-                                                try dyn_buf.appendSlice("<|\"|>");
-                                                if (ri == .string) try dyn_buf.appendSlice(ri.string);
-                                                try dyn_buf.appendSlice("<|\"|>");
-                                            }
-                                            try dyn_buf.appendSlice("],");
-                                        }
-                                    }
-                                    try dyn_buf.appendSlice("type:<|\"|>OBJECT<|\"|>}");
-                                }
-                            }
-                            try dyn_buf.appendSlice("}<tool|>");
-                        }
-                    }
-                }
-                try dyn_buf.appendSlice("<turn|>\n");
-                formatted_system = dyn_buf.items;
-            }
-        }
-
-        const tokens = try self.tok.encode(self.allocator, formatted_system, self.clock == 0);
-        defer self.allocator.free(tokens);
-
-        if (self.clock == 0 and tokens.len > 0) {
-            self.ring.setNumAnchors(tokens.len);
-        }
-
-        _ = try self.prefillTokens(msg_id, tokens, writer, true);
-
-        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
-        writer.flush();
-    }
-
-    fn handleSnapshotSave(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
-        // Payload format: path_len (u16), path (bytes), stream_id_len (u16), stream_id (bytes)
-        if (payload.len < 4) return;
-        const path_len = std.mem.readInt(u16, payload[0..2], .little);
-        if (payload.len < 2 + path_len + 2) return;
-        const snap_path = payload[2 .. 2 + path_len];
-        const stream_id_off = 2 + path_len;
-        const stream_id_len = std.mem.readInt(u16, payload[stream_id_off .. stream_id_off + 2][0..2], .little);
-        const stream_id = if (payload.len >= stream_id_off + 2 + stream_id_len) payload[stream_id_off + 2 .. stream_id_off + 2 + stream_id_len] else "";
-
-        // Deduplicate: if logical clock hasn't mutated since last snapshot save/load, return SNAPSHOT_STATUS_EXISTS (2)
-        if (self.last_snapshot_clock != null and self.last_snapshot_clock.? == self.clock) {
-            try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_EXISTS, @intCast(self.clock), self.slots(), stream_id);
-            writer.flush();
-            return;
-        }
-
-        if (self.is_saving_snapshot.swap(true, .seq_cst)) {
-            try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_EXISTS, @intCast(self.clock), self.slots(), stream_id);
-            writer.flush();
-            return;
-        }
-
-        const out_q = self.out_queue orelse {
-            self.is_saving_snapshot.store(false, .seq_cst);
-            return;
-        };
-
-        const owned_path = try self.allocator.dupe(u8, snap_path);
-        errdefer self.allocator.free(owned_path);
-        const owned_stream_id = try self.allocator.dupe(u8, stream_id);
-        errdefer self.allocator.free(owned_stream_id);
-
-        const SaveTask = struct {
-            server: *Server,
-            msg_id: u16,
-            path: []u8,
-            stream_id: []u8,
-            clock: usize,
-            slots: u16,
-            out_queue: *server_queue.OutboundQueue,
-
-            fn run(t: @This()) void {
-                defer {
-                    t.server.is_saving_snapshot.store(false, .seq_cst);
-                    t.server.allocator.free(t.path);
-                    t.server.allocator.free(t.stream_id);
-                }
-                snapshot.saveSnapshot(t.path, t.stream_id, t.clock, t.server.ring, &t.server.config, t.server.gpu_opt) catch |err| {
-                    std.log.err("Background snapshot failed: {any}", .{err});
-                    var err_writer = server_queue.AsyncWriter.init(t.out_queue, t.server.allocator);
-                    defer err_writer.deinit();
-                    protocol.writeError(&err_writer, t.msg_id, "Failed to save snapshot") catch {};
-                    err_writer.flush();
-                    return;
-                };
-
-                t.server.last_snapshot_clock = t.clock;
-                var stat_writer = server_queue.AsyncWriter.init(t.out_queue, t.server.allocator);
-                defer stat_writer.deinit();
-                protocol.writeSnapshotStatus(&stat_writer, t.msg_id, protocol.SNAPSHOT_STATUS_SAVED, @intCast(t.clock), t.slots, t.stream_id) catch {};
-                stat_writer.flush();
             }
         };
-
-        const task = SaveTask{
-            .server = self,
-            .msg_id = msg_id,
-            .path = owned_path,
-            .stream_id = owned_stream_id,
-            .clock = self.clock,
-            .slots = self.slots(),
-            .out_queue = out_q,
-        };
-
-        const thread = std.Thread.spawn(.{}, SaveTask.run, .{task}) catch |err| {
-            self.is_saving_snapshot.store(false, .seq_cst);
-            self.allocator.free(owned_path);
-            self.allocator.free(owned_stream_id);
-            return err;
-        };
-        thread.detach();
-    }
-
-    fn handleSnapshotLoad(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
-        // Payload format: path (bytes)
-        if (payload.len == 0) return;
-        const snap_path = payload;
-
-        var restored_id: [64]u8 = undefined;
-        var restored_id_len: usize = 0;
-        const restored_clock = snapshot.loadSnapshot(snap_path, self.ring, &self.config, self.gpu_opt, &restored_id, &restored_id_len) catch |err| {
-            try protocol.writeError(writer, msg_id, "Failed to load snapshot");
-            writer.flush();
-            return err;
-        };
-
-        self.clock = restored_clock;
-        self.last_snapshot_clock = restored_clock;
-        const stream_id = restored_id[0..restored_id_len];
-        try protocol.writeSnapshotStatus(writer, msg_id, protocol.SNAPSHOT_STATUS_LOADED, @intCast(self.clock), self.slots(), stream_id);
-
-        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
-        writer.flush();
-    }
-
-    fn handleStreamInput(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
-        if (payload.len < 8) return;
-        self.is_aborted.store(false, .seq_cst);
-        self.last_yield_token = null;
-        self.ring.markBoundary(self.clock, .user, 1.0);
-        const tokens = try self.parseTokens(payload); defer self.allocator.free(tokens);
-        if (self.clock == 0 and tokens.len > 0) {
-            var sys_len: usize = 0;
-            for (tokens, 0..) |t, i| { if (t == 106) { sys_len = i + 1; break; } }
-            self.ring.setNumAnchors(if (sys_len > 0) sys_len else @min(tokens.len, 512));
-        }
-
-        if (self.turn_open and tokens.len > 0 and tokens[0] != 106) {
-            // Mid-stream interruption: close open model turn with <turn|>
-            _ = self.m.forwardToken(self.ring, self.scratch, 106, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-            self.clock += 1;
-            self.ring.markBoundary(self.clock, .turn_end, 1.0);
-            self.turn_open = false;
-        }
-
-        const cur = try self.prefillTokens(msg_id, tokens, writer, false);
-        if (self.is_aborted.load(.monotonic)) return;
-
-        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-        self.sampler.suppress_thinking = false;
-        try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
-    }
-
-    fn handleResume(self: *Server, msg_id: u16, writer: anytype) !void {
-        self.is_aborted.store(false, .seq_cst);
-        const last_token = self.last_yield_token orelse {
-            try protocol.writeTurnComplete(writer, msg_id, 0, 0, 0.0, protocol.STOP_END_OF_TURN);
-            const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-            const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-            try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, 0.0, self.slots(), diff_count, 0, 0, is_gpu, self.statusFlags());
-            writer.flush();
-            return;
-        };
-        self.last_yield_token = null;
-        self.sampler.suppress_thinking = !self.in_thinking_channel;
-
-        const cur = self.advanceToken(last_token, &.{});
-        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-        try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
-    }
-
-    fn handleToolReturn(self: *Server, msg_id: u16, payload: []const u8, writer: anytype) !void {
-        // Wire format:
-        // [call_id: u16 LE] [status: u16 LE] [name_len: u16 LE] [name: bytes] [result_json: bytes]
-        if (payload.len < 6) return;
-        self.is_aborted.store(false, .seq_cst);
-        self.last_yield_token = null;
-        self.ring.markBoundary(self.clock, .tool_result, 1.0);
-        const name_len = std.mem.readInt(u16, payload[4..6], .little);
-        if (payload.len < 6 + name_len) return;
-        const tool_name = payload[6 .. 6 + name_len];
-        const result_json = payload[6 + name_len ..];
-
-        const formatted = try self.formatGemmaToolResponse(tool_name, result_json);
-        defer self.allocator.free(formatted);
-
-        const tokens = try self.tok.encode(self.allocator, formatted, false);
-        defer self.allocator.free(tokens);
-
-        const cur = try self.prefillTokens(msg_id, tokens, writer, false);
-        if (self.is_aborted.load(.monotonic)) return;
-
-        const is_gpu: u8 = if (self.gpu_opt != null) 1 else 0;
-        const diff_count: u16 = if (self.archive) |a| @intCast(a.count) else 0;
-        self.sampler.suppress_thinking = false;
-        try self.decodeResponse(msg_id, cur, writer, diff_count, is_gpu);
-    }
-
-    fn formatGemmaToolResponse(self: *Server, tool_name: []const u8, result_json: []const u8) ![]u8 {
-        var out = std.ArrayList(u8).init(self.allocator);
-        errdefer out.deinit();
-        const w = out.writer();
-
-        try w.writeAll("<|tool_response>response:");
-        try w.writeAll(tool_name);
-
-        var parsed_json: ?std.json.Parsed(std.json.Value) = null;
-        defer if (parsed_json) |*p| p.deinit();
-        parsed_json = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{}) catch null;
-
-        var has_error = false;
-        if (parsed_json) |p| {
-            if (p.value == .object) {
-                if (p.value.object.get("error") != null) has_error = true;
-                try w.writeByte('{');
-                const obj = p.value.object;
-                var key_list = std.ArrayList([]const u8).init(self.allocator);
-                defer key_list.deinit();
-                var it = obj.iterator();
-                while (it.next()) |entry| try key_list.append(entry.key_ptr.*);
-                std.mem.sort([]const u8, key_list.items, {}, struct {
-                    fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                        return std.mem.order(u8, a, b) == .lt;
-                    }
-                }.lessThan);
-                for (key_list.items, 0..) |k, i| {
-                    if (i > 0) try w.writeByte(',');
-                    try w.print("{s}:", .{k});
-                    if (obj.get(k)) |sub_val| try self.formatGemmaToolArg(w, sub_val);
-                }
-                try w.writeByte('}');
-            } else {
-                try w.writeAll("{value:");
-                try self.formatGemmaToolArg(w, p.value);
-                try w.writeByte('}');
-            }
-        } else {
-            if (std.mem.indexOf(u8, result_json, "error") != null) has_error = true;
-            try w.print("{{value:<|\"|>{s}<|\"|>}}", .{result_json});
-        }
-        try w.writeAll("<tool_response|><|channel>thought\n");
-        if (has_error) {
-            try w.writeAll("Notice: Tool execution failed. Analyze error and correct tool call:\n");
-        }
-        return out.toOwnedSlice();
-    }
-
-    fn formatGemmaToolArg(self: *Server, writer: anytype, val: std.json.Value) !void {
-        switch (val) {
-            .null => try writer.writeAll("null"),
-            .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-            .integer => |i| try writer.print("{d}", .{i}),
-            .float => |f| try writer.print("{d}", .{f}),
-            .number_string => |s| try writer.writeAll(s),
-            .string => |s| try writer.print("<|\"|>{s}<|\"|>", .{s}),
-            .array => |arr| {
-                try writer.writeByte('[');
-                for (arr.items, 0..) |item, i| {
-                    if (i > 0) try writer.writeByte(',');
-                    try self.formatGemmaToolArg(writer, item);
-                }
-                try writer.writeByte(']');
-            },
-            .object => |obj| {
-                try writer.writeByte('{');
-                var key_list = std.ArrayList([]const u8).init(self.allocator);
-                defer key_list.deinit();
-                var it = obj.iterator();
-                while (it.next()) |entry| try key_list.append(entry.key_ptr.*);
-                std.mem.sort([]const u8, key_list.items, {}, struct {
-                    fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                        return std.mem.order(u8, a, b) == .lt;
-                    }
-                }.lessThan);
-                for (key_list.items, 0..) |k, i| {
-                    if (i > 0) try writer.writeByte(',');
-                    try writer.print("{s}:", .{k});
-                    if (obj.get(k)) |sub_val| try self.formatGemmaToolArg(writer, sub_val);
-                }
-                try writer.writeByte('}');
-            },
-        }
-    }
-
-    fn parseTokens(self: *Server, p: []const u8) ![]u32 {
-        if (p[0] == protocol.MODE_TEXT) {
-            const raw_text = p[8..];
-            return self.tok.encode(self.allocator, raw_text, self.clock == 0);
-        }
-        const count = std.mem.readInt(u16, p[2..4], .little);
-        const slice: []const u32 = @alignCast(std.mem.bytesAsSlice(u32, p[8 .. 8 + count * 4]));
-        const copy = try self.allocator.alloc(u32, slice.len); @memcpy(copy, slice); return copy;
-    }
-
-    fn decodeResponse(self: *Server, msg_id: u16, first_token: u32, writer: anytype, diff_count: u16, is_gpu: u8) !void {
-        var cur = first_token;
-        var start: i64 = 0;
-        var thinking_count: u32 = 0;
-        var response_count: u32 = 0;
-        var reason: u8 = protocol.STOP_END_OF_TURN;
-        const max_recent: usize = @max(64, self.max_tokens + self.thinking_budget);
-        const recent_buf = try self.allocator.alloc(u32, max_recent);
-        defer self.allocator.free(recent_buf);
-        var recent_count: usize = 0;
-        var syntax = SyntaxTracker{};
-        self.turn_open = true;
+        var r_thread = try std.Thread.spawn(.{}, ReaderThread.run, .{ &in_queue, reader, &self.is_aborted });
+        defer r_thread.join();
 
         while (true) {
-            if (self.is_aborted.load(.monotonic)) {
-                reason = protocol.STOP_ABORTED;
-                if (self.hippo) |*h| h.markInterrupted();
-                break;
-            }
-            if (cur == self.tok.eos_token_id or cur == 106) {
-                self.turn_open = false;
-                _ = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-                self.clock += 1; break;
-            }
-
-            if (start == 0) start = std.time.milliTimestamp();
-
-            if (recent_count < max_recent) {
-                recent_buf[recent_count] = cur;
-                recent_count += 1;
-            } else {
-                std.mem.copyForwards(u32, recent_buf[0 .. max_recent - 1], recent_buf[1..max_recent]);
-                recent_buf[max_recent - 1] = cur;
-            }
-
-            const w_start = if (recent_count > self.repeat_last_n) recent_count - self.repeat_last_n else 0;
-            const window_tokens = recent_buf[w_start..recent_count];
-
-            if (cur == 100) {
-                if (self.sampler.suppress_thinking or self.in_thinking_channel) {
-                    self.in_thinking_channel = false;
-                    self.sampler.suppress_thinking = true;
-                    self.sampler.suppress_critique = false;
-                    self.ring.markBoundary(self.clock, .response_sentence, 1.0);
-                    cur = self.advanceToken(101, window_tokens);
-                    continue;
-                }
-                self.in_thinking_channel = true;
-                self.sampler.suppress_thinking = false;
-                thinking_count = 0;
-                self.ring.markBoundary(self.clock, .thought, 0.8);
-                // Absorb channel identifier (e.g. "thought\n" or "_thought\n")
-                var chan_tok = self.advanceToken(cur, window_tokens);
-                while (chan_tok != 101 and chan_tok != self.tok.eos_token_id) {
-                    if (chan_tok == 107 or chan_tok == 108) {
-                        // Reached end of channel header line; advance to first reasoning token
-                        cur = self.advanceToken(chan_tok, window_tokens);
-                        break;
-                    }
-                    chan_tok = self.advanceToken(chan_tok, window_tokens);
-                }
-                if (chan_tok == 101 or chan_tok == self.tok.eos_token_id) {
-                    cur = chan_tok;
-                }
-                continue;
-            }
-            if (cur == 101) {
-                self.in_thinking_channel = false;
-                self.sampler.suppress_thinking = true;
-                self.sampler.suppress_critique = false;
-                self.ring.markBoundary(self.clock, .response_sentence, 1.0);
-                cur = self.advanceToken(cur, window_tokens);
-                continue;
-            }
-            if (cur == 236779 and !self.sampler.suppress_thinking) { // '_' token
-                // Check if this is an un-bracketed "_thought" leakage right before or after channel boundary
-                const peek_tok = self.advanceToken(cur, window_tokens);
-                if (peek_tok == 45518) { // "thought"
-                    self.in_thinking_channel = true;
-                    self.sampler.suppress_thinking = false;
-                    thinking_count = 0;
-                    var next_c = self.advanceToken(peek_tok, window_tokens);
-                    while (next_c == 107 or next_c == 108) {
-                        next_c = self.advanceToken(next_c, window_tokens);
-                    }
-                    cur = next_c;
-                    continue;
-                } else {
-                    cur = peek_tok;
-                }
-            }
-            if (cur == 48) {
-                // Token 48: <|tool_call>
-                // Collect tool invocation until token 49 (<tool_call|>) or turn end
-                var call_buf: [4096]u8 = undefined;
-                var call_len: usize = 0;
-                var next_tok = self.advanceToken(cur, window_tokens);
-                while (next_tok != 49 and next_tok != 106 and next_tok != self.tok.eos_token_id) {
-                    const dec_str = self.tok.decode(next_tok);
-                    if (call_len + dec_str.len < call_buf.len) {
-                        @memcpy(call_buf[call_len .. call_len + dec_str.len], dec_str);
-                        call_len += dec_str.len;
-                    }
-                    next_tok = self.advanceToken(next_tok, window_tokens);
-                }
-                const raw_call = call_buf[0..call_len];
-                // Parse "call:tool_name{args...}"
-                var tool_name: []const u8 = "";
-                var args_json: []const u8 = "{}";
-                if (std.mem.indexOf(u8, raw_call, ":")) |c_idx| {
-                    const rest = raw_call[c_idx + 1 ..];
-                    if (std.mem.indexOf(u8, rest, "{")) |b_idx| {
-                        tool_name = std.mem.trim(u8, rest[0..b_idx], " \t\r\n");
-                        args_json = std.mem.trim(u8, rest[b_idx..], " \t\r\n");
-                    } else {
-                        tool_name = std.mem.trim(u8, rest, " \t\r\n");
-                    }
-                }
-                try protocol.writeToolCall(writer, msg_id, 1, tool_name, args_json);
-                writer.flush();
-                reason = protocol.STOP_TOOL_CALL;
-                self.ring.markBoundary(self.clock, .tool_call, 0.9);
-                if (next_tok == 49) {
-                    _ = self.m.forwardToken(self.ring, self.scratch, 49, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-                    self.clock += 1;
-                }
-                break;
-            }
-            if (cur == 105 or cur == 98) { cur = self.advanceToken(cur, window_tokens); continue; }
-
-            if (self.in_thinking_channel) {
-                thinking_count += 1;
-            } else {
-                if (response_count >= self.max_tokens) {
-                    reason = protocol.STOP_MAX_TOKENS;
-                    break;
-                }
-                response_count += 1;
-            }
-
-            const str = self.tok.decode(cur);
-            const opcode = if (self.in_thinking_channel) protocol.OP_STREAM_THOUGHT else protocol.OP_STREAM_CONTENT;
-            try protocol.writeToken(writer, msg_id, opcode, cur, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, str);
-            writer.flush();
-
-            syntax.ingestChunk(str);
-
-            // Continuous Streaming Transduction: Elastic Syntactic Unit Gating
-            // Evaluates natural resting boundaries in both response generation and thinking channels.
-            // Only yields when syntactically at rest (no unclosed code fences, quotes, parens, brackets, or braces).
-            if (syntax.isAtRest()) {
-                const is_para_break = (cur == 108 or (str.len > 0 and std.mem.endsWith(u8, str, "\n\n")));
-                const is_sentence_newline = (cur == 107 and (
-                    (recent_count >= 2 and (
-                        recent_buf[recent_count - 2] == 108 or
-                        recent_buf[recent_count - 2] == 236761 or // '.'
-                        recent_buf[recent_count - 2] == 236881 or // '?'
-                        recent_buf[recent_count - 2] == 236888    // '!'
-                    )) or
-                    (recent_count >= 3 and (
-                        recent_buf[recent_count - 3] == 236761 or
-                        recent_buf[recent_count - 3] == 236881 or
-                        recent_buf[recent_count - 3] == 236888
-                    ))
-                )) or (str.len >= 2 and (std.mem.endsWith(u8, str, ".\n") or std.mem.endsWith(u8, str, "?\n") or std.mem.endsWith(u8, str, "!\n")));
-
-                if (self.in_thinking_channel) {
-                    // In thinking mode, yield at paragraph breaks or complete bullet/numbered thought steps (>= 24 tokens)
-                    const should_yield_thinking = (thinking_count >= 24 and is_para_break) or
-                        (thinking_count >= 36 and is_sentence_newline) or
-                        (thinking_count >= 64 and (is_para_break or is_sentence_newline));
-
-                    if (should_yield_thinking) {
-                        reason = protocol.STOP_ELASTIC_YIELD;
-                        self.last_yield_token = cur;
-                        break;
-                    }
-                } else if (response_count >= 10) {
-                    // Evaluate cognitive confidence via Top-1 vs Top-2 logit margin
-                    const top1_val = self.scratch.topk_candidates[0].val;
-                    const top2_val = self.scratch.topk_candidates[1].val;
-                    const logit_margin = top1_val - top2_val;
-                    const high_confidence = logit_margin >= 1.5;
-
-                    // Elastic yield conditions for visible response generation:
-                    // 1. Definite boundary: paragraph break (\n\n) after >= 16 tokens
-                    // 2. High-confidence clause/sentence boundary: sentence ending + newline with strong logit certainty after >= 12 tokens
-                    // 3. Maximum elastic micro-burst: substantive sentence boundary reached after >= 32 tokens
-                    const should_yield = (response_count >= 16 and is_para_break) or
-                        (response_count >= 12 and is_sentence_newline and high_confidence) or
-                        (response_count >= 32 and is_sentence_newline) or
-                        (response_count >= 48 and (is_para_break or is_sentence_newline));
-
-                    if (should_yield) {
-                        reason = protocol.STOP_ELASTIC_YIELD;
-                        self.last_yield_token = cur;
-                        self.ring.markBoundary(self.clock, .response_sentence, 1.0);
-                        break;
-                    }
-                }
-            }
-
-            if (self.in_thinking_channel) {
-                self.sampler.suppress_critique = (cur == 107 or cur == 108 or (str.len > 0 and str[str.len - 1] == '\n'));
-                const grace_ceiling = self.thinking_budget + 32;
-                const is_boundary = (str.len > 0 and (str[str.len - 1] == '\n' or str[str.len - 1] == '.' or str[str.len - 1] == '!' or str[str.len - 1] == '?' or str[str.len - 1] == ':'));
-
-                if ((thinking_count >= self.thinking_budget and is_boundary) or thinking_count >= grace_ceiling) {
-                    const bridge_text = "\n\nIdentified steps complete. To execute across multiple stages, invoke `plan()`. Otherwise, deliver the final answer.\n";
-                    const bridge_tokens = try self.tok.encode(self.allocator, bridge_text, false);
-                    defer self.allocator.free(bridge_tokens);
-                    for (bridge_tokens) |bt| {
-                        _ = self.m.forwardToken(self.ring, self.scratch, bt, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, false);
-                        self.clock += 1;
-                        const b_str = self.tok.decode(bt);
-                        try protocol.writeToken(writer, msg_id, protocol.OP_STREAM_THOUGHT, bt, @intCast(self.clock), 0xFFFFFFFFFFFF, protocol.TOKEN_TYPE_TEXT, b_str);
-                    }
-                    writer.flush();
-                    self.in_thinking_channel = false;
-                    self.sampler.suppress_thinking = true;
-                    self.sampler.suppress_critique = false;
-                    thinking_count = 0;
-                    cur = self.advanceToken(101, window_tokens);
-                    continue;
-                }
-            } else {
-                self.sampler.suppress_critique = false;
-            }
-
-            const total_gen = thinking_count + response_count;
-            if (total_gen % 8 == 0) {
-                const el = @max(1, std.time.milliTimestamp() - start);
-                const dividend = if (total_gen > 1) total_gen - 1 else total_gen;
-                const total_budget: u32 = @intCast(self.max_tokens + self.thinking_budget);
-                try protocol.writeStatus(writer, msg_id, protocol.STATUS_GENERATING, (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(el))) * 1000.0, self.slots(), diff_count, total_gen, total_budget, is_gpu, self.statusFlags());
-                writer.flush();
-            }
-            cur = self.advanceToken(cur, window_tokens);
-        }
-        self.ring.markBoundary(self.clock, .turn_end, 1.0);
-        const total_gen = thinking_count + response_count;
-        const now = std.time.milliTimestamp();
-        const elapsed: u32 = @intCast(@max(1, now - (if (start > 0) start else now)));
-        const dividend = if (total_gen > 1) total_gen - 1 else total_gen;
-        const tok_sec = (@as(f32, @floatFromInt(dividend)) / @as(f32, @floatFromInt(elapsed))) * 1000.0;
-        try protocol.writeTurnComplete(writer, msg_id, total_gen, elapsed, tok_sec, reason);
-        try protocol.writeStatus(writer, msg_id, protocol.STATUS_IDLE, tok_sec, self.slots(), diff_count, total_gen, total_gen, is_gpu, self.statusFlags());
-        writer.flush();
-        if (self.hippo) |*h| {
-            const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
-            _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
-        }
-    }
-
-    fn handleMemCommit(self: *Server) void {
-        if (self.hippo) |*h| {
-            const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
-            _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
-        }
-    }
-
-    fn handleTaskTriage(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-        if (p.len < 4) {
-            try protocol.writeEventRouted(writer, msg_id, 0, 0, 1);
-            writer.flush();
-            return;
-        }
-        const event_id = std.mem.readInt(u16, p[0..2][0..2], .little);
-        const num_tasks = std.mem.readInt(u16, p[2..4][0..2], .little);
-        var offset: usize = 4;
-
-        var task_ids: [16]u16 = undefined;
-        var task_count: usize = 0;
-
-        var prompt_buf: [2048]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&prompt_buf);
-        const p_writer = stream.writer();
-
-        try p_writer.writeAll("\n[Task Routing]\nActive tasks:\n");
-
-        for (0..num_tasks) |_| {
-            if (offset + 4 > p.len) break;
-            const tid = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
-            const title_len = std.mem.readInt(u16, p[offset + 2 .. offset + 4][0..2], .little);
-            offset += 4;
-            if (offset + title_len > p.len) break;
-            const title = p[offset .. offset + title_len];
-            offset += title_len;
-            if (task_count < 15) {
-                task_ids[task_count] = tid;
-                task_count += 1;
-                try std.fmt.format(p_writer, "{d}: {s}\n", .{ task_count, title });
+            const frame = in_queue.pop() orelse break;
+            const hdr, const p = .{ frame.hdr, frame.payload };
+            defer if (p.len > 0) self.allocator.free(p);
+            switch (hdr.opcode) {
+                protocol.OP_STREAM_INPUT => try self.handleStreamInput(hdr.msg_id, p, &async_writer),
+                protocol.OP_RESUME => try self.handleResume(hdr.msg_id, p, &async_writer),
+                protocol.OP_TOOL_RETURN => try self.handleToolReturn(hdr.msg_id, p, &async_writer),
+                protocol.OP_SET_SYSTEM => try self.handleSetSystem(hdr.msg_id, p, &async_writer),
+                protocol.OP_SNAPSHOT_SAVE => try self.handleSnapshotSave(hdr.msg_id, p, &async_writer),
+                protocol.OP_SNAPSHOT_LOAD => try self.handleSnapshotLoad(hdr.msg_id, p, &async_writer),
+                protocol.OP_PROBE_AUTONOMIC => try self.handleProbeAutonomic(hdr.msg_id, p, &async_writer),
+                protocol.OP_SET_CONFIG => self.handleSetConfig(p),
+                protocol.OP_MEM_QUERY => try self.handleMemQuery(hdr.msg_id, p, &async_writer),
+                protocol.OP_MEM_COMMIT => self.handleMemCommit(),
+                protocol.OP_PING => {
+                    try protocol.writePong(&async_writer, hdr.msg_id);
+                    async_writer.flush();
+                },
+                protocol.OP_SHUTDOWN => break,
+                else => {},
             }
         }
-
-        try p_writer.writeAll("0: New independent task (only if completely unrelated to active tasks above)\n\nNote: Follow-ups, revisions, negative constraints (\"no X\", \"use Y instead\"), corrections, and steering belong to the active task being steered.\n");
-
-        if (offset + 2 <= p.len) {
-            const ev_len = std.mem.readInt(u16, p[offset .. offset + 2][0..2], .little);
-            offset += 2;
-            if (offset + ev_len <= p.len) {
-                const ev_text = p[offset .. offset + ev_len];
-                try std.fmt.format(p_writer, "Event: {s}\nTarget index: ", .{ ev_text });
-            }
-        }
-
-        if (task_count == 0) {
-            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
-            writer.flush();
-            return;
-        }
-
-        var cand_toks: [16]u32 = undefined;
-        var cand_count: usize = 0;
-        // Check active tasks 1..task_count first
-        for (1..task_count + 1) |i| {
-            var digit_buf: [4]u8 = undefined;
-            const digit_str = try std.fmt.bufPrint(&digit_buf, "{d}", .{i});
-            const encoded = try self.tok.encode(self.allocator, digit_str, false);
-            defer self.allocator.free(encoded);
-            if (encoded.len > 0) {
-                cand_toks[cand_count] = encoded[0];
-                cand_count += 1;
-            }
-        }
-        // Then append 0 for new task
-        {
-            const encoded = try self.tok.encode(self.allocator, "0", false);
-            defer self.allocator.free(encoded);
-            if (encoded.len > 0) {
-                cand_toks[cand_count] = encoded[0];
-                cand_count += 1;
-            }
-        }
-
-        const prompt_str = stream.getWritten();
-        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
-        defer self.allocator.free(tokens);
-
-        if (tokens.len == 0 or cand_count == 0) {
-            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
-            writer.flush();
-            return;
-        }
-
-        const saved_clock = self.clock;
-        var chosen_idx: usize = 0;
-
-        const last_tok: u32 = tokens[tokens.len - 1];
-        if (tokens.len > 1) {
-            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
-        }
-        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-
-        const winning_tok = if (self.gpu_opt != null)
-            self.sampler.sampleConstrainedTopK(&self.scratch.topk_candidates, cand_toks[0..cand_count])
-        else
-            self.sampler.sampleConstrained(self.scratch.logits, cand_toks[0..cand_count]);
-
-        for (cand_toks[0..cand_count], 0..) |ct, idx| {
-            if (ct == winning_tok) {
-                if (idx < task_count) {
-                    chosen_idx = idx + 1;
-                } else {
-                    chosen_idx = 0;
-                }
-                break;
-            }
-        }
-
-        self.ring.rollbackClock(saved_clock);
-        self.clock = saved_clock;
-
-        if (chosen_idx == 0) {
-            try protocol.writeEventRouted(writer, msg_id, event_id, 0, 1);
-        } else {
-            const target_task_id = task_ids[chosen_idx - 1];
-            try protocol.writeEventRouted(writer, msg_id, event_id, target_task_id, 0);
-        }
-        writer.flush();
-    }
-
-    fn handleTaskTitle(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-        if (p.len < 6) return;
-        const task_id = std.mem.readInt(u32, p[0..4][0..4], .little);
-        const prompt_len = std.mem.readInt(u16, p[4..6][0..2], .little);
-        if (p.len < 6 + prompt_len) return;
-        const prompt_text = p[6 .. 6 + prompt_len];
-
-        var prompt_buf: [2048]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&prompt_buf);
-        const p_writer = stream.writer();
-
-        try p_writer.writeAll("\n[Instruction] Summarize the user task into a concise 4 to 10 word title. Output only the title, without quotes or punctuation.\nUser task: ");
-        const max_sample = @min(prompt_text.len, 256);
-        try p_writer.writeAll(prompt_text[0..max_sample]);
-        try p_writer.writeAll("\nTitle: ");
-
-        const prompt_str = stream.getWritten();
-        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
-        defer self.allocator.free(tokens);
-
-        if (tokens.len == 0) return;
-
-        const saved_clock = self.clock;
-        defer {
-            self.ring.rollbackClock(saved_clock);
-            self.clock = saved_clock;
-        }
-
-        const last_tok: u32 = tokens[tokens.len - 1];
-        if (tokens.len > 1) {
-            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
-        }
-        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-
-        var decoded_tokens: [16]u32 = undefined;
-        var decoded_count: usize = 0;
-
-        var next_tok = if (self.gpu_opt != null)
-            self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
-        else
-            self.sampler.sample(self.scratch.logits, null);
-
-        while (decoded_count < 14) {
-            if (next_tok == 106 or next_tok == 100 or next_tok == 101 or next_tok == 107 or next_tok == 108) break;
-            decoded_tokens[decoded_count] = next_tok;
-            decoded_count += 1;
-
-            _ = self.m.forwardToken(self.ring, self.scratch, next_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-            self.clock += 1;
-
-            next_tok = if (self.gpu_opt != null)
-                self.sampler.sampleTopK(&self.scratch.topk_candidates, null)
-            else
-                self.sampler.sample(self.scratch.logits, null);
-        }
-
-        var title_buf: [256]u8 = undefined;
-        var title_len: usize = 0;
-        for (decoded_tokens[0..decoded_count]) |dt| {
-            const piece = self.tok.decode(dt);
-            if (title_len + piece.len > title_buf.len) break;
-            @memcpy(title_buf[title_len .. title_len + piece.len], piece);
-            title_len += piece.len;
-        }
-
-        var title_str: []const u8 = "";
-        if (title_len > 0) {
-            const full_text = title_buf[0..title_len];
-            const trimmed = std.mem.trim(u8, full_text, " \t\r\n\"'");
-            var clean_len = trimmed.len;
-            if (std.mem.indexOf(u8, trimmed, "\n")) |nl| {
-                clean_len = nl;
-            }
-            title_str = std.mem.trim(u8, trimmed[0..clean_len], " \t\r\n\"'");
-        }
-
-        if (title_str.len == 0) {
-            const fb_len = @min(prompt_text.len, 50);
-            title_str = prompt_text[0..fb_len];
-        }
-
-        try protocol.writeTaskTitleResult(writer, msg_id, task_id, title_str);
-        writer.flush();
-    }
-
-    fn handleBacklogTriage(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-        if (p.len < 4) {
-            try protocol.writeError(writer, msg_id, "Payload too short for backlog triage");
-            writer.flush();
-            return;
-        }
-        const event_id = std.mem.readInt(u16, p[0..2][0..2], .little);
-        const title_len = std.mem.readInt(u16, p[2..4][0..2], .little);
-        if (4 + title_len > p.len) {
-            try protocol.writeError(writer, msg_id, "Malformed backlog triage title");
-            writer.flush();
-            return;
-        }
-        const title = p[4 .. 4 + title_len];
-
-        var prompt_buf: [2048]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&prompt_buf);
-        const p_writer = stream.writer();
-
-        try std.fmt.format(p_writer, "\n[Backlog Triage] Task: {s}\n0: Satisfied or obsolete (ACK)\n1: Execute now (Resume)\n2: Defer for later (Snooze)\nDecision: ", .{ title });
-
-        const cand_strs = [_][]const u8{ "0", "1", "2" };
-        var cand_toks: [3]u32 = undefined;
-        var cand_count: usize = 0;
-        for (cand_strs) |cs| {
-            const encoded = try self.tok.encode(self.allocator, cs, false);
-            defer self.allocator.free(encoded);
-            if (encoded.len > 0) {
-                cand_toks[cand_count] = encoded[0];
-                cand_count += 1;
-            }
-        }
-
-        const prompt_str = stream.getWritten();
-        const tokens = try self.tok.encode(self.allocator, prompt_str, false);
-        defer self.allocator.free(tokens);
-
-        if (tokens.len == 0 or cand_count < 3) {
-            try protocol.writeBacklogRouted(writer, msg_id, event_id, protocol.BACKLOG_ACTION_RESUME);
-            writer.flush();
-            return;
-        }
-
-        const saved_clock = self.clock;
-        var chosen_action: u8 = protocol.BACKLOG_ACTION_RESUME;
-
-        const last_tok: u32 = tokens[tokens.len - 1];
-        if (tokens.len > 1) {
-            _ = try self.prefillTokens(msg_id, tokens[0 .. tokens.len - 1], writer, true);
-        }
-        _ = self.m.forwardToken(self.ring, self.scratch, last_tok, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, true);
-        self.clock += 1;
-
-        const winning_tok = if (self.gpu_opt != null)
-            self.sampler.sampleConstrainedTopK(&self.scratch.topk_candidates, cand_toks[0..cand_count])
-        else
-            self.sampler.sampleConstrained(self.scratch.logits, cand_toks[0..cand_count]);
-
-        for (cand_toks[0..cand_count], 0..) |ct, idx| {
-            if (ct == winning_tok) {
-                chosen_action = @intCast(idx);
-                break;
-            }
-        }
-
-        self.ring.rollbackClock(saved_clock);
-        self.clock = saved_clock;
-
-        try protocol.writeBacklogRouted(writer, msg_id, event_id, chosen_action);
-        writer.flush();
-    }
-
-    fn handleReadStreamOpen(self: *Server, msg_id: u16, p: []const u8, writer: anytype) !void {
-        if (p.len < 12) return;
-        const task_id = std.mem.readInt(u16, p[0..2][0..2], .little);
-        const file_offset = std.mem.readInt(u64, p[2..10][0..8], .little);
-        const path_len = std.mem.readInt(u16, p[10..12][0..2], .little);
-        if (12 + path_len > p.len) return;
-        const file_path = p[12 .. 12 + path_len];
-
-        const file = std.fs.cwd().openFile(file_path, .{}) catch {
-            try protocol.writeReadStreamStatus(writer, msg_id, task_id, protocol.READ_STATUS_ERROR, 0, file_offset);
-            writer.flush();
-            return;
-        };
-        defer file.close();
-
-        file.seekTo(file_offset) catch {
-            try protocol.writeReadStreamStatus(writer, msg_id, task_id, protocol.READ_STATUS_ERROR, 0, file_offset);
-            writer.flush();
-            return;
-        };
-
-        var buf: [512]u8 = undefined;
-        const bytes_read = file.read(&buf) catch {
-            try protocol.writeReadStreamStatus(writer, msg_id, task_id, protocol.READ_STATUS_ERROR, 0, file_offset);
-            writer.flush();
-            return;
-        };
-
-        const new_offset = file_offset + bytes_read;
-        const is_eof = (bytes_read < buf.len);
-        const status: u8 = if (is_eof) protocol.READ_STATUS_EOF else protocol.READ_STATUS_CHUNK;
-
-        if (bytes_read > 0) {
-            var chunk_buf: [1024]u8 = undefined;
-            const chunk_text = try std.fmt.bufPrint(&chunk_buf, "\n[Stream Task {d} chunk]:\n{s}\n", .{ task_id, buf[0..bytes_read] });
-            const tokens = try self.tok.encode(self.allocator, chunk_text, false);
-            defer self.allocator.free(tokens);
-            if (tokens.len > 0) {
-                _ = try self.prefillTokens(msg_id, tokens, writer, false);
-            }
-        }
-
-        try protocol.writeReadStreamStatus(writer, msg_id, task_id, status, @intCast(bytes_read), new_offset);
-        writer.flush();
-    }
-
-    fn handleReadStreamClose(self: *Server, p: []const u8) void {
-        _ = self;
-        _ = p;
-    }
-
-    fn advanceToken(self: *Server, cur: u32, recent_tokens: []const u32) u32 {
-        const has_penalties = (self.sampler.repeat_penalty != 1.0 or self.sampler.frequency_penalty != 0.0 or self.sampler.presence_penalty != 0.0);
-        const needs_logits = (self.sampler.temp > 0.0 or has_penalties or self.gpu_opt == null);
-        const next_tok = self.m.forwardToken(self.ring, self.scratch, cur, self.clock, self.thread_pool, self.archive, &self.q_tracker, self.gpu_opt, needs_logits);
-        self.clock += 1;
-        if (self.hippo) |*h| {
-            const x_vec = if (self.gpu_opt) |g| g.buf_x.asSlice(f32)[0..self.config.hidden_size] else self.scratch.x[0..self.config.hidden_size];
-            const now_ms = std.time.milliTimestamp();
-            const slot_idx = self.ring.getSlotIndex(self.clock - 1);
-            h.stage(x_vec, @intCast(@max(0, now_ms)), 1.0, @intCast(self.config.num_hidden_layers - 1), cur, slot_idx, now_ms);
-            if (h.shouldFlush(now_ms, false)) {
-                const start_clock = if (self.clock >= h.count) self.clock - h.count else 0;
-                _ = h.commit(self.archive, self.ring, self.store, start_clock, self.gpu_opt);
-            }
-        }
-        if (!needs_logits) return next_tok;
-        if (self.gpu_opt != null) {
-            return self.sampler.sampleTopK(&self.scratch.topk_candidates, recent_tokens);
-        }
-        return self.sampler.sample(self.scratch.logits, recent_tokens);
     }
 };

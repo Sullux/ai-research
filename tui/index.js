@@ -14,7 +14,8 @@ const { ToolRegistry } = require('./lib/tools')
 const { ToolParser } = require('./lib/tools/parser')
 const { StreamLog } = require('./lib/storage')
 const { stateStoreFactory } = require('./lib/ui/state')
-const { TaskManager } = require('./lib/tasks')
+const { TaskManager, taskManagerFactory } = require('./lib/tasks')
+const { ChannelManager } = require('./lib/channels')
 const {
   STOP_END_OF_TURN,
   STOP_ELASTIC_YIELD,
@@ -27,6 +28,7 @@ const {
 } = require('./lib/protocol/constants')
 const { formatNotificationInterrupt, formatBacklogResumeNudge } = require('./lib/template')
 const controller = require('./lib/ui/controller')
+const { MarkdownControl } = require('./lib/ui/markdown')
 
 const STATUS_NAMES = [
   'Idle',
@@ -180,6 +182,7 @@ const main = () => {
       extraArgs.push('--memory', episodicMemPath)
     }
     snapshotPath = path.join(memDir, '.snapshot.bin')
+    tasksPath = path.join(memDir, '.tasks.json')
     streamLog = StreamLog(memDir)
   }
 
@@ -224,11 +227,56 @@ const main = () => {
     extraArgs,
   })
   const orchestrator = Orchestrator(timers)
-  const taskManager = TaskManager()
+  let initialTasks = []
+  if (tasksPath && fs.existsSync(tasksPath)) {
+    try {
+      initialTasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'))
+    } catch (_) {}
+  } else if (streamLog.enabled) {
+    const allItems = streamLog.loadAll()
+    const foundTasks = new Map()
+    for (const it of allItems) {
+      if (it.type === 'system' && it.title === '🏷 TASK TITLE' && it.content) {
+        const m = it.content.match(/^Task #(\d+) titled: "(.*)"/)
+        if (m) {
+          const tid = parseInt(m[1], 10)
+          const title = m[2]
+          foundTasks.set(tid, {
+            id: tid,
+            title,
+            status: 'ACTIVE',
+            created: it.time || Date.now(),
+          })
+        }
+      }
+    }
+    initialTasks = Array.from(foundTasks.values())
+  }
+
+  const persistTasks = (tasksList) => {
+    if (!tasksPath) return
+    try {
+      fs.writeFileSync(tasksPath, JSON.stringify(tasksList, null, 2))
+    } catch (_) {}
+  }
+
+  const taskManager = taskManagerFactory(Date.now)(initialTasks, persistTasks)
+  const channelManager = ChannelManager()
   const registry = ToolRegistry(vfs, cmdRunner, trmManager, notManager, client, orchestrator)
   const parser = ToolParser(registry, client, store)
 
-  controller.init(store, client, session, orchestrator, timers, systemPrompt, vfs, notManager, taskManager)
+  controller.init(
+    store,
+    client,
+    session,
+    orchestrator,
+    timers,
+    systemPrompt,
+    vfs,
+    notManager,
+    taskManager,
+    channelManager,
+  )
   controller.refs.isEngineReady = false
 
   // Automatic Snapshot Checkpointing State
@@ -356,6 +404,7 @@ const main = () => {
     } else if (systemPrecached && status === 0 && !controller.refs.systemPrecacheLogged && activeSlots > 0) {
       controller.refs.systemPrecacheLogged = true
       controller.refs.isEngineReady = true
+      controller.refs.hasSentFirstTurn = true
       store.addStreamEntry({
         type: 'system',
         title: '⚙ SYSTEM',
@@ -379,7 +428,7 @@ const main = () => {
 
   const app = Tui({
     view: path.resolve(__dirname, './view.yaml'),
-    modules: { controller },
+    modules: { controller, markdown: { MarkdownControl } },
     autoFocus: false,
     truecolor: true,
   })
@@ -443,18 +492,45 @@ const main = () => {
     const suspended = notManager.getSuspended()
     if (suspended.length > 0) {
       const nextSuspended = suspended[0]
-      const seq = nextSuspended.seq || parseInt(String(nextSuspended.id).replace(/\D/g, ''), 10) || 1
-      client.sendBacklogTriage(seq, nextSuspended.preview)
+      const probePrompt = `Autonomic Backlog Triage\nEvaluate whether this pending background task has been completed, should be executed now, or should be deferred:\nTask: "${nextSuspended.preview}"\n0: Satisfied/Completed\n1: Execute now\n2: Defer\nDecision: `
+      client.probe(probePrompt, ['0', '1', '2'], 1).then((res) => {
+        if (res.winningIdx === 0) {
+          notManager.ack(nextSuspended.id)
+          store.addStreamEntry({
+            type: 'system',
+            title: '🎯 AUTO-ACK',
+            content: `Autonomic probe resolved Task ${nextSuspended.id}: satisfied in prior response.`,
+          })
+          processNextBacklog()
+        } else if (res.winningIdx === 1) {
+          notManager.markServicing(nextSuspended.id)
+          if (controller.refs)
+            controller.refs.activeTurnNotificationId = nextSuspended.id
+          const resumeNudge = formatBacklogResumeNudge(nextSuspended)
+          store.setGenerating(true)
+          client.sendInput(resumeNudge)
+        } else {
+          notManager.snooze(nextSuspended.id)
+          store.addStreamEntry({
+            type: 'system',
+            title: '💤 DEFERRED',
+            content: `Autonomic probe deferred Task ${nextSuspended.id} to queue tail.`,
+          })
+          processNextBacklog(false)
+        }
+        requestRedraw()
+      })
       return true
     }
 
     if (allowDeferred) {
-      const deferred = notManager.getPending().filter(a => a.isDeferred)
+      const deferred = notManager.getPending().filter((a) => a.isDeferred)
       if (deferred.length > 0) {
         const nextDeferred = deferred[0]
         nextDeferred.isDeferred = false
         notManager.markServicing(nextDeferred.id)
-        if (controller.refs) controller.refs.activeTurnNotificationId = nextDeferred.id
+        if (controller.refs)
+          controller.refs.activeTurnNotificationId = nextDeferred.id
         const interruptNudge = formatNotificationInterrupt(nextDeferred)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
@@ -497,6 +573,39 @@ const main = () => {
         const interruptNudge = formatNotificationInterrupt(topInterrupt)
         store.setGenerating(true)
         client.sendInput(interruptNudge)
+      } else if (isThinking && typeof client.probe === 'function') {
+        const prompt = [
+          'Autonomic Reasoning Assessment',
+          'Evaluate whether the thoughts generated so far are sufficient to deliver the response to the user, or if further reasoning is needed:',
+          '0: Reasoning sufficient, deliver response now',
+          '1: Further reasoning needed',
+          'Decision:',
+        ].join('\n')
+        client.probe(prompt, ['0', '1'], 1)
+          .then((res) => {
+            const isSufficient = res.winningIdx === 0 && res.confidence >= 0.80
+            const confPct = res.confidence != null ? (res.confidence * 100).toFixed(1) : '?'
+            if (isSufficient) {
+              store.flushActiveThought()
+              store.addStreamEntry({
+                type: 'notice',
+                title: '⚡ THINKING CAPPED',
+                content: `Sufficient reasoning reached (${confPct}% confidence >= 80%). Transitioning to response.`,
+              })
+              isThinking = false
+              store.setGenerating(true)
+              client.sendResume({ closeThought: true })
+            } else {
+              store.setGenerating(true)
+              client.sendResume()
+            }
+            requestRedraw()
+          })
+          .catch((_) => {
+            store.setGenerating(true)
+            client.sendResume()
+            requestRedraw()
+          })
       } else {
         // No new unserviced interruption: seamless autonomous continuation via binary protocol
         store.setGenerating(true)
@@ -512,6 +621,9 @@ const main = () => {
       if (activeTurnId) {
         notManager.ack(activeTurnId)
         if (controller.refs) controller.refs.activeTurnNotificationId = null
+      }
+      for (const item of notManager.getSuspended()) {
+        if (item.extra?.isTurnContext) notManager.ack(item.id)
       }
 
       // Check for remaining unserviced interrupts in LIFO order
@@ -551,114 +663,6 @@ const main = () => {
   client.on('memResponse', ({ count, status }) => {
     store.setStatus(`Memory retrieved: ${count} episodes (status: ${status})`)
     requestRedraw()
-  })
-
-  client.on('eventRouted', ({ eventId, taskId, isNewTask }) => {
-    if (isNewTask) {
-      const alert = notManager.getPending().find(a =>
-        a.seq === eventId ||
-        a.id === `not${eventId}` ||
-        a.refId === String(eventId)
-      )
-      const rawText = alert?.extra?.payload || alert?.preview || `Task ${eventId}`
-      const firstLine = rawText.trim().split('\n')[0]
-      const fallbackTitle = firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine
-      const newTask = taskManager.createTask(fallbackTitle)
-      if (client) {
-        client.sendTaskTitle(newTask.id, rawText)
-      }
-      store.addStreamEntry({
-        type: 'system',
-        title: '🎯 NEW TASK',
-        content: `Autonomic triage assigned Event not${eventId} to new Task #${newTask.id}: "${fallbackTitle}"`,
-      })
-      const targetToSuspend = controller.refs?.interruptedTurnNotificationId ||
-        (controller.refs?.activeTurnNotificationId !== alert?.id ? controller.refs?.activeTurnNotificationId : null)
-      if (targetToSuspend) {
-        notManager.suspend(targetToSuspend)
-      }
-      if (controller.refs) {
-        controller.refs.interruptedTurnNotificationId = null
-        if (controller.refs.activeTurnNotificationId === targetToSuspend) {
-          controller.refs.activeTurnNotificationId = null
-        }
-      }
-    } else {
-      taskManager.setActiveTask(taskId)
-      store.addStreamEntry({
-        type: 'system',
-        title: '🎯 ROUTED',
-        content: `Autonomic triage routed Event not${eventId} to Task #${taskId}`,
-      })
-      if (controller.refs) {
-        controller.refs.interruptedTurnNotificationId = null
-      }
-    }
-    requestRedraw()
-  })
-
-  client.on('backlogRouted', ({ eventId, action }) => {
-    const alert = notManager.getSuspended().find(a =>
-      a.seq === eventId ||
-      a.id === `not${eventId}` ||
-      a.refId === String(eventId) ||
-      a.id === eventId
-    )
-    if (!alert) return
-
-    if (action === BACKLOG_ACTION_ACK) {
-      notManager.ack(alert.id)
-      store.addStreamEntry({
-        type: 'system',
-        title: '🎯 AUTO-ACK',
-        content: `Autonomic probe resolved Task ${alert.id}: satisfied in prior response.`,
-      })
-      processNextBacklog()
-    } else if (action === BACKLOG_ACTION_RESUME) {
-      notManager.markServicing(alert.id)
-      if (controller.refs) controller.refs.activeTurnNotificationId = alert.id
-      const resumeNudge = formatBacklogResumeNudge(alert)
-      store.setGenerating(true)
-      client.sendInput(resumeNudge)
-    } else if (action === BACKLOG_ACTION_SNOOZE) {
-      notManager.snooze(alert.id)
-      store.addStreamEntry({
-        type: 'system',
-        title: '💤 DEFERRED',
-        content: `Autonomic probe deferred Task ${alert.id} to queue tail.`,
-      })
-      processNextBacklog(false)
-    }
-    requestRedraw()
-  })
-
-  client.on('readStreamStatus', ({ taskId, status, bytesRead, newOffset }) => {
-    const task = taskManager.getTask(taskId)
-    if (task) {
-      if (status === READ_STATUS_EOF) {
-        taskManager.closeReadStream(taskId)
-        store.addStreamEntry({
-          type: 'system',
-          title: '📖 READ COMPLETE',
-          content: `Push reading completed for Task #${taskId} (${newOffset} bytes read).`,
-        })
-      } else if (status === READ_STATUS_CHUNK) {
-        taskManager.updateReadStream(taskId, { offset: newOffset, bytesRead })
-      }
-    }
-    requestRedraw()
-  })
-
-  client.on('taskTitleResult', ({ taskId, title }) => {
-    if (title && taskManager.getTask(taskId)) {
-      taskManager.updateTask(taskId, { title })
-      store.addStreamEntry({
-        type: 'system',
-        title: '🏷 TASK TITLE',
-        content: `Task #${taskId} titled: "${title}"`,
-      })
-      requestRedraw()
-    }
   })
 
   client.on('drain', requestRedraw)

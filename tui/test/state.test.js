@@ -74,6 +74,33 @@ describe('UI StateStore', () => {
     assert.strictEqual(persisted.length, 0) // hydration does not re-emit persistence
   })
 
+  it('hydrates user messages cleanly with rawText or strips event headers', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+
+    const historyItems = [
+      {
+        id: '1',
+        type: 'user',
+        content: '[Event: not101 | Source: msg/user/1001.txt]\nHello world',
+        time: 1000,
+      },
+      {
+        id: '2',
+        type: 'user',
+        content: '[Event: not102 | Source: msg/user/1002.txt]\nIgnored stream text',
+        rawText: 'Explicit clean text',
+        time: 1001,
+      },
+    ]
+
+    store.hydrateFromStream(historyItems)
+
+    assert.strictEqual(store.state.conversation.length, 2)
+    assert.strictEqual(store.state.conversation[0].text, 'Hello world')
+    assert.strictEqual(store.state.conversation[1].text, 'Explicit clean text')
+  })
+
   it('handles multi-phase thought and response channel transitions', () => {
     const StateStore = stateStoreFactory()
     const store = StateStore()
@@ -126,5 +153,52 @@ describe('UI StateStore', () => {
 
     store.toggleExpandStreamItem(2)
     assert.strictEqual(store.state.activeResponseExpanded, true)
+  })
+
+  it('inserts stream and conversation entries in strict chronological order', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+    const baseTime = Date.now()
+
+    // Add entry at baseTime + 100
+    store.addStreamEntry({ type: 'notice', content: 'Notice at 100', time: baseTime + 100 })
+    // Add entry at baseTime + 300
+    store.addStreamEntry({ type: 'user', content: 'User at 300', time: baseTime + 300 })
+    // Add delayed entry with earlier timestamp baseTime + 200 (e.g. flushed thought)
+    store.addStreamEntry({ type: 'thought', content: 'Thought at 200', time: baseTime + 200 })
+
+    const contents = store.state.stream.slice(1).map(s => s.content)
+    assert.deepStrictEqual(contents, [
+      'Notice at 100',
+      'Thought at 200',
+      'User at 300',
+    ])
+  })
+
+  it('stages stream entry in pendingInterjection and flushes in causal order', () => {
+    const StateStore = stateStoreFactory()
+    const store = StateStore()
+    const baseTime = Date.now()
+
+    store.appendActiveResponse('Assistant answering first...')
+    store.setPendingInterjection(
+      { sender: 'User', text: 'User interjecting', time: baseTime + 100 },
+      { type: 'user', title: '👤 USER', content: 'User interjecting', time: baseTime + 100 },
+    )
+
+    // User message is staged, not yet in conversation or stream
+    assert.strictEqual(store.state.conversation.length, 1)
+    assert.strictEqual(store.state.stream.length, 1)
+
+    // Flush active response -> assistant flushed first, then user
+    store.flushActiveResponse()
+
+    assert.strictEqual(store.state.conversation.length, 3)
+    assert.strictEqual(store.state.conversation[1].sender, 'Assistant')
+    assert.strictEqual(store.state.conversation[2].sender, 'User')
+
+    assert.strictEqual(store.state.stream.length, 3)
+    assert.strictEqual(store.state.stream[1].type, 'response')
+    assert.strictEqual(store.state.stream[2].type, 'user')
   })
 })
